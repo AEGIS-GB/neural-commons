@@ -1,0 +1,18 @@
+[package]
+name = "aegis-common"
+description = "Shared cluster utilities: NATS client helpers, DB pool, schema client, signed_bundle_verify"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+aegis-crypto = { path = "../../aegis-crypto" }
+aegis-schemas = { path = "../../aegis-schemas" }
+async-nats.workspace = true
+sqlx.workspace = true
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+thiserror.workspace = true
+anyhow.workspace = true

@@ -1,0 +1,18 @@
+[package]
+name = "aegis-rag"
+description = "Remote RAG service: vector search on plaintext vectors, encrypted chunk storage"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+aegis-crypto = { path = "../../aegis-crypto" }
+aegis-schemas = { path = "../../aegis-schemas" }
+aegis-common = { path = "../common" }
+axum.workspace = true
+sqlx.workspace = true
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+thiserror.workspace = true

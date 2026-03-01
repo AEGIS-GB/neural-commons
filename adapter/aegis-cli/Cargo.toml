@@ -1,0 +1,24 @@
+[package]
+name = "aegis-cli"
+description = "CLI binary: full aegis command set, --observe-only, --pass-through mode switches"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "aegis"
+path = "src/main.rs"
+
+[dependencies]
+aegis-adapter = { path = "../aegis-adapter" }
+aegis-crypto = { path = "../../aegis-crypto" }
+aegis-evidence = { path = "../aegis-evidence" }
+aegis-vault = { path = "../aegis-vault" }
+aegis-memory = { path = "../aegis-memory" }
+clap.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber = { workspace = true, features = ["env-filter"] }
+serde.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true

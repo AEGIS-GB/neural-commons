@@ -1,0 +1,10 @@
+# Embedding service dependencies (Phase 3b)
+# Python FastAPI + sentence-transformers
+# Model: all-MiniLM-L6-v2 (384-dim) — D34
+
+fastapi==0.115.0
+uvicorn[standard]==0.32.0
+sentence-transformers==3.3.0
+torch>=2.4.0
+numpy>=1.26.0
+pydantic>=2.9.0

@@ -1,0 +1,33 @@
+# End-to-end test infrastructure
+# Extends infra/docker-compose.yml with test-specific settings
+
+services:
+  nats:
+    image: nats:2.10-alpine
+    ports:
+      - "14222:4222"
+    command: ["--jetstream", "--store_dir=/data/jetstream"]
+    tmpfs:
+      - /data
+
+  postgres:
+    image: pgvector/pgvector:pg16
+    ports:
+      - "15432:5432"
+    environment:
+      POSTGRES_DB: nc_test
+      POSTGRES_USER: nc_test
+      POSTGRES_PASSWORD: nc_test_password
+    tmpfs:
+      - /var/lib/postgresql/data
+
+  minio:
+    image: minio/minio:latest
+    ports:
+      - "19000:9000"
+    environment:
+      MINIO_ROOT_USER: nc_test
+      MINIO_ROOT_PASSWORD: nc_test_password
+    command: server /data
+    tmpfs:
+      - /data

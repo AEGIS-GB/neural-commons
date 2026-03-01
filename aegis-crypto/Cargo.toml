@@ -1,0 +1,24 @@
+[package]
+name = "aegis-crypto"
+description = "Shared cryptographic primitives: Ed25519, X25519, SHA-256, AES-256-GCM, BIP-39, SLIP-0010, RFC 8785"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+ed25519-dalek.workspace = true
+x25519-dalek.workspace = true
+sha2.workspace = true
+aes-gcm.workspace = true
+hkdf.workspace = true
+hmac = "0.12"
+bip39.workspace = true
+hex = "0.4"
+rand.workspace = true
+rand_core.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

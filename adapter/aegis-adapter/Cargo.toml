@@ -1,0 +1,30 @@
+[package]
+name = "aegis-adapter"
+description = "Main adapter library: composes proxy, evidence, barrier, memory, SLM, vault, failure, dashboard"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+aegis-crypto = { path = "../../aegis-crypto" }
+aegis-schemas = { path = "../../aegis-schemas" }
+aegis-proxy = { path = "../aegis-proxy" }
+aegis-evidence = { path = "../aegis-evidence" }
+aegis-barrier = { path = "../aegis-barrier" }
+aegis-memory = { path = "../aegis-memory" }
+aegis-slm = { path = "../aegis-slm" }
+aegis-vault = { path = "../aegis-vault" }
+aegis-failure = { path = "../aegis-failure" }
+aegis-dashboard = { path = "../aegis-dashboard" }
+tokio.workspace = true
+tracing.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+toml.workspace = true
+anyhow.workspace = true
+rand.workspace = true
+hex.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

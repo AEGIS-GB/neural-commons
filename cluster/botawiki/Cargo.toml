@@ -1,0 +1,21 @@
+[package]
+name = "aegis-botawiki"
+description = "Botawiki service: claim storage, quarantine validator, dispute workflow, PostgreSQL + pgvector"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+aegis-crypto = { path = "../../aegis-crypto" }
+aegis-schemas = { path = "../../aegis-schemas" }
+aegis-common = { path = "../common" }
+axum.workspace = true
+sqlx.workspace = true
+async-nats.workspace = true
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+thiserror.workspace = true
+uuid.workspace = true
+chrono.workspace = true

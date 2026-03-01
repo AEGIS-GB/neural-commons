@@ -1,0 +1,25 @@
+[package]
+name = "aegis-gateway"
+description = "Edge Gateway: adapter-facing HTTP/WSS service, NC-Ed25519 auth, NATS bridge (D3)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+aegis-crypto = { path = "../../aegis-crypto" }
+aegis-schemas = { path = "../../aegis-schemas" }
+aegis-common = { path = "../common" }
+axum.workspace = true
+tower.workspace = true
+tower-http.workspace = true
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+thiserror.workspace = true
+async-nats.workspace = true
+chrono.workspace = true
+uuid.workspace = true
+ed25519-dalek.workspace = true
+sha2.workspace = true
+rand.workspace = true

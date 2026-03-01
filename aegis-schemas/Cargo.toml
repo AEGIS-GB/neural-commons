@@ -1,0 +1,19 @@
+[package]
+name = "aegis-schemas"
+description = "Shared types: receipts, claims, TRUSTMARK scores. D1/D2 compliant: JCS, basis points, no floats."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+aegis-crypto = { path = "../aegis-crypto" }
+serde.workspace = true
+serde_json.workspace = true
+uuid.workspace = true
+hex = "0.4"
+rand.workspace = true
+prost.workspace = true
+thiserror.workspace = true
+
+[build-dependencies]
+prost-build = "0.13"

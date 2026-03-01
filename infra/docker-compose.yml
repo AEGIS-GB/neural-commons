@@ -1,0 +1,91 @@
+# Neural Commons — Local Development Infrastructure
+# NATS (single-node JetStream), PostgreSQL + pgvector, MinIO, Prometheus + Grafana
+#
+# Usage: docker compose up -d
+# All data persists in named volumes.
+
+services:
+  # NATS single-node JetStream with disk persistence
+  nats:
+    image: nats:2.10-alpine
+    ports:
+      - "4222:4222"   # Client connections
+      - "8222:8222"   # HTTP monitoring
+    volumes:
+      - nats-data:/data
+      - ./nats/nats-server.conf:/etc/nats/nats-server.conf:ro
+    command: ["-c", "/etc/nats/nats-server.conf"]
+    restart: unless-stopped
+
+  # PostgreSQL with pgvector extension
+  postgres:
+    image: pgvector/pgvector:pg16
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_DB: neural_commons
+      POSTGRES_USER: nc
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-nc_dev_password}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./postgres/init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+    restart: unless-stopped
+
+  # MinIO (S3-compatible object storage)
+  minio:
+    image: minio/minio:latest
+    ports:
+      - "9000:9000"   # S3 API
+      - "9001:9001"   # Console
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-nc_minio}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-nc_minio_dev_password}
+    volumes:
+      - minio-data:/data
+    command: server /data --console-address ":9001"
+    restart: unless-stopped
+
+  # MinIO bucket initialization
+  minio-init:
+    image: minio/mc:latest
+    depends_on:
+      - minio
+    entrypoint: >
+      /bin/sh -c "
+        sleep 3;
+        mc alias set local http://minio:9000 $${MINIO_ROOT_USER:-nc_minio} $${MINIO_ROOT_PASSWORD:-nc_minio_dev_password};
+        mc mb --ignore-existing local/backups;
+        mc mb --ignore-existing local/rag-chunks;
+        mc mb --ignore-existing local/exports;
+        exit 0;
+      "
+
+  # Prometheus
+  prometheus:
+    image: prom/prometheus:v2.51.0
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    restart: unless-stopped
+
+  # Grafana
+  grafana:
+    image: grafana/grafana:10.4.0
+    ports:
+      - "3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-admin}
+    volumes:
+      - grafana-data:/var/lib/grafana
+    depends_on:
+      - prometheus
+    restart: unless-stopped
+
+volumes:
+  nats-data:
+  postgres-data:
+  minio-data:
+  prometheus-data:
+  grafana-data:

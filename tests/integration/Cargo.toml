@@ -1,0 +1,16 @@
+[package]
+name = "aegis-integration-tests"
+description = "Layer 2: NATS topology tests — verify pub/sub topic wiring (<10s)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+aegis-crypto = { path = "../../aegis-crypto" }
+aegis-schemas = { path = "../../aegis-schemas" }
+async-nats.workspace = true
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+uuid.workspace = true
+chrono.workspace = true
