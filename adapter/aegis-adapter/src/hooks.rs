@@ -24,6 +24,21 @@ use aegis_vault::scanner;
 use tracing::{debug, info};
 
 // ---------------------------------------------------------------------------
+// Alert threshold
+// ---------------------------------------------------------------------------
+
+/// Returns true if this receipt type warrants an immediate SSE push to the dashboard.
+/// Behavioral and Cosmetic generate receipts but do not push.
+///
+/// TODO(Phase 1b): add ReceiptType::SlmReject when the SLM loopback is wired.
+fn is_critical(receipt_type: &ReceiptType) -> bool {
+    matches!(
+        receipt_type,
+        ReceiptType::WriteBarrier | ReceiptType::SlmParseFailure
+    )
+}
+
+// ---------------------------------------------------------------------------
 // Evidence hook → aegis-evidence::EvidenceRecorder
 // ---------------------------------------------------------------------------
 
@@ -32,6 +47,12 @@ use tracing::{debug, info};
 /// Records a receipt for every proxied request and response.
 pub struct EvidenceHookImpl {
     pub recorder: Arc<EvidenceRecorder>,
+    /// Broadcast sender for pushing critical alerts to SSE clients.
+    /// TODO(Phase 1b): when BarrierHookImpl and SlmHookImpl are wired to real
+    /// implementations, pass alert_tx into them and call alert_tx.send() when
+    /// is_critical() returns true. The broadcast channel is already live in
+    /// AdapterState — just clone adapter_state.alert_tx and pass it to each hook impl.
+    pub alert_tx: tokio::sync::broadcast::Sender<crate::state::DashboardAlert>,
 }
 
 impl EvidenceHook for EvidenceHookImpl {
@@ -202,8 +223,10 @@ mod tests {
     async fn evidence_hook_records_request() {
         let key = generate_keypair();
         let recorder = Arc::new(EvidenceRecorder::new_in_memory(key).unwrap());
+        let (alert_tx, _) = tokio::sync::broadcast::channel(32);
         let hook = EvidenceHookImpl {
             recorder: recorder.clone(),
+            alert_tx,
         };
 
         let req = make_req_info();
@@ -217,8 +240,10 @@ mod tests {
     async fn evidence_hook_records_response() {
         let key = generate_keypair();
         let recorder = Arc::new(EvidenceRecorder::new_in_memory(key).unwrap());
+        let (alert_tx, _) = tokio::sync::broadcast::channel(32);
         let hook = EvidenceHookImpl {
             recorder: recorder.clone(),
+            alert_tx,
         };
 
         let req = make_req_info();

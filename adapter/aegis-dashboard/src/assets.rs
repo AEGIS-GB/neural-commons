@@ -98,6 +98,33 @@ document.addEventListener('visibilitychange',()=>{
   pageVisible=!document.hidden;
   if(pageVisible){poll();}
 });
+const alertSource=new EventSource('/dashboard/api/alerts/stream');
+alertSource.onmessage=(e)=>{
+  try{
+    const alert=JSON.parse(e.data);
+    showAlert(alert);
+  }catch{}
+};
+// alertSource.onerror: EventSource reconnects automatically, no code needed.
+// The 5s fallback poll below catches anything missed during reconnect gap.
+function showAlert(alert){
+  const panel=document.getElementById('panel-alerts');
+  if(!panel)return;
+  const card=panel.querySelector('.card');
+  if(!card)return;
+  const el=document.createElement('div');
+  el.style.cssText='padding:8px;margin-bottom:8px;background:#2d1f1f;border:1px solid #da3633;border-radius:4px;font-size:13px';
+  el.textContent='['+new Date(alert.ts_ms).toLocaleTimeString()+'] '+alert.kind+': '+alert.message;
+  card.insertBefore(el,card.firstChild);
+}
+async function fetchAlerts(){
+  try{
+    const a=await(await fetch('/dashboard/api/alerts')).json();
+    // Fallback only — SSE is primary. This catches alerts missed during
+    // EventSource reconnect gaps (RecvError::Lagged on the Rust side).
+    if(a.alerts&&a.alerts.length>0){a.alerts.forEach(showAlert);}
+  }catch(e){}
+}
 async function poll(){
   try{
     const s=await(await fetch('/dashboard/api/status')).json();
@@ -130,8 +157,9 @@ async function poll(){
     }catch(e){}
   }
 }
-function schedule(){poll().finally(()=>setTimeout(schedule,2000));}
-schedule();
+function schedule(fn,ms){fn().finally(()=>setTimeout(()=>schedule(fn,ms),ms));}
+schedule(poll,2000);
+schedule(fetchAlerts,5000);
 </script>
 </body>
 </html>"#;

@@ -368,26 +368,47 @@ All monitoring defaults to warn-only (observe mode).
 
 ---
 
-### D12: Dashboard Refresh Mechanism
+### D12: Dashboard Refresh Mechanism ✅ CONFIRMED
 
-**What:** How does the embedded dashboard (<50KB) get updated data?
+**What:** How does the embedded dashboard get updated data?
 
-**Why it matters:** WebSocket adds complexity and code size. SSE requires persistent connections. Polling is simplest but may feel sluggish.
+**Decided:**
 
-**Blocks:** `aegis-dashboard` implementation
+General polling (status, evidence, memory):
+- Mechanism: recursive `setTimeout` — waits for fetch completion before scheduling next tick (prevents request pileup under load)
+- Interval: 2s when tab is active
+- Pause: all non-critical polling pauses when browser tab is hidden (Page Visibility API / `visibilitychange` event)
+- On return: immediate fetch fires the moment warden returns to tab
+- Failure: after 5 consecutive failures (~10s), health field shows `Disconnected` instead of last cached value
 
-**Default:**
-```
-Polling at 2-second intervals
-No WebSocket, no SSE
-Keeps dashboard under 50KB total (HTML + CSS + JS)
-Dashboard makes GET requests to local adapter REST API
-```
+Emergency Alerts (critical events only):
+- Mechanism: SSE (Server-Sent Events) via native `EventSource` API — server pushes the instant a critical receipt is written
+- Endpoint: `GET /dashboard/api/alerts/stream`
+- Reconnect: automatic (built into `EventSource`, no code required)
+- Fallback: 5s polling on `/dashboard/api/alerts` retained as resilience layer during SSE reconnect gaps
+- Why not 500ms poll: polling at any interval means warden waits up to N ms for something the adapter already knows. SSE delivers in <10ms on localhost. 500ms poll was a reasonable approximation when SSE was ruled out globally; that ruling does not apply to localhost.
+- Why SSE not WebSocket: communication is one-way (adapter → browser). WebSocket bidirectionality is unused overhead. SSE is strictly one-way by design.
+- Why SSE not ruled out: original rejection was for remote/enterprise deployments where corporate proxies kill persistent connections. Aegis dashboard is localhost-only (127.0.0.1). There is no proxy on the loopback interface.
 
-**What I need from you:**
-1. Confirm polling at 2s (vs 1s or 5s)
-2. Is 50KB a hard limit or a guideline?
-3. Any specific dashboard tabs that need faster updates?
+Alert broadcast channel (Rust):
+- Type: `tokio::sync::broadcast` (not `mpsc`, not `watch`)
+- Buffer: 32 slots
+- Reason: `broadcast` delivers to all connected tabs independently; `mpsc` has one receiver (breaks multi-tab); `watch` drops events on overwrite (loses alerts during attack bursts)
+
+Alert threshold (what triggers a push):
+- `ReceiptType::WriteBarrier` on any protected file write → push
+- `ReceiptType::SlmParseFailure` from SLM analysis → push
+- All other receipt types → receipt only, no push
+- Encoded in `is_critical()` — one place to change
+- TODO(Phase 1b): add `ReceiptType::SlmReject` variant when SLM loopback is wired
+
+Size budget: guideline not hard limit. This implementation adds ~400 bytes of JS (EventSource + fallback) and ~25 lines of Rust (SSE handler + broadcast channel). Well within budget.
+
+**Q1 answered:** 2s polling confirmed for general tabs.
+**Q2 answered:** 50KB is a guideline. Current size remains under budget.
+**Q3 answered:** Emergency Alerts uses SSE push, not faster polling. SSE + 5s fallback poll replaces the planned 500ms alert poll.
+
+**Blocks resolved:** `aegis-dashboard` routes, assets, `AdapterState` alert channel
 
 ---
 
@@ -1034,7 +1055,7 @@ If the adapter reports which non-standard files appear across multiple warden wo
 | D8  | 1 | SLM Holster presets (absorbed into D4) | 🔒 LOCKED |
 | D9  | 1 | Vault key derivation | ⏳ Pending |
 | D11 | 1 | Memory file patterns | ✅ CONFIRMED |
-| D12 | 1 | Dashboard refresh | ⏳ Pending |
+| D12 | 1 | Dashboard refresh | ✅ CONFIRMED |
 | D30 | 1 | Observe-only enforcement points | ⏳ Pending |
 | D31 | 1 | OpenClaw fixture requirements | ⏳ Pending |
 | D13 | 2 | TRUSTMARK weights | ⏳ Pending |
