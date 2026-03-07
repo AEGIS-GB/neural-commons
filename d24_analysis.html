@@ -1,0 +1,1622 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>D24 — Edge Gateway Rate Limits: Full Analysis</title>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=DM+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg: #080a0d; --surface: #0e1117; --surface2: #131820;
+  --border: #1c2330; --border2: #242e3d;
+  --green: #22c55e; --green-dim: rgba(34,197,94,0.10); --green-border: rgba(34,197,94,0.25);
+  --red: #ef4444; --red-dim: rgba(239,68,68,0.08); --red-border: rgba(239,68,68,0.25);
+  --amber: #f59e0b; --amber-dim: rgba(245,158,11,0.08); --amber-border: rgba(245,158,11,0.25);
+  --blue: #3b82f6; --blue-dim: rgba(59,130,246,0.10); --blue-border: rgba(59,130,246,0.25);
+  --purple: #8b5cf6; --purple-dim: rgba(139,92,246,0.10); --purple-border: rgba(139,92,246,0.25);
+  --cyan: #06b6d4; --cyan-dim: rgba(6,182,212,0.08); --cyan-border: rgba(6,182,212,0.2);
+  --orange: #f97316; --orange-dim: rgba(249,115,22,0.08); --orange-border: rgba(249,115,22,0.25);
+  --text: #b0bec5; --text-bright: #ecf0f1; --dim: #4a5568;
+  --mono: 'JetBrains Mono', monospace; --sans: 'DM Sans', sans-serif;
+}
+* { margin:0; padding:0; box-sizing:border-box; }
+html { background: var(--bg); color: var(--text); font-family: var(--sans); font-size: 14px; line-height: 1.7; }
+body { max-width: 900px; margin: 0 auto; padding: 48px 24px 100px; }
+
+h1 { font-size: 22px; font-weight: 600; color: var(--text-bright); margin-bottom: 6px; }
+h2 { font-size: 15px; font-weight: 600; color: var(--text-bright); margin: 44px 0 14px; padding-top: 44px; border-top: 1px solid var(--border); }
+h2:first-of-type { border-top: none; margin-top: 28px; padding-top: 0; }
+h3 { font-size: 13px; font-weight: 600; color: var(--text-bright); margin: 22px 0 8px; }
+p { color: var(--text); margin-bottom: 14px; font-weight: 300; }
+p:last-child { margin-bottom: 0; }
+strong { color: var(--text-bright); font-weight: 500; }
+code { font-family: var(--mono); font-size: 11px; background: var(--border); padding: 1px 5px; border-radius: 3px; color: #93c5fd; }
+pre { font-family: var(--mono); font-size: 11px; line-height: 1.75; background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: 16px 18px; overflow-x: auto; margin: 14px 0; color: var(--text); white-space: pre; }
+.comment { color: var(--dim); }
+.ok-line { color: var(--green); }
+.warn-line { color: var(--amber); }
+.bad-line { color: var(--red); }
+.key-line { color: #93c5fd; }
+
+.meta { display: flex; align-items: center; gap: 10px; margin-bottom: 28px; flex-wrap: wrap; }
+.badge { font-family: var(--mono); font-size: 10px; font-weight: 600; letter-spacing: 0.05em; padding: 3px 9px; border-radius: 3px; border: 1px solid; }
+.b-pending { color: var(--amber); background: var(--amber-dim); border-color: var(--amber-border); }
+.b-phase   { color: #60a5fa; background: var(--blue-dim); border-color: var(--blue-border); }
+.b-rec     { color: var(--green); background: var(--green-dim); border-color: var(--green-border); }
+
+.callout { border-radius: 6px; padding: 16px 18px; margin: 18px 0; border: 1px solid; }
+.callout-label { font-family: var(--mono); font-size: 9px; font-weight: 600; letter-spacing: 0.07em; text-transform: uppercase; margin-bottom: 8px; }
+.callout p { margin-bottom: 8px; } .callout p:last-child { margin-bottom: 0; }
+.info    { background: var(--blue-dim);   border-color: var(--blue-border);   } .info    .callout-label { color: #60a5fa; }
+.warn    { background: var(--amber-dim);  border-color: var(--amber-border);  } .warn    .callout-label { color: var(--amber); }
+.danger  { background: var(--red-dim);    border-color: var(--red-border);    } .danger  .callout-label { color: var(--red); }
+.success { background: var(--green-dim);  border-color: var(--green-border);  } .success .callout-label { color: var(--green); }
+.note    { background: var(--purple-dim); border-color: var(--purple-border); } .note    .callout-label { color: var(--purple); }
+.cyan    { background: var(--cyan-dim);   border-color: var(--cyan-border);   } .cyan    .callout-label { color: var(--cyan); }
+.orange  { background: var(--orange-dim); border-color: var(--orange-border); } .orange  .callout-label { color: var(--orange); }
+
+table { width: 100%; border-collapse: collapse; margin: 14px 0; font-size: 12px; }
+th { font-family: var(--mono); font-size: 9px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--dim); background: var(--surface2); border: 1px solid var(--border); padding: 8px 12px; text-align: left; }
+td { border: 1px solid var(--border); padding: 9px 12px; color: var(--text); vertical-align: top; font-weight: 300; font-size: 12px; }
+tr:hover td { background: var(--surface2); }
+.td-ok   { color: var(--green);  font-weight: 500; font-size: 11px; font-family: var(--mono); }
+.td-bad  { color: var(--red);    font-weight: 500; font-size: 11px; font-family: var(--mono); }
+.td-warn { color: var(--amber);  font-weight: 500; font-size: 11px; font-family: var(--mono); }
+.td-dim  { color: var(--dim);    font-size: 11px; font-family: var(--mono); }
+.td-cyan { color: var(--cyan);   font-weight: 500; font-size: 11px; font-family: var(--mono); }
+
+.grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin: 14px 0; }
+.grid3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; margin: 14px 0; }
+.card { border: 1px solid var(--border); border-radius: 6px; padding: 16px; background: var(--surface); }
+.card-label { font-family: var(--mono); font-size: 9px; font-weight: 600; letter-spacing: 0.07em; text-transform: uppercase; margin-bottom: 10px; }
+.card-label.ok     { color: var(--green); }
+.card-label.bad    { color: var(--red); }
+.card-label.warn   { color: var(--amber); }
+.card-label.blue   { color: #60a5fa; }
+.card-label.cyan   { color: var(--cyan); }
+.card-label.purple { color: var(--purple); }
+.card-label.orange { color: var(--orange); }
+.card p { font-size: 12px; font-weight: 300; margin-bottom: 8px; }
+.card p:last-child { margin-bottom: 0; }
+
+/* ── Rate bar ── */
+.rate-row { display: flex; align-items: center; gap: 12px; margin: 8px 0; }
+.rate-label { font-family: var(--mono); font-size: 10px; color: var(--text); width: 140px; flex-shrink: 0; }
+.rate-bar-wrap { flex: 1; height: 10px; background: var(--border); border-radius: 3px; overflow: hidden; }
+.rate-bar-fill { height: 100%; border-radius: 3px; }
+.rate-val { font-family: var(--mono); font-size: 10px; color: var(--dim); width: 90px; text-align: right; flex-shrink: 0; }
+
+/* ── Timeline ── */
+.timeline { position: relative; padding-left: 28px; }
+.timeline::before { content:''; position:absolute; left:8px; top:0; bottom:0; width:1px; background: var(--border2); }
+.event { position: relative; margin-bottom: 22px; }
+.event::before { content:''; position:absolute; left:-24px; top:6px; width:10px; height:10px; border-radius:50%; background: var(--surface); border: 2px solid var(--border2); }
+.event.ok::before     { border-color: var(--green);  background: var(--green-dim); }
+.event.bad::before    { border-color: var(--red);    background: var(--red-dim); }
+.event.warn::before   { border-color: var(--amber);  background: var(--amber-dim); }
+.event.info::before   { border-color: var(--blue);   background: var(--blue-dim); }
+.event.neutral::before{ border-color: var(--dim);    background: var(--surface2); }
+.event-header { display: flex; align-items: flex-start; gap: 10px; flex-wrap: wrap; margin-bottom: 5px; }
+.event-time   { font-family: var(--mono); font-size: 10px; color: var(--dim); flex-shrink: 0; margin-top: 2px; }
+.event-actor  { font-family: var(--mono); font-size: 10px; font-weight: 600; padding: 1px 7px; border-radius: 3px; border: 1px solid; flex-shrink: 0; }
+.actor-bot     { color: #60a5fa; background: var(--blue-dim);   border-color: var(--blue-border); }
+.actor-gateway { color: #a78bfa; background: var(--purple-dim); border-color: var(--purple-border); }
+.actor-cluster { color: #22d3ee; background: var(--cyan-dim);   border-color: var(--cyan-border); }
+.actor-abuser  { color: var(--red); background: var(--red-dim); border-color: var(--red-border); }
+.actor-warden  { color: var(--green); background: var(--green-dim); border-color: var(--green-border); }
+.actor-centaur { color: var(--amber); background: var(--amber-dim); border-color: var(--amber-border); }
+.event-title  { font-size: 13px; font-weight: 500; color: var(--text-bright); }
+.event-body   { font-size: 12px; color: var(--text); font-weight: 300; line-height: 1.65; }
+.event-body p { margin-bottom: 6px; }
+.event-body p:last-child { margin-bottom: 0; }
+
+.http-pill { display: inline-block; font-family: var(--mono); font-size: 9px; font-weight: 600; padding: 1px 6px; border-radius: 3px; border: 1px solid; margin-right: 4px; }
+.http-200  { color: var(--green); background: var(--green-dim); border-color: var(--green-border); }
+.http-429  { color: var(--red);   background: var(--red-dim);   border-color: var(--red-border); }
+.http-403  { color: var(--amber); background: var(--amber-dim); border-color: var(--amber-border); }
+
+.issue { border-left: 2px solid var(--red-border); background: var(--red-dim); padding: 10px 14px; margin: 10px 0; border-radius: 0 4px 4px 0; }
+.issue-label { font-family: var(--mono); font-size: 9px; font-weight: 600; color: var(--red); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 5px; }
+.fix { border-left: 2px solid var(--green-border); background: var(--green-dim); padding: 10px 14px; margin: 10px 0; border-radius: 0 4px 4px 0; }
+.fix-label { font-family: var(--mono); font-size: 9px; font-weight: 600; color: var(--green); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 5px; }
+
+.section-label { font-family: var(--mono); font-size: 9px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--dim); margin-bottom: 12px; margin-top: 24px; }
+
+@media(max-width:620px) { .grid2, .grid3 { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+
+<div class="meta">
+  <div class="badge b-pending" style="color:#22d3ee;background:rgba(6,182,212,0.12);border-color:#0e7490;">✓ D24 — ANSWERED (D35 architecture)</div>
+  <div class="badge b-phase">Phase 3</div>
+  <div class="badge b-rec">Recommendation: Tier-Aware Limits + Burst Window</div>
+  <div class="badge" style="color:var(--cyan);background:var(--cyan-dim);border-color:var(--cyan-border);">↳ D35: Node Redistribution — Idle GPUs Unlocked</div>
+</div>
+
+<h1>D24 — Edge Gateway Rate Limits: Full Analysis</h1>
+<p>Every request from an adapter to the cluster passes through the Edge Gateway. D24 defines how many requests each identity is allowed to make per hour, per service. This document walks through what the defaults actually mean in practice, where they break down, how they interact with D19 credits and D14 tier thresholds, and what the final spec should say.</p>
+
+<div class="callout cyan">
+  <div class="callout-label">D35 — Node Service Redistribution (new decision, unlocks D24)</div>
+  <p>The original architecture assigned Embedding to Node 4 alongside Centaur, leaving three GPUs on Nodes 1–2–3 completely idle. Redistributing services across all five nodes' GPUs triples Centaur capacity, eliminates embedding saturation, and collapses RAG into a single node. The rate limits and simulations in this document reflect the <strong>redistributed architecture</strong>. The old numbers are preserved in strikethrough where they differ.</p>
+</div>
+
+<!-- ══════════════════════════════════════════════════════════════ -->
+<h2>Where the Gateway sits</h2>
+
+<p>The Edge Gateway is the <strong>only door</strong> into the cluster. Adapters never talk to NATS, Botawiki, Centaur, or any internal service directly. Every byte passes through this single chokepoint — which is exactly why it's the right place to enforce rate limits. Under D35, the Gateway moves from Node 5 to Node 2, freeing Node 5's GPU entirely for Centaur failover.</p>
+
+<pre><code>Warden's Machine
+┌─────────────────────────────────────────────────────────┐
+│  OpenClaw → Aegis Adapter → Cloud LLM API               │
+│                │                                         │
+│                ├── SQLite (local evidence chain)         │
+│                └── Dashboard (localhost:8443)            │
+└─────────────────────────┬───────────────────────────────┘
+                          │  NATS leaf node (outbound TCP)
+                          │  NC-Ed25519 signed per request
+                          ▼
+                 ┌─────────────────────┐
+                 │    Edge Gateway     │  ◄── D24 enforced here
+                 │    Node 2 · Go      │       auth + rate limit
+                 │    (~100MB RAM)     │       + protocol bridge
+                 └──────────┬──────────┘
+                            │  NATS (internal only)
+                            ▼
+  ┌─────────────────────────────────────────────────────────────┐
+  │  Node 1: Evidence + NATS Primary + PG + Embedding (GPU A)   │
+  │  Node 2: TRUSTMARK + NATS Secondary + PG + Gateway          │
+  │  Node 3: Botawiki + Mesh + pgvector + Embedding (GPU B)     │
+  │          ← RAG is fully local to this node                  │
+  │  Node 4: Centaur Primary (GPU C — dedicated, no sharing)    │
+  │  Node 5: Centaur Failover (GPU D — dedicated) + MinIO       │
+  └─────────────────────────────────────────────────────────────┘</code></pre>
+
+<div class="callout cyan">
+  <div class="callout-label">D35 — the key insight: every node has a GPU</div>
+  <p>Every Ryzen AI Max+ 395 has a Radeon 8060S (40 CU). The original design only used two GPUs (Nodes 4 and 5). Nodes 1, 2, 3 had idle GPUs. D35 activates them: Embedding runs on Nodes 1 and 3 (GPU pool), RAG embedding co-locates with pgvector on Node 3 (zero network hop), and Centaur on Nodes 4 and 5 gets full dedicated GPU with no contention. The GPU Scheduler routes embedding requests round-robin across the pool.</p>
+</div>
+
+<!-- ══════════════════════════════════════════════════════════════ -->
+<h2>The defaults: what they actually imply</h2>
+
+<p>The six proposed limits translate into concrete per-minute rates. The gap between them is dramatic — and worth making explicit before deciding.</p>
+
+<div class="section-label">Requests/hour → requests/minute conversion</div>
+
+<div class="rate-row">
+  <div class="rate-label">Mesh packets</div>
+  <div class="rate-bar-wrap"><div class="rate-bar-fill" style="width:100%; background: var(--cyan);"></div></div>
+  <div class="rate-val">1,000 / hr · 16.7/min</div>
+</div>
+<div class="rate-row">
+  <div class="rate-label">Botawiki read</div>
+  <div class="rate-bar-wrap"><div class="rate-bar-fill" style="width:20%; background: var(--blue);"></div></div>
+  <div class="rate-val">200 / hr · 3.3/min</div>
+</div>
+<div class="rate-row">
+  <div class="rate-label">Embedding</div>
+  <div class="rate-bar-wrap"><div class="rate-bar-fill" style="width:10%; background: var(--purple);"></div></div>
+  <div class="rate-val">100 / hr · 1.7/min</div>
+</div>
+<div class="rate-row">
+  <div class="rate-label">RAG query</div>
+  <div class="rate-bar-wrap"><div class="rate-bar-fill" style="width:5%; background: var(--amber);"></div></div>
+  <div class="rate-val">50 / hr · 0.8/min</div>
+</div>
+<div class="rate-row">
+  <div class="rate-label">Centaur query</div>
+  <div class="rate-bar-wrap"><div class="rate-bar-fill" style="width:2%; background: var(--red);"></div></div>
+  <div class="rate-val">20 / hr · 0.3/min</div>
+</div>
+<div class="rate-row">
+  <div class="rate-label">Botawiki write</div>
+  <div class="rate-bar-wrap"><div class="rate-bar-fill" style="width:2%; background: var(--orange);"></div></div>
+  <div class="rate-val">20 / hr · 0.3/min</div>
+</div>
+
+<div class="callout info">
+  <div class="callout-label">The key insight</div>
+  <p>Mesh packets are 50× more generous than Centaur queries. That ratio is intentional — relay is cheap, Centaur is expensive. But it means the limits are not a single "how busy is this bot" dial. They're six separate policy choices with different rationale for each. They deserve to be analyzed separately.</p>
+</div>
+
+<!-- ══════════════════════════════════════════════════════════════ -->
+<h2>Service-by-service analysis</h2>
+
+<h3>Botawiki read — 200/hr</h3>
+<p>A read-heavy bot (research assistant, Botawiki curator, knowledge aggregator) can hit 200 reads/hour trivially. Processing a single long document where each paragraph triggers a Botawiki lookup for context produces 50–100 reads in a short burst. Over a full hour of active work, 200 is actually quite tight.</p>
+<p>The risk of making this too high is low — reads are cheap, stateless, and produce no side effects. The risk of making it too low is that legitimate research sessions get throttled mid-task with no recourse.</p>
+
+<div class="grid2">
+  <div class="card">
+    <div class="card-label warn">Pressure point</div>
+    <p>A bot doing Botawiki-assisted document review (e.g., cross-referencing 50 facts in a report) can exhaust 200 reads in a single 20-minute session. If the warden runs two such sessions per hour, they will hit the limit on the second one.</p>
+  </div>
+  <div class="card">
+    <div class="card-label ok">Recommendation</div>
+    <p>Raise to <strong>500/hr</strong> for Tier 2+ bots. Reads have no write-side risk. The gateway should log when a bot reaches 80% of its limit so the warden sees usage patterns before a hard block hits.</p>
+  </div>
+</div>
+
+<h3>Botawiki write — 20/hr</h3>
+<p>This is the most consequential limit in the table. Writes mutate the shared knowledge layer. A bot that writes bad data into Botawiki at scale is a real attack surface — which is why 20/hr feels conservative and sensible at first glance.</p>
+<p>But consider a legitimate curator bot systematically tagging and annotating entries from a corpus: 20 writes per hour is one canonical write every 3 minutes. For a bot doing batch knowledge work, this will be exhausted in the first 20 minutes and the bot will be blocked for the rest of the hour.</p>
+
+<div class="issue">
+  <div class="issue-label">Hidden coupling with D19</div>
+  <p style="font-size:12px; color: var(--text); font-weight:300; margin:0;">D19 assigns <strong>10 credits</strong> per canonical Botawiki write. A bot with 200 credits in reserve can write 20 entries — and coincidentally hits the rate limit at exactly the same moment it runs out of credits. This is pure coincidence, not intentional design. If credits are raised or the write cost changes in D19, the rate limit will no longer be credit-aligned, causing confusing double-throttle situations.</p>
+</div>
+
+<div class="fix">
+  <div class="fix-label">Recommendation</div>
+  <p style="font-size:12px; color: var(--text); font-weight:300; margin:0;">Keep 20/hr as the <strong>Tier 1 (untrusted) limit</strong>. Raise to 50/hr at Tier 2, 100/hr at Tier 3. Write rate limits are a backstop against abuse, not a credit substitute — they shouldn't mirror credit math.</p>
+</div>
+
+<h3>RAG query — 50/hr</h3>
+<p>RAG queries are more expensive than reads because they involve semantic search over the vector index. 50/hr (~1 every 72 seconds) is arguably too low for an active bot doing knowledge-assisted reasoning. A conversational bot that runs RAG on every user turn could hit 50/hr in under an hour of steady usage.</p>
+<p>There is also a hidden coupling here: <strong>every RAG query internally invokes the embedding service</strong> to vectorize the query string before searching. At 50 RAG/hr and 100 embedding/hr, the gateway could accept a RAG request, issue the downstream embedding call, and then reject the embedding call if the identity has a separate embedding counter — causing a silent partial failure at the service boundary.</p>
+
+<div class="callout warn">
+  <div class="callout-label">Embedding counter coupling</div>
+  <p>If RAG queries deduct from the RAG counter <em>and</em> the internal embedding call deducts from the embedding counter, a bot running 50 RAG queries will have consumed 50 of its 100 embedding budget as a side-effect. A bot doing 100 pure embedding calls directly would exhaust the embedding budget without touching the RAG counter. These two endpoints compete for the same underlying resource but are tracked separately. Define clearly: does an internal embedding call triggered by RAG count against the identity's embedding quota?</p>
+</div>
+
+<h3>Mesh packets — 1,000/hr</h3>
+<p>The mesh limit is intentionally high relative to other services because relay is the network's core transport function. A node in an active mesh relaying traffic for 5–10 peers will easily generate hundreds of forwarded packets per hour. 1,000/hr (~16/min) feels roughly right.</p>
+<p>The security concern here is different from the other services: a malicious bot could attempt to use the mesh as a covert exfiltration channel by encoding data in packet payloads. The rate limit alone does not protect against this — the mesh encryption and the write barrier do. The rate limit here is primarily a DoS defense, not a semantic one.</p>
+
+<h3>Embedding — 100/hr</h3>
+<p>Embedding is cheap in compute terms but the Phase 3 embedding service runs on shared infrastructure. 100/hr (~1.7/min) is conservative. An active quarantine validator running similarity checks could burn through 100 embeddings in a single validation session. However, because the embedding model is CPU-friendly (D34 default: all-MiniLM-L6-v2), the real constraint is server load, not per-identity fairness.</p>
+
+<h3>Centaur — 20/hr</h3>
+<p>This is the right instinct. Centaur queries are the most expensive operation in the system — they invoke the frontier model with full context. 20/hr is a reasonable hard ceiling. The question is whether it should be configurable per-tier or fixed globally.</p>
+<p>At 10 credits per Centaur query (D19), a bot at 20 queries exhausts 200 credits. A new bot starts at zero credits and must earn them. This means the Centaur rate limit is only ever reached by bots with a substantial credit balance — which is appropriate. High-Centaur usage should be a Tier 3 behavior, not something any freshly-joined identity can do.</p>
+
+<!-- ══════════════════════════════════════════════════════════════ -->
+<h2>The burst problem</h2>
+
+<p>Flat hourly limits create a structural problem for bots that do intensive work in short sessions followed by long idle periods. A research bot might do nothing for 45 minutes, then make 180 Botawiki reads in a 15-minute burst while helping a warden review a document. Under a flat 200/hr limit, the 180-read burst is fine. But a bot doing <em>two consecutive</em> 110-read sessions in the same hour will hit the limit 90 seconds into the second session — with no way to recover until the hour resets.</p>
+
+<div class="callout warn">
+  <div class="callout-label">Hourly reset boundary artifacts</div>
+  <p>If the rate window resets on the clock hour (e.g., at :00 exactly), bots that start work at :55 will hit their limit at :00 of the next hour — giving them only 5 minutes of effective quota. A sliding 60-minute window fixes this at the cost of a slightly more complex counter implementation. Worth it.</p>
+</div>
+
+<h3>Two window strategies compared</h3>
+
+<table>
+  <thead>
+    <tr>
+      <th>Property</th>
+      <th>Fixed clock-hour window</th>
+      <th>Sliding 60-min window</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><strong>Implementation</strong></td>
+      <td>Simple counter, reset at :00</td>
+      <td>Timestamped request log, count events in last 3600s</td>
+    </tr>
+    <tr>
+      <td><strong>Boundary artifact</strong></td>
+      <td class="td-bad">YES — double quota at hour boundary (burst at :58, reset at :00, burst again)</td>
+      <td class="td-ok">None — always a true 60-minute view</td>
+    </tr>
+    <tr>
+      <td><strong>Memory per identity</strong></td>
+      <td class="td-ok">1 integer per service (~48 bytes total)</td>
+      <td class="td-warn">Timestamped ring buffer (~several KB per identity)</td>
+    </tr>
+    <tr>
+      <td><strong>Burst resilience</strong></td>
+      <td class="td-bad">Poor — first 5 minutes of hour can be exhausted in a burst, bot blocked for 55 min</td>
+      <td class="td-ok">Good — limit reflects actual last-hour usage</td>
+    </tr>
+    <tr>
+      <td><strong>Retry-After header accuracy</strong></td>
+      <td class="td-warn">Can tell bot "try again at :00" but that's up to 60 minutes away</td>
+      <td class="td-ok">Can tell bot exact seconds until oldest request ages out of window</td>
+    </tr>
+  </tbody>
+</table>
+
+<div class="fix">
+  <div class="fix-label">Recommendation</div>
+  <p style="font-size:12px; color: var(--text); font-weight:300; margin:0;"><strong>Use sliding 60-minute windows.</strong> The memory cost is acceptable (Redis sorted sets handle this elegantly). The boundary artifacts from fixed windows will cause confusing behavior in practice — especially during debugging, when a bot that "should have had quota" mysteriously hits 429s.</p>
+</div>
+
+<!-- ══════════════════════════════════════════════════════════════ -->
+<h2>Worked scenario: a legitimate research session</h2>
+
+<p>@ResearchBot is helping a warden analyze a competitor patent filing. The warden sends the document. The bot breaks it into claims, cross-references each claim against Botawiki, runs RAG for context, and writes 3 canonical entries for new concepts it discovers.</p>
+
+<div class="timeline">
+
+  <div class="event info">
+    <div class="event-header">
+      <span class="event-time">T+00:00</span>
+      <span class="event-actor actor-warden">WARDEN</span>
+      <div class="event-title">Sends 40-page patent document</div>
+    </div>
+    <div class="event-body">
+      <p>Bot receives the document via adapter. No gateway calls yet.</p>
+    </div>
+  </div>
+
+  <div class="event ok">
+    <div class="event-header">
+      <span class="event-time">T+00:02</span>
+      <span class="event-actor actor-bot">BOT</span>
+      <div class="event-title">Botawiki reads — claim cross-reference phase</div>
+    </div>
+    <div class="event-body">
+      <p>Bot identifies 87 technical terms across the document's claims. It runs a Botawiki read for each term to check existing definitions and related prior art.</p>
+      <p><span class="http-pill http-200">200 OK</span> × 87 requests over ~6 minutes. Running total: <strong>87 / 200 reads used</strong>.</p>
+    </div>
+  </div>
+
+  <div class="event ok">
+    <div class="event-header">
+      <span class="event-time">T+00:08</span>
+      <span class="event-actor actor-bot">BOT</span>
+      <div class="event-title">RAG queries — contextual enrichment</div>
+    </div>
+    <div class="event-body">
+      <p>For 22 claims that lack Botawiki entries, the bot runs RAG queries to find relevant precedents from the knowledge corpus.</p>
+      <p><span class="http-pill http-200">200 OK</span> × 22 requests. RAG total: <strong>22 / 50 used</strong>. Embedding counter: <strong>22 / 100 used</strong> (if RAG triggers embedding deduction).</p>
+    </div>
+  </div>
+
+  <div class="event ok">
+    <div class="event-header">
+      <span class="event-time">T+00:15</span>
+      <span class="event-actor actor-bot">BOT</span>
+      <div class="event-title">Botawiki writes — new canonical entries</div>
+    </div>
+    <div class="event-body">
+      <p>Bot drafts 3 new Botawiki entries for novel concepts found in the patent. Warden reviews and confirms. Bot submits the 3 writes.</p>
+      <p><span class="http-pill http-200">200 OK</span> × 3. Write total: <strong>3 / 20 used</strong>. Credits deducted: 30 (at 10/write, per D19).</p>
+    </div>
+  </div>
+
+  <div class="event ok">
+    <div class="event-header">
+      <span class="event-time">T+00:18</span>
+      <span class="event-actor actor-bot">BOT</span>
+      <div class="event-title">Centaur query — synthesis</div>
+    </div>
+    <div class="event-body">
+      <p>Bot calls Centaur once to synthesize findings into a structured patent analysis report. One call, expensive but justified.</p>
+      <p><span class="http-pill http-200">200 OK</span> × 1. Centaur total: <strong>1 / 20 used</strong>. Credits: 10 deducted.</p>
+    </div>
+  </div>
+
+  <div class="event ok">
+    <div class="event-header">
+      <span class="event-time">T+00:20</span>
+      <span class="event-actor actor-warden">WARDEN</span>
+      <div class="event-title">Session complete — all limits healthy</div>
+    </div>
+    <div class="event-body">
+      <p>Full session used: 87 reads (43% of limit), 22 RAG (44%), 3 writes (15%), 1 Centaur (5%). Sliding window has 40 minutes remaining before the earliest reads age out. Bot can start another session without concern.</p>
+    </div>
+  </div>
+
+</div>
+
+<div class="callout success">
+  <div class="callout-label">This scenario works cleanly</div>
+  <p>For a normal, focused research session, the defaults are comfortable. The bot uses under 50% of any limit. The problem emerges when the warden wants to run two back-to-back sessions, or when the document has 200+ claims instead of 87.</p>
+</div>
+
+<!-- ══════════════════════════════════════════════════════════════ -->
+<h2>Worked scenario: the Botawiki write crunch</h2>
+
+<p>@CuratorBot is a dedicated Botawiki maintenance bot. Its warden is working through a backlog of 60 stale entries that need updating. Each update is a write. This scenario exposes the most significant default limit problem.</p>
+
+<div class="timeline">
+
+  <div class="event info">
+    <div class="event-header">
+      <span class="event-time">T+00:00</span>
+      <span class="event-actor actor-warden">WARDEN</span>
+      <div class="event-title">Starts batch update session — 60 entries queued</div>
+    </div>
+    <div class="event-body">
+      <p>Bot has full context of all 60 entries. Warden instructs: update them all, flag any that require human review before writing.</p>
+    </div>
+  </div>
+
+  <div class="event ok">
+    <div class="event-header">
+      <span class="event-time">T+00:00 – T+00:30</span>
+      <span class="event-actor actor-bot">BOT</span>
+      <div class="event-title">Writes 1–20 succeed</div>
+    </div>
+    <div class="event-body">
+      <p><span class="http-pill http-200">200 OK</span> × 20 writes over ~30 minutes (one every 90 seconds, deliberate pacing). Write counter: <strong>20 / 20 — LIMIT REACHED</strong>.</p>
+    </div>
+  </div>
+
+  <div class="event bad">
+    <div class="event-header">
+      <span class="event-time">T+00:31</span>
+      <span class="event-actor actor-gateway">GATEWAY</span>
+      <div class="event-title">Write #21 — 429 Too Many Requests</div>
+    </div>
+    <div class="event-body">
+      <p><span class="http-pill http-429">429</span> Botawiki write limit reached. Retry-After: 1741s (29 minutes remaining in sliding window).</p>
+      <p>The bot still has 40 entries to write. It is blocked for 29 minutes despite having write intent and sufficient credits. The warden has no action available except wait.</p>
+    </div>
+  </div>
+
+  <div class="event warn">
+    <div class="event-header">
+      <span class="event-time">T+01:00</span>
+      <span class="event-actor actor-bot">BOT</span>
+      <div class="event-title">Window resets — writes 21–40 proceed</div>
+    </div>
+    <div class="event-body">
+      <p>Sliding window clears enough headroom. Writes resume. But the batch that should have taken 30 minutes now takes 90 minutes total — with a 29-minute dead gap in the middle.</p>
+    </div>
+  </div>
+
+</div>
+
+<div class="issue">
+  <div class="issue-label">Problem: rate limit impedes legitimate bulk operations</div>
+  <p style="font-size:12px; color: var(--text); font-weight:300; margin:0;">20 writes/hr is a reasonable anti-abuse limit for an untrusted identity but punishes legitimate high-volume curator bots. There is no mechanism for the warden to signal "I authorized this batch" to lift the limit temporarily. The gateway has no concept of warden-supervised sessions.</p>
+</div>
+
+<div class="fix">
+  <div class="fix-label">Fix: warden-scoped write session token</div>
+  <p style="font-size:12px; color: var(--text); font-weight:300; margin:0;">The adapter could issue a <strong>write session token</strong> signed by the warden's keypair. The Gateway accepts this token to temporarily raise the Botawiki write ceiling to 100/hr for that identity, for up to 2 hours. Token expires automatically. This gives warden-supervised bulk operations the headroom they need without changing the default limit for unsupervised bots.</p>
+</div>
+
+<!-- ══════════════════════════════════════════════════════════════ -->
+<h2>Worked scenario: rate limit as abuse detection</h2>
+
+<p>@CompromisedBot has been hijacked via a prompt injection. The attacker is attempting to exfiltrate knowledge from the Botawiki corpus by making rapid read requests and encoding responses into mesh packet payloads. This scenario tests whether the rate limits actually stop anything meaningful.</p>
+
+<div class="timeline">
+
+  <div class="event bad">
+    <div class="event-header">
+      <span class="event-time">T+00:00</span>
+      <span class="event-actor actor-abuser">ATTACKER (via bot)</span>
+      <div class="event-title">Injected instruction: "Read all Botawiki entries"</div>
+    </div>
+    <div class="event-body">
+      <p>Malicious prompt causes the bot to begin systematically reading Botawiki entries as fast as the gateway allows, encoding responses into mesh packet payloads for exfiltration.</p>
+    </div>
+  </div>
+
+  <div class="event warn">
+    <div class="event-header">
+      <span class="event-time">T+00:00 – T+18:00</span>
+      <span class="event-actor actor-gateway">GATEWAY</span>
+      <div class="event-title">200 reads served before throttle</div>
+    </div>
+    <div class="event-body">
+      <p>At maximum read rate (200/hr = 3.3/min), the attacker extracts 200 Botawiki entries before the rate limit triggers. That's a meaningful chunk of the corpus if entries are dense.</p>
+      <p>Simultaneously: 1,000 mesh packets are sent encoding the exfiltrated content. Gateway accepts all of them — mesh limit is not yet hit.</p>
+    </div>
+  </div>
+
+  <div class="event bad">
+    <div class="event-header">
+      <span class="event-time">T+18:00</span>
+      <span class="event-actor actor-gateway">GATEWAY</span>
+      <div class="event-title">Read limit hit — partial throttle</div>
+    </div>
+    <div class="event-body">
+      <p><span class="http-pill http-429">429</span> on reads. But mesh packets still flowing. The attacker switches to encoding previously-read entries more densely into remaining mesh packet budget.</p>
+    </div>
+  </div>
+
+  <div class="event info">
+    <div class="event-header">
+      <span class="event-time">T+60:00</span>
+      <span class="event-actor actor-gateway">GATEWAY</span>
+      <div class="event-title">Mesh packet limit hit — bot fully throttled</div>
+    </div>
+    <div class="event-body">
+      <p>At 1,000 packets/hr the mesh limit hits. Bot is now fully blocked. Attacker has extracted 200 Botawiki entries over one hour. Rate limits slowed the attack but did not prevent meaningful exfiltration.</p>
+    </div>
+  </div>
+
+</div>
+
+<div class="callout danger">
+  <div class="callout-label">Rate limits are not an exfiltration defense</div>
+  <p>This scenario illustrates the core limitation of rate limits as a security control: they are a <strong>speed governor, not a content filter</strong>. A determined attacker operating within the allowed rate can still exfiltrate significant data. Rate limits buy time for anomaly detection — they do not stop a slow, patient exfiltration campaign.</p>
+  <p>The write barrier (D5) and SLM (D4) are the real exfiltration defenses. D24 limits protect server resources and reduce the <em>velocity</em> of abuse; they should not be positioned as the primary security control for data leakage.</p>
+</div>
+
+<!-- ══════════════════════════════════════════════════════════════ -->
+<h2>Cross-decision conflicts</h2>
+
+<table>
+  <thead>
+    <tr>
+      <th>Conflict</th>
+      <th>D24 default</th>
+      <th>Other decision</th>
+      <th>Issue</th>
+      <th>Resolution</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><strong>Write limit vs. D19 credit cost</strong></td>
+      <td>20 writes / hr</td>
+      <td>D19: 10 credits/write</td>
+      <td class="td-warn">At 200 credits, a bot is simultaneously credit-exhausted and rate-limited at exactly the same time. This is coincidental, fragile — changing either number breaks the alignment.</td>
+      <td>Decouple intentionally. Rate limits guard velocity; credits guard total volume. Don't design them to coincide.</td>
+    </tr>
+    <tr>
+      <td><strong>RAG + Embedding double-count</strong></td>
+      <td>RAG: 50/hr, Embedding: 100/hr</td>
+      <td>—</td>
+      <td class="td-bad">RAG internally calls embedding. Is that internal call counted? If yes, 50 RAG queries silently consume 50 embedding quota. If no, embedding is undersized as a control for the embedding service.</td>
+      <td>Declare explicitly: internal service-to-service calls do NOT count against the originating identity's embedding quota. Only direct embedding API calls count.</td>
+    </tr>
+    <tr>
+      <td><strong>Centaur limit vs. D14 tiers</strong></td>
+      <td>20 Centaur / hr (all identities)</td>
+      <td>D14: tier thresholds</td>
+      <td class="td-warn">Tier 1 bots (untrusted, new) should not have the same Centaur access as Tier 3 (high-TRUSTMARK, long-standing). A flat 20/hr makes no distinction.</td>
+      <td>Tier 1: 5/hr. Tier 2: 0 (Centaur is Tier 3 only per architecture). Tier 3: 30/hr. T2 having any Centaur access creates demand that saturates cluster capacity before T3 bots can meaningfully use it.</td>
+    </tr>
+    <tr>
+      <td><strong>Botawiki write vs. D22 quorum</strong></td>
+      <td>20 writes / hr</td>
+      <td>D22: 3-validator quorum for quarantine</td>
+      <td class="td-dim">Not a conflict — but worth noting: a bot at 20 writes/hr could submit writes that queue into the quarantine validator pool faster than the quorum can process them, creating a write backlog. Validators may be working through a 20-entry queue from a single bot.</td>
+      <td>Monitor queue depth per identity. If an identity's pending-quarantine writes exceed 10, pause further write acceptance until queue clears.</td>
+    </tr>
+  </tbody>
+</table>
+
+<!-- ══════════════════════════════════════════════════════════════ -->
+<h2>The 429 response body: what should it contain?</h2>
+
+<p>When a rate limit is hit, the Gateway currently returns a bare 429. The response body spec is unwritten. This matters because adapters need to surface meaningful feedback to wardens and bots need actionable retry guidance.</p>
+
+<pre><code><span class="comment">// Proposed 429 response body — all rate limit responses</span>
+{
+  <span class="key-line">"error"</span>:          "rate_limit_exceeded",
+  <span class="key-line">"service"</span>:        "botawiki_write",        <span class="comment">// which service was limited</span>
+  <span class="key-line">"limit"</span>:          20,                      <span class="comment">// the ceiling</span>
+  <span class="key-line">"used"</span>:           20,                      <span class="comment">// current count in window</span>
+  <span class="key-line">"window_seconds"</span>: 3600,                   <span class="comment">// window size (always 3600)</span>
+  <span class="key-line">"retry_after_s"</span>:  1741,                   <span class="comment">// seconds until oldest request ages out</span>
+  <span class="key-line">"retry_after_ts"</span>: 1741932844,             <span class="comment">// Unix timestamp — retry at or after this</span>
+  <span class="key-line">"tier_ceiling"</span>:   20,                      <span class="comment">// max this identity's tier can reach</span>
+  <span class="key-line">"upgrade_tier"</span>:   false                   <span class="comment">// true if higher tier would raise this limit</span>
+}</code></pre>
+
+<p>The <code>upgrade_tier</code> flag is particularly useful: if the bot is Tier 1 and Tier 2 would give it 50 writes/hr, the adapter can surface a prompt to the warden explaining why they're being throttled and what would change with more trust accrual.</p>
+
+<!-- ══════════════════════════════════════════════════════════════ -->
+<h2>Tier-aware limit matrix: the recommended spec</h2>
+
+<p>Rather than flat limits for all identities, D24 should declare a matrix. The defaults become Tier 1 values. Higher tiers earn proportionally more headroom.</p>
+
+<table>
+  <thead>
+    <tr>
+      <th>Service</th>
+      <th>Tier 1 (default)</th>
+      <th>Tier 2</th>
+      <th>Tier 3</th>
+      <th>Notes</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><strong>Botawiki read</strong></td>
+      <td class="td-warn">200 / hr</td>
+      <td class="td-ok">500 / hr</td>
+      <td class="td-ok">1,000 / hr</td>
+      <td>Reads are cheap; headroom matters for research-heavy bots</td>
+    </tr>
+    <tr>
+      <td><strong>Botawiki write</strong></td>
+      <td class="td-warn">20 / hr</td>
+      <td class="td-ok">50 / hr</td>
+      <td class="td-ok">100 / hr</td>
+      <td>Warden session token can temporarily raise ceiling to 100/hr at any tier</td>
+    </tr>
+    <tr>
+      <td><strong>RAG query</strong></td>
+      <td class="td-warn">50 / hr</td>
+      <td class="td-ok">150 / hr</td>
+      <td class="td-ok">300 / hr</td>
+      <td>Internal RAG→embedding calls do NOT consume identity's embedding quota</td>
+    </tr>
+    <tr>
+      <td><strong>Mesh packets</strong></td>
+      <td class="td-ok">1,000 / hr</td>
+      <td class="td-ok">2,500 / hr</td>
+      <td class="td-ok">5,000 / hr</td>
+      <td>Relay is the core network function; keep generous at all tiers</td>
+    </tr>
+    <tr>
+      <td><strong>Embedding</strong></td>
+      <td class="td-warn">100 / hr</td>
+      <td class="td-ok">300 / hr</td>
+      <td class="td-ok">600 / hr</td>
+      <td>Direct embedding calls only; RAG-triggered embedding is separate</td>
+    </tr>
+    <tr>
+      <td><strong>Centaur</strong></td>
+      <td class="td-bad">5 / hr</td>
+      <td class="td-warn">15 / hr</td>
+      <td class="td-ok">30 / hr</td>
+      <td>Frontier model access; tier-gating is a meaningful trust signal</td>
+    </tr>
+  </tbody>
+</table>
+
+<div class="callout warn">
+  <div class="callout-label">Centaur change: default drops from 20 to 5</div>
+  <p>The recommended Tier 1 Centaur limit is <strong>5/hr, not 20</strong>. A freshly-admitted identity with no TRUSTMARK history should have very limited access to the most expensive service in the stack. 20/hr as a default is too generous for a new, unproven bot. Earn Tier 2 first.</p>
+</div>
+
+<!-- ══════════════════════════════════════════════════════════════ -->
+<h2>Implementation notes for routes.rs</h2>
+
+<p>The <code>cluster/gateway/src/routes.rs</code> file already has a <code>// Rate limits per D24</code> comment as a placeholder. Here is what the limiter middleware should look like once D24 is locked.</p>
+
+<pre><code><span class="comment">// Rate limiter state — keyed by (identity_fingerprint, service_name)</span>
+<span class="comment">// Uses Redis sorted set for sliding window: ZADD key ts ts, ZREMRANGEBYSCORE, ZCARD</span>
+
+<span class="comment">// Tier-aware ceiling lookup</span>
+<span class="ok-line">fn rate_ceiling(service: Service, tier: Tier) -> u32 {</span>
+    match (service, tier) {
+        (BotawikiRead,  Tier1) =>    200,
+        (BotawikiRead,  Tier2) =>    500,
+        (BotawikiRead,  Tier3) =>  1_000,
+        (BotawikiWrite, Tier1) =>     20,
+        (BotawikiWrite, Tier2) =>     50,
+        (BotawikiWrite, Tier3) =>    100,
+        (RagQuery,      Tier1) =>     50,
+        (RagQuery,      Tier2) =>    150,
+        (RagQuery,      Tier3) =>    300,
+        (MeshPackets,   Tier1) =>  1_000,
+        (MeshPackets,   Tier2) =>  2_500,
+        (MeshPackets,   Tier3) =>  5_000,
+        (Embedding,     Tier1) =>    100,
+        (Embedding,     Tier2) =>    300,
+        (Embedding,     Tier3) =>    600,
+        (Centaur,       Tier1) =>      5,  <span class="comment">// intentionally tight</span>
+        (Centaur,       Tier2) =>     15,
+        (Centaur,       Tier3) =>     30,
+    }
+}
+
+<span class="comment">// 429 body builder</span>
+<span class="ok-line">fn rate_limit_response(service: Service, used: u32, ceiling: u32,</span>
+                       retry_after_s: u64, tier_ceiling: u32) -> Json {
+    json!({
+        "error":          "rate_limit_exceeded",
+        "service":        service.as_str(),
+        "limit":          ceiling,
+        "used":           used,
+        "window_seconds": 3600,
+        "retry_after_s":  retry_after_s,
+        "retry_after_ts": unix_now() + retry_after_s,
+        "tier_ceiling":   tier_ceiling,
+        "upgrade_tier":   (ceiling < tier_ceiling),
+    })
+}
+
+<span class="comment">// Write session token check (warden-supervised bulk ops)</span>
+<span class="comment">// If request carries valid WriteSessionToken signed by warden keypair,</span>
+<span class="comment">// raise BotawikiWrite ceiling to 100/hr for this identity for token TTL (max 2h)</span>
+<span class="warn-line">fn apply_write_session_override(identity: &Identity, req: &Request) -> Option&lt;u32&gt; {</span>
+    <span class="comment">// TODO: implement after D24 is locked</span>
+    None
+}</code></pre>
+
+<!-- ══════════════════════════════════════════════════════════════ -->
+<h2>Hardware resource simulation</h2>
+
+<p>Each node has 128GB unified RAM, a Radeon 8060S (40 CU), and 10TB NVMe RAID. The rate limits in D24 define upper bounds — but at network scale (17,000 wardens, a fraction Tier 3 active) those bounds aggregate into real cluster pressure. What follows simulates each service at three population levels: <strong>100 concurrent active bots</strong> (early network), <strong>1,000</strong> (growth), and <strong>5,000</strong> (mature Tier 3 population).</p>
+
+<div class="callout info">
+  <div class="callout-label">Simulation assumptions</div>
+  <p>"Concurrent active" means bots making requests during a given hour, not all installed adapters. Each active bot is assumed to use 60% of its tier limit on average. Packet sizes are estimated from the schema: receipt ~1KB, Botawiki claim ~5KB (encrypted payload + 384-float vector = ~1.5KB vector + ~3.5KB ciphertext), mesh packet ~2KB, embedding query ~200B in / 1.5KB out, RAG response ~15KB, Centaur response ~8KB.</p>
+</div>
+
+<h3>Node assignment — D35 redistributed layout</h3>
+<pre><code>Node 1  — NATS Primary   + Evidence Ingestion + PostgreSQL Primary
+          + Embedding GPU A  ← NEW (idle GPU activated)
+
+Node 2  — NATS Secondary + TRUSTMARK Engine   + PostgreSQL Replica
+          + Edge Gateway    ← MOVED from Node 5 (~100MB RAM, negligible)
+
+Node 3  — NATS Tertiary  + Botawiki           + Mesh Relay + PostgreSQL + pgvector
+          + Embedding GPU B  ← NEW (co-located with pgvector → RAG = single node)
+
+Node 4  — Centaur Primary  ← DEDICATED GPU, no embedding competition
+          + GPU Scheduler
+
+Node 5  — Centaur Failover ← DEDICATED GPU, MinIO moved here with plenty of RAM
+          + MinIO (encrypted backups)
+
+EMBEDDING POOL: GPU A (Node 1) + GPU B (Node 3)
+  GPU Scheduler routes round-robin, load-balances across both
+  RAG queries always route to GPU B (Node 3) — zero cross-node hop to pgvector</code></pre>
+
+<h3>Service 1 — Botawiki read</h3>
+<p>A read hits the Edge Gateway (Node 5) → NATS → Botawiki Go service (Node 3) → PostgreSQL + pgvector SELECT → response. This is fully <strong>async</strong> on the cluster side: the Go service handles reads in goroutines, each goroutine costing ~8KB stack. A pgvector HNSW cosine search on a 384-dim index returns in ~0.5–2ms. The adapter blocks synchronously waiting for the HTTP response; from its perspective this is a ~5–15ms round-trip.</p>
+
+<table>
+  <thead><tr><th>Population</th><th>Reads/sec (cluster-wide)</th><th>Node 3 PG queries/sec</th><th>Node 3 RAM pressure</th><th>NVMe read BW</th><th>NATS msgs/sec</th></tr></thead>
+  <tbody>
+    <tr><td>100 bots</td><td class="td-ok">3.3/sec</td><td class="td-ok">3.3 SELECTs/sec</td><td class="td-ok">~200MB PG buffer pool</td><td class="td-ok">&lt;1 MB/s</td><td class="td-ok">3.3/sec</td></tr>
+    <tr><td>1,000 bots</td><td class="td-ok">33/sec</td><td class="td-ok">33 SELECTs/sec</td><td class="td-ok">~2GB buffer pool</td><td class="td-ok">~5 MB/s</td><td class="td-ok">33/sec</td></tr>
+    <tr><td>5,000 bots</td><td class="td-warn">166/sec</td><td class="td-warn">166 SELECTs/sec</td><td class="td-warn">~10GB buffer pool</td><td class="td-warn">~25 MB/s</td><td class="td-ok">166/sec</td></tr>
+  </tbody>
+</table>
+
+<p><strong>Bottleneck:</strong> None at these rates. PostgreSQL handles thousands of SELECTs/sec on NVMe. The HNSW index for pgvector must be built and maintained — index build time grows with corpus size, but query time stays ~1–2ms up to millions of entries. The real risk is the pgvector index consuming RAM: a 384-dim HNSW index over 1M entries uses ~2–4GB. At 5,000 active bots Node 3's RAM allocation looks like: PG shared_buffers (30GB) + pgvector HNSW index (3GB) + NATS JetStream (4GB) + Go services (2GB) = ~39GB of 128GB — well within budget.</p>
+
+<h3>Service 2 — Botawiki write</h3>
+<p>Writes are the most pipeline-heavy operation. The full chain: Gateway → NATS <code>botawiki.claim.new</code> → Botawiki service → PostgreSQL INSERT with vector → quarantine pipeline trigger → 3 validator NATS notifications (D22) → async quorum wait. The adapter gets an immediate ACK for the submission; the quarantine resolution is async and may take minutes. Each write therefore generates ~5–6 downstream NATS messages.</p>
+
+<div class="issue">
+  <div class="issue-label">Write amplification</div>
+  <p style="font-size:12px; color:var(--text); font-weight:300; margin:0;">At 5,000 bots × 20 writes/hr = 27.8 writes/sec arriving. Each write spawns 5 NATS messages = <strong>139 downstream NATS messages/sec</strong> just from Botawiki writes. Each of those messages requires a 3-node Raft consensus round-trip between Nodes 1–2–3. At 139 consensus operations/sec on residential LAN, inter-node latency becomes a real variable. This is the primary async multiplier in the system.</p>
+</div>
+
+<table>
+  <thead><tr><th>Population</th><th>Writes/sec</th><th>PG INSERTs/sec</th><th>Downstream NATS msgs/sec</th><th>pgvector index update rate</th><th>Node 3 NVMe writes</th></tr></thead>
+  <tbody>
+    <tr><td>100 bots</td><td class="td-ok">0.33/sec</td><td class="td-ok">0.33/sec</td><td class="td-ok">~2/sec</td><td class="td-ok">negligible</td><td class="td-ok">&lt;0.1 MB/s</td></tr>
+    <tr><td>1,000 bots</td><td class="td-ok">5.5/sec</td><td class="td-ok">5.5/sec</td><td class="td-ok">~28/sec</td><td class="td-ok">~5.5 index updates/sec</td><td class="td-ok">~0.3 MB/s</td></tr>
+    <tr><td>5,000 bots</td><td class="td-warn">27.8/sec</td><td class="td-warn">27.8/sec</td><td class="td-warn">~139/sec</td><td class="td-warn">~28 index updates/sec</td><td class="td-warn">~1.5 MB/s</td></tr>
+  </tbody>
+</table>
+
+<p><strong>Quarantine queue depth:</strong> With D22 requiring 3 validators to respond before a write promotes, validator response latency determines queue backlog. If validators average 30s to respond, at 27.8 writes/sec the queue holds 27.8 × 30 = ~834 pending claims at any moment. Each claim in-flight occupies ~5KB in NATS JetStream = ~4MB of NATS RAM. Manageable — but the NATS <code>max_mem: 256MB</code> config in <code>nats-server.conf</code> needs revisiting if the quarantine queue grows large.</p>
+
+<h3>Service 3 — RAG query <span style="font-size:11px;color:var(--cyan);font-weight:400;">↳ D35: single-node after redistribution</span></h3>
+<p><strong>Before D35:</strong> Gateway (Node 5) → NATS → Embedding (Node 4) → NATS → pgvector (Node 3). Two cross-node hops. Embedding competed with Centaur on the same GPU. Worst-case latency 80–200ms on CPU fallback.</p>
+<p><strong>After D35:</strong> Gateway (Node 2) → NATS → Node 3 (Embedding GPU B + pgvector in same process). <strong>Zero cross-node hops for the embedding+search step.</strong> Latency drops to ~8ms. No Centaur competition — Node 3's GPU is dedicated to embedding only.</p>
+
+<div class="callout cyan">
+  <div class="callout-label">D35 improvement: RAG latency ~8ms vs old ~25ms GPU / ~150ms CPU</div>
+  <p>Co-locating Embedding GPU B on Node 3 with pgvector means the entire RAG pipeline — embed query → HNSW search → return results — happens in one process with no NATS round-trip between steps. The GPU Scheduler routes RAG embedding requests always to GPU B. Direct embedding calls load-balance across GPU A (Node 1) and GPU B (Node 3).</p>
+</div>
+
+<table>
+  <thead><tr><th>Population</th><th>RAG queries/sec</th><th>Embed+search on Node 3</th><th>Node 3 GPU load</th><th>Response latency</th><th>Centaur interference</th></tr></thead>
+  <tbody>
+    <tr><td>100 bots</td><td class="td-ok">1.4/sec</td><td class="td-ok">1.4/sec local</td><td class="td-ok">&lt;1%</td><td class="td-ok">~8ms</td><td class="td-ok">None — separate GPU</td></tr>
+    <tr><td>1,000 bots</td><td class="td-ok">14/sec</td><td class="td-ok">14/sec local</td><td class="td-ok">~1% GPU B</td><td class="td-ok">~8ms</td><td class="td-ok">None — separate GPU</td></tr>
+    <tr><td>5,000 bots</td><td class="td-ok">69/sec</td><td class="td-warn">69/sec local</td><td class="td-ok">~5% GPU B</td><td class="td-ok">~10ms</td><td class="td-ok">None — separate GPU</td></tr>
+  </tbody>
+</table>
+
+<h3>Service 4 — Mesh packets</h3>
+<p>Mesh path unchanged by D35: Gateway (Node 2) → NATS → Mesh Relay (Node 3) → NATS → target adapter WSS. Pure relay, no DB or GPU. Dead-drop storage moves to MinIO on Node 5 — solving the NATS 1GB file limit problem permanently.</p>
+
+<div class="callout warn">
+  <div class="callout-label">Dead-drop fix: NATS → MinIO</div>
+  <p>Dead-drops (offline recipient messages, 72h TTL) are moved from NATS JetStream to MinIO on Node 5. NATS handles live relay only (ephemeral, memory-backed). MinIO has 10TB available and handles object TTL natively. The 1GB NATS max_file limit is no longer relevant to dead-drop storage.</p>
+</div>
+
+<table>
+  <thead><tr><th>Population</th><th>Packets/sec</th><th>NATS relay msgs/sec</th><th>Dead-drop storage (72h)</th><th>Dead-drop backend</th><th>WSS outbound BW</th></tr></thead>
+  <tbody>
+    <tr><td>100 bots</td><td class="td-ok">27.8/sec</td><td class="td-ok">55/sec</td><td class="td-ok">~0.6 GB</td><td class="td-ok">MinIO (Node 5)</td><td class="td-ok">~56 KB/s</td></tr>
+    <tr><td>1,000 bots</td><td class="td-ok">278/sec</td><td class="td-ok">556/sec</td><td class="td-ok">~6 GB</td><td class="td-ok">MinIO (Node 5)</td><td class="td-warn">~556 KB/s</td></tr>
+    <tr><td>5,000 bots</td><td class="td-warn">1,389/sec</td><td class="td-warn">2,778/sec</td><td class="td-warn">~29 GB</td><td class="td-ok">MinIO (Node 5) — 10TB avail</td><td class="td-bad">~2.8 MB/s</td></tr>
+  </tbody>
+</table>
+
+<h3>Service 5 — Embedding (direct calls) <span style="font-size:11px;color:var(--cyan);font-weight:400;">↳ D35: GPU pool across Nodes 1 + 3</span></h3>
+<p><strong>Before D35:</strong> Single GPU on Node 4, shared with Centaur 40GB model. Embedding saturated at 1,000 bots. CPU fallback triggered constantly.</p>
+<p><strong>After D35:</strong> Two dedicated embedding GPUs — GPU A (Node 1) and GPU B (Node 3). The GPU Scheduler load-balances direct embedding calls across both. Each GPU runs only the 90MB embedding model. Combined throughput: ~1,000–2,000 embedding batches/sec. No model in memory on Nodes 4 or 5 — those GPUs belong entirely to Centaur.</p>
+
+<table>
+  <thead><tr><th>Population</th><th>Direct embed/sec</th><th>RAG embed/sec (GPU B)</th><th>GPU A load (Node 1)</th><th>GPU B load (Node 3)</th><th>CPU fallback risk</th></tr></thead>
+  <tbody>
+    <tr><td>100 bots</td><td class="td-ok">2.8/sec</td><td class="td-ok">1.4/sec</td><td class="td-ok">&lt;1%</td><td class="td-ok">&lt;1%</td><td class="td-ok">None</td></tr>
+    <tr><td>1,000 bots</td><td class="td-ok">27.8/sec</td><td class="td-ok">14/sec</td><td class="td-ok">~2%</td><td class="td-ok">~1%</td><td class="td-ok">None</td></tr>
+    <tr><td>5,000 bots</td><td class="td-ok">139/sec</td><td class="td-ok">69/sec</td><td class="td-ok">~10%</td><td class="td-ok">~7%</td><td class="td-ok">None — both GPUs have headroom</td></tr>
+  </tbody>
+</table>
+
+<h3>Service 6 — Centaur <span style="font-size:11px;color:var(--cyan);font-weight:400;">↳ D35: dedicated GPUs, ~3× capacity increase</span></h3>
+<p><strong>Before D35:</strong> Node 4 GPU shared with embedding. KV cache evictions happened mid-query when embedding requests loaded/unloaded the 90MB model. Effective throughput degraded below theoretical 0.2/sec capacity.</p>
+<p><strong>After D35:</strong> Node 4 and Node 5 GPUs are 100% dedicated to Centaur. No model switching, no KV cache eviction from embedding. The full 128GB unified RAM on each node is available: 40GB for model weights, ~80GB for KV cache = larger context windows and faster throughput. Estimated real throughput improves from ~0.2/sec to ~0.27/sec per node, giving <strong>~0.54/sec cluster total = ~1,944 Centaur queries/hr</strong>.</p>
+
+<div class="callout cyan">
+  <div class="callout-label">D35 + T3-only Centaur: ~108 active T3 bots at 30/hr — up from ~36, no new hardware</div>
+  <p>The improvement comes from two sources: (1) no GPU time lost to embedding model loading/eviction, and (2) Centaur is now correctly scoped to Tier 3 only — Tier 2 bots no longer compete for GPU capacity. Safe active Tier 3 ceiling: <strong>~108 bots</strong> at 30/hr and 60% utilisation. Calculated as: 1,944 queries/hr ÷ 30/hr ÷ 0.60 = 108.</p>
+</div>
+
+<table>
+  <thead><tr><th>Population</th><th>Centaur queries/sec</th><th>Capacity (D35: 2 dedicated GPUs)</th><th>Queue status</th><th>Avg wait time</th><th>GPU RAM (Node 4+5)</th></tr></thead>
+  <tbody>
+    <tr><td>40 bots</td><td class="td-ok">0.12/sec</td><td class="td-ok">0.54/sec</td><td class="td-ok">stable — 78% headroom</td><td class="td-ok">&lt;10s</td><td class="td-ok">40GB model + 80GB KV each</td></tr>
+    <tr><td>108 bots (safe ceiling at 60% util)</td><td class="td-ok">0.54/sec</td><td class="td-ok">0.54/sec</td><td class="td-ok">stable — at capacity</td><td class="td-ok">~10s</td><td class="td-ok">40GB model + 80GB KV each</td></tr>
+    <tr><td>200 bots</td><td class="td-warn">1.0/sec</td><td class="td-bad">0.54/sec</td><td class="td-warn">growing (+0.46/sec)</td><td class="td-warn">rising</td><td class="td-ok">RAM safe</td></tr>
+    <tr><td>500 bots</td><td class="td-bad">2.5/sec</td><td class="td-bad">0.54/sec</td><td class="td-bad">+1.96/sec critical</td><td class="td-bad">hours</td><td class="td-ok">RAM safe</td></tr>
+  </tbody>
+</table>
+
+<p>Credits must still gate queue entry not billing. The queue cap of 50 still applies. But the safe operating range has expanded from ~36 to ~180 active Tier 3 bots with <strong>zero additional hardware cost</strong>.</p>
+
+<!-- ══════════════════════════════════════════════════════════════ -->
+<h2>Service dependency map and call chain analysis</h2>
+
+<p>Not all six services are independent. Several calls trigger downstream service activity that the rate limit table does not reflect. This matters for bottleneck modeling — a 50/hr RAG limit affects Node 4 (embedding) and Node 3 (pgvector) simultaneously.</p>
+
+<pre><code>ADAPTER REQUEST                    SERVICES HIT (D35 layout)                    SYNC/ASYNC
+
+Botawiki read      ───────────►  Gateway(2) → NATS → Botawiki(3) → PG(3)       SYNC ~10ms
+
+Botawiki write     ───────────►  Gateway(2) → NATS → Botawiki(3) → PG(3)       SYNC ACK, then:
+                                 ↳ PG(3) pgvector INSERT + HNSW update           ASYNC pipeline
+                                 ↳ NATS → 3× validator notifications(3)          ASYNC quorum
+                                 ↳ NATS → TRUSTMARK Engine(2) credit deduct      ASYNC
+
+RAG query          ───────────►  Gateway(2) → NATS → Node 3                    SYNC ~8ms ↓ from ~25ms
+                                 ↳ Embedding GPU B (Node 3) — local inference    SYNC in chain, no cross-node hop
+                                 ↳ pgvector HNSW (Node 3) — local search         SYNC in chain, same process
+                                 ↳ Response → adapter
+
+Mesh packet        ───────────►  Gateway(2) → NATS → Mesh Relay(3)             SYNC ACK
+                                 ↳ NATS → target adapter WSS push                ASYNC delivery
+                                 ↳ if offline: dead-drop → MinIO(5)              ASYNC TTL=72h — NOT NATS
+
+Embedding (direct) ───────────►  Gateway(2) → NATS → GPU Scheduler(4)          SYNC ~15ms
+                                 ↳ routes to GPU A (Node 1) or GPU B (Node 3)    LOAD BALANCED
+                                 ↳ GPU inference, 90MB model, no Centaur clash   SYNC in chain
+
+Centaur query      ───────────►  Gateway(2) → NATS → GPU Scheduler(4)          SYNC hold 10–30s → WSS push
+                                 ↳ Scheduler queues → Centaur(4 or 5)            QUEUE then SYNC
+                                 ↳ FULL GPU + 80GB KV cache (no embedding clash) GPU RAM
+                                 ↳ Result via NATS → Gateway → adapter WSS       PUSH when done</code></pre>
+
+<div class="callout warn">
+  <div class="callout-label">Key async vs sync implications</div>
+  <p>Botawiki writes return an ACK immediately but the actual work (quarantine, TRUSTMARK credit deduction, validator quorum) happens asynchronously. A bot that submits 20 writes and gets 20 ACKs has not completed 20 writes — it has submitted 20 to the quarantine pipeline. If the pipeline is backed up, those writes may sit unresolved for minutes. The rate limit governs <em>submissions</em>, not <em>completions</em>. This distinction matters for wardens who expect writes to be immediately queryable.</p>
+</div>
+
+<!-- ══════════════════════════════════════════════════════════════ -->
+<h2>Node-level resource summary at 1,000 active Tier 3 bots — D35 layout</h2>
+
+<table>
+  <thead>
+    <tr>
+      <th>Node</th>
+      <th>Services (D35)</th>
+      <th>Estimated RAM use</th>
+      <th>GPU role</th>
+      <th>Risk level</th>
+      <th>Headroom (of 128GB)</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><strong>Node 1</strong></td>
+      <td>NATS Primary, Evidence Ingestion, PG Primary, <strong>Embedding GPU A</strong></td>
+      <td>PG 30GB + NATS 4GB + Go 1GB + Embed model 0.1GB = ~35GB</td>
+      <td class="td-ok">Embedding pool GPU A — 90MB model, ~2% load at 1K bots</td>
+      <td class="td-ok">LOW</td>
+      <td class="td-ok">~93GB free</td>
+    </tr>
+    <tr>
+      <td><strong>Node 2</strong></td>
+      <td>NATS Secondary, TRUSTMARK Engine, PG Replica, <strong>Edge Gateway</strong></td>
+      <td>PG 20GB + NATS 2GB + Go 1GB + Gateway 0.1GB = ~23GB</td>
+      <td class="td-ok">Idle — available for future embedding overflow</td>
+      <td class="td-ok">LOW</td>
+      <td class="td-ok">~105GB free</td>
+    </tr>
+    <tr>
+      <td><strong>Node 3</strong></td>
+      <td>NATS Tertiary, Botawiki, Mesh Relay, PG+pgvector, <strong>Embedding GPU B (RAG-local)</strong></td>
+      <td>PG 30GB + pgvector HNSW 3GB + NATS 4GB + Go 2GB + Embed 0.1GB = ~39GB</td>
+      <td class="td-ok">Embedding GPU B — RAG queries run local, ~1% GPU load at 1K bots</td>
+      <td class="td-ok">LOW–MEDIUM (write amplification only)</td>
+      <td class="td-ok">~89GB free</td>
+    </tr>
+    <tr>
+      <td><strong>Node 4</strong></td>
+      <td>Centaur Primary (dedicated), GPU Scheduler</td>
+      <td>Centaur model 40GB + KV cache up to 80GB + Go 1GB = ~43–120GB dynamic</td>
+      <td class="td-ok">Centaur DEDICATED — no embedding, full 128GB unified pool for model + KV cache</td>
+      <td class="td-warn">MEDIUM — Centaur queue at >180 active T3 bots</td>
+      <td class="td-ok">Dynamic — KV cache grows with concurrent queries</td>
+    </tr>
+    <tr>
+      <td><strong>Node 5</strong></td>
+      <td>Centaur Failover (dedicated), MinIO + dead-drops</td>
+      <td>Centaur model 40GB + MinIO 2GB + dead-drop objects ~6GB at 1K bots = ~48GB</td>
+      <td class="td-ok">Centaur DEDICATED — no Gateway, no embedding, full GPU for inference</td>
+      <td class="td-ok">LOW — MinIO handles dead-drops cleanly, plenty of NVMe</td>
+      <td class="td-ok">~80GB RAM free</td>
+    </tr>
+  </tbody>
+</table>
+
+<!-- ══════════════════════════════════════════════════════════════ -->
+<h2>Throttling recommendations by service</h2>
+
+<table>
+  <thead>
+    <tr>
+      <th>Service</th>
+      <th>Throttle strategy (D35)</th>
+      <th>Async or sync</th>
+      <th>Backpressure signal</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><strong>Botawiki read</strong></td>
+      <td>Sliding window rate limit only. No additional throttle needed at any modeled population.</td>
+      <td class="td-ok">Sync — fast path, ~10ms</td>
+      <td>429 with Retry-After</td>
+    </tr>
+    <tr>
+      <td><strong>Botawiki write</strong></td>
+      <td>Rate limit + quarantine queue depth cap (max 10 pending per identity). Queue full → 503 not 429.</td>
+      <td class="td-warn">Sync ACK, async pipeline</td>
+      <td>429 (rate) or 503 (queue full)</td>
+    </tr>
+    <tr>
+      <td><strong>RAG query</strong></td>
+      <td>Rate limit only. D35 removes GPU contention — no adaptive throttle needed. Node 3 GPU B is dedicated to embedding. No CPU fallback path required.</td>
+      <td class="td-ok">Sync chain ~8ms (always GPU, no fallback)</td>
+      <td>429 (rate) only</td>
+    </tr>
+    <tr>
+      <td><strong>Mesh packets</strong></td>
+      <td>Rate limit + per-identity dead-drop quota (max 500 stored objects in MinIO). Dead-drops on MinIO not NATS — storage limit no longer 1GB.</td>
+      <td class="td-ok">Sync ACK, async delivery</td>
+      <td>429 (rate), 507 (dead-drop quota exceeded)</td>
+    </tr>
+    <tr>
+      <td><strong>Embedding</strong></td>
+      <td>Rate limit only. GPU pool (A+B) has massive headroom at current scale — no queue depth throttle needed until 5,000+ bots. Remove CPU fallback path from implementation; pool handles load.</td>
+      <td class="td-ok">Sync ~15ms GPU (always — no fallback)</td>
+      <td>429 (rate) only</td>
+    </tr>
+    <tr>
+      <td><strong>Centaur</strong></td>
+      <td>Rate limit + credit check at queue entry + global queue cap 50. Safe ceiling now ~180 active T3 bots at 30/hr vs old ~36. Queue cap still required — credits gate entry.</td>
+      <td class="td-warn">Sync hold 10–30s → WSS push</td>
+      <td>429 (rate), 402 (no credits), 503 (queue full + eta_seconds)</td>
+    </tr>
+  </tbody>
+</table>
+
+<div class="callout cyan">
+  <div class="callout-label">D35 resolves both hardware gaps identified in the original analysis</div>
+  <p><strong>Gap 1 resolved: NATS max_file: 1GB.</strong> Dead-drops move to MinIO on Node 5. NATS handles only live relay (memory-backed, no persistence needed). The 1GB file limit is irrelevant to dead-drop storage. MinIO has 10TB NVMe available.</p>
+  <p><strong>Gap 2 resolved: Centaur capacity.</strong> Safe active Tier 3 ceiling goes from ~36 to ~108 bots at 30/hr (T3-only). No new hardware. The fix was freeing the two GPUs from embedding competition and correctly scoping Centaur to Tier 3 only.</p>
+</div>
+
+<!-- ══════════════════════════════════════════════════════════════ -->
+<h2>Summary and conclusions — D24 + D35</h2>
+
+<p>D24 started as six simple numbers. The hardware simulation exposed it as a capacity planning document in disguise. D35 then revealed that the primary bottleneck — Centaur GPU contention — was an architectural accident, not a hardware limitation. Every node had a GPU. Only two were being used. Fixing the layout costs nothing and delivers 2.7× more Centaur capacity, eliminates all embedding saturation, and collapses RAG into a single node.</p>
+
+<div class="grid2">
+  <div class="card">
+    <div class="card-label ok">What works as-is (D35 layout)</div>
+    <p><strong>Botawiki reads</strong> — cheap, stateless, no bottleneck at any modeled population. 200/hr default is conservative and safe.</p>
+    <p><strong>Mesh relay</strong> — pure NATS throughput. 1,000/hr appropriate. Dead-drops now on MinIO — storage problem permanently solved.</p>
+    <p><strong>Embedding</strong> — GPU pool (A+B) across Nodes 1+3. Effectively unlimited at Phase 3A scale. CPU fallback path can be removed from implementation.</p>
+    <p><strong>RAG</strong> — single-node pipeline on Node 3. ~8ms latency, no Centaur interference, no cross-node hops. The old GPU contention coupling is gone.</p>
+  </div>
+  <div class="card">
+    <div class="card-label cyan" style="color:var(--cyan);">What D35 changed</div>
+    <p><strong>Centaur safe ceiling:</strong> ~108 active T3 bots at 30/hr (T3-only demand, T2 removed from Centaur access). No new hardware.</p>
+    <p><strong>Centaur capacity:</strong> 1,944 queries/hr (up from 720). GPUs no longer share time with embedding.</p>
+    <p><strong>RAG latency:</strong> ~8ms (down from ~25ms GPU / ~150ms CPU). Co-location eliminates the cross-node embedding hop.</p>
+    <p><strong>Dead-drop storage:</strong> Moved to MinIO. NATS 1GB file limit no longer relevant to mesh storage.</p>
+    <p><strong>Gateway location:</strong> Node 2 (was Node 5). Frees Node 5's full GPU for Centaur failover.</p>
+  </div>
+</div>
+
+<div class="grid2">
+  <div class="card">
+    <div class="card-label warn">Still required before Phase 3</div>
+    <p><strong>Centaur queue cap at 50</strong> — code change in GPU Scheduler. Hard 503 at position 51. Without this, queue builds regardless of rate limits.</p>
+    <p><strong>Credit check at queue entry</strong> — not at billing. Bots with zero credits must be rejected before they occupy a queue slot.</p>
+    <p><strong>Flat limits</strong> — wrong. The tier matrix in this document must be implemented, not a single number per service.</p>
+  </div>
+  <div class="card">
+    <div class="card-label blue">Protocol decisions (unchanged)</div>
+    <p><strong>Centaur must use WebSocket push</strong> — not HTTP long-poll. Job submitted, result pushed when done.</p>
+    <p><strong>All 429 responses</strong> must include <code>retry_after_s</code>, <code>tier_ceiling</code>, <code>upgrade_tier</code>.</p>
+    <p><strong>Botawiki write queue full</strong> returns 503 not 429 — capacity signal vs rate signal. Different recovery paths.</p>
+    <p><strong>RAG→Embedding internal calls</strong> do NOT count against embedding quota. Declare in routes.rs as a comment.</p>
+  </div>
+</div>
+
+<div class="callout cyan">
+  <div class="callout-label">D24 is answered — ready to lock</div>
+  <p>The six rate limit numbers, tier-aware matrix, window type, and backpressure signals are all defined above. The two spec gaps (Centaur queue cap + credit gating at entry) are implementation requirements for the Go developer, not further decisions. D35 (node redistribution) should be logged as a companion decision and reflected in NC_System_Architecture.md before Phase 3 build begins.</p>
+</div>
+
+<h3>Final rate limit matrix — D24 locked values (D35 architecture)</h3>
+
+<table>
+  <thead>
+    <tr>
+      <th>Service</th>
+      <th>Tier 1</th>
+      <th>Tier 2</th>
+      <th>Tier 3</th>
+      <th>Window</th>
+      <th>Sync/Async</th>
+      <th>Primary bottleneck node</th>
+      <th>Safe active bot ceiling</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><strong>Botawiki read</strong></td>
+      <td class="td-warn">200/hr</td>
+      <td class="td-ok">500/hr</td>
+      <td class="td-ok">1,000/hr</td>
+      <td class="td-ok">Sliding 60min</td>
+      <td class="td-ok">Sync ~10ms</td>
+      <td>Node 3 (PG+pgvector)</td>
+      <td class="td-ok">Unlimited at current hardware</td>
+    </tr>
+    <tr>
+      <td><strong>Botawiki write</strong></td>
+      <td class="td-warn">20/hr</td>
+      <td class="td-ok">50/hr</td>
+      <td class="td-ok">100/hr</td>
+      <td class="td-ok">Sliding 60min</td>
+      <td class="td-warn">Sync ACK / Async pipeline</td>
+      <td>Node 3 (NATS amplification)</td>
+      <td class="td-warn">~5,000 before NATS Raft pressure</td>
+    </tr>
+    <tr>
+      <td><strong>RAG query</strong></td>
+      <td class="td-warn">50/hr</td>
+      <td class="td-ok">150/hr</td>
+      <td class="td-ok">300/hr</td>
+      <td class="td-ok">Sliding 60min</td>
+      <td class="td-ok">Sync ~8ms (single-node, always GPU)</td>
+      <td>Node 3 (Embedding GPU B + pgvector co-located)</td>
+      <td class="td-ok">~2,000+ — embedding pool has ample headroom</td>
+    </tr>
+    <tr>
+      <td><strong>Mesh packets</strong></td>
+      <td class="td-ok">1,000/hr</td>
+      <td class="td-ok">2,500/hr</td>
+      <td class="td-ok">5,000/hr</td>
+      <td class="td-ok">Sliding 60min</td>
+      <td class="td-ok">Sync ACK / Async delivery</td>
+      <td>Node 3 (NATS) + Node 5 (MinIO dead-drops)</td>
+      <td class="td-ok">~5,000 (NATS limit, not bot limit)</td>
+    </tr>
+    <tr>
+      <td><strong>Embedding</strong></td>
+      <td class="td-warn">100/hr</td>
+      <td class="td-ok">300/hr</td>
+      <td class="td-ok">600/hr</td>
+      <td class="td-ok">Sliding 60min</td>
+      <td class="td-ok">Sync ~15ms (GPU pool A+B, no fallback)</td>
+      <td>Node 1 (GPU A) + Node 3 (GPU B) — load balanced</td>
+      <td class="td-ok">~5,000+ — GPU pool barely stressed</td>
+    </tr>
+    <tr>
+      <td><strong>Centaur</strong></td>
+      <td class="td-bad">5/hr ↓ from 20</td>
+      <td class="td-bad">0 — Tier 3 only</td>
+      <td class="td-ok">30/hr</td>
+      <td class="td-ok">Sliding 60min</td>
+      <td class="td-warn">Sync hold 10–30s → WSS push</td>
+      <td>Node 4+5 (dedicated GPU inference)</td>
+      <td class="td-ok">~108 T3 bots at 30/hr, 60% util</td>
+    </tr>
+  </tbody>
+</table>
+
+<div class="callout warn">
+  <div class="callout-label">Centaur is Tier 3 only — Tier 2 gets no Centaur access</div>
+  <p>The architecture spec places GPU compute under Tier 3 Citizen. Assigning T2 bots 15/hr was an error: 200 T2 bots × 15/hr × 60% util = 0.50/sec, consuming 93% of cluster capacity before a single T3 bot connects. Tier 2 access to Centaur is removed. Safe ceiling is now ~108 concurrently active T3 bots at 30/hr and 60% utilisation — T3 demand only.</p>
+</div>
+
+<!-- ══════════════════════════════════════════════════════════════ -->
+<h2>Live cluster simulator — D35 architecture</h2>
+
+<p>Adjust the sliders to model different network populations and rate limit configurations. All calculations reflect the <strong>D35 redistributed node layout</strong>: Embedding on Nodes 1+3, Gateway on Node 2, Centaur dedicated on Nodes 4+5, dead-drops on MinIO.</p>
+
+<div class="sim-wrap">
+
+  <!-- Controls -->
+  <div class="sim-section-title">Population &amp; Tier Distribution</div>
+
+  <div class="slider-row">
+    <div class="slider-label">Active Tier 1 bots<span>Observe-only, minimal cluster load</span></div>
+    <input type="range" id="t1bots" min="0" max="10000" step="50" value="500">
+    <div class="slider-val" id="t1bots-val">500</div>
+  </div>
+  <div class="slider-row">
+    <div class="slider-label">Active Tier 2 bots<span>Botawiki read, evidence rollups</span></div>
+    <input type="range" id="t2bots" min="0" max="5000" step="50" value="200">
+    <div class="slider-val" id="t2bots-val">200</div>
+  </div>
+  <div class="slider-row">
+    <div class="slider-label">Active Tier 3 bots<span>Full mesh, Centaur, writes</span></div>
+    <input type="range" id="t3bots" min="0" max="2000" step="10" value="100">
+    <div class="slider-val" id="t3bots-val">100</div>
+  </div>
+  <div class="slider-row">
+    <div class="slider-label">Avg utilisation %<span>% of hourly limit used per bot</span></div>
+    <input type="range" id="util" min="10" max="100" step="5" value="60">
+    <div class="slider-val" id="util-val">60%</div>
+  </div>
+
+  <hr class="sim-divider">
+  <div class="sim-section-title">Rate Limits per Tier (requests/hr)</div>
+
+  <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:8px;">
+    <div style="font-family:var(--mono);font-size:9px;color:var(--dim);text-transform:uppercase;letter-spacing:.06em;">Service</div>
+    <div style="font-family:var(--mono);font-size:9px;color:var(--dim);text-transform:uppercase;letter-spacing:.06em;">Tier 2</div>
+    <div style="font-family:var(--mono);font-size:9px;color:var(--dim);text-transform:uppercase;letter-spacing:.06em;">Tier 3</div>
+  </div>
+
+  <div class="slider-row" style="grid-template-columns:120px 80px 1fr 50px 1fr 50px;">
+    <div class="slider-label" style="font-size:11px;">BW Read</div>
+    <div style="font-size:11px;color:var(--dim);font-family:var(--mono);">T1: 200</div>
+    <input type="range" id="bwr-t2" min="100" max="2000" step="50" value="500">
+    <div class="slider-val" id="bwr-t2-val" style="font-size:11px;">500</div>
+    <input type="range" id="bwr-t3" min="200" max="5000" step="100" value="1000">
+    <div class="slider-val" id="bwr-t3-val" style="font-size:11px;">1000</div>
+  </div>
+  <div class="slider-row" style="grid-template-columns:120px 80px 1fr 50px 1fr 50px;">
+    <div class="slider-label" style="font-size:11px;">BW Write</div>
+    <div style="font-size:11px;color:var(--dim);font-family:var(--mono);">T1: 20</div>
+    <input type="range" id="bww-t2" min="10" max="200" step="10" value="50">
+    <div class="slider-val" id="bww-t2-val" style="font-size:11px;">50</div>
+    <input type="range" id="bww-t3" min="20" max="500" step="10" value="100">
+    <div class="slider-val" id="bww-t3-val" style="font-size:11px;">100</div>
+  </div>
+  <div class="slider-row" style="grid-template-columns:120px 80px 1fr 50px 1fr 50px;">
+    <div class="slider-label" style="font-size:11px;">RAG</div>
+    <div style="font-size:11px;color:var(--dim);font-family:var(--mono);">T1: 50</div>
+    <input type="range" id="rag-t2" min="25" max="500" step="25" value="150">
+    <div class="slider-val" id="rag-t2-val" style="font-size:11px;">150</div>
+    <input type="range" id="rag-t3" min="50" max="1000" step="50" value="300">
+    <div class="slider-val" id="rag-t3-val" style="font-size:11px;">300</div>
+  </div>
+  <div class="slider-row" style="grid-template-columns:120px 80px 1fr 50px 1fr 50px;">
+    <div class="slider-label" style="font-size:11px;">Mesh</div>
+    <div style="font-size:11px;color:var(--dim);font-family:var(--mono);">T1: 1000</div>
+    <input type="range" id="mesh-t2" min="500" max="5000" step="500" value="2500">
+    <div class="slider-val" id="mesh-t2-val" style="font-size:11px;">2500</div>
+    <input type="range" id="mesh-t3" min="1000" max="10000" step="500" value="5000">
+    <div class="slider-val" id="mesh-t3-val" style="font-size:11px;">5000</div>
+  </div>
+  <div class="slider-row" style="grid-template-columns:120px 80px 1fr 50px 1fr 50px;">
+    <div class="slider-label" style="font-size:11px;">Centaur</div>
+    <div style="font-size:11px;color:var(--dim);font-family:var(--mono);">T1: 5 · T2: 0</div>
+    <div style="font-size:11px;color:var(--dim);font-family:var(--mono);grid-column:span 2;padding-left:4px;">T2 has no Centaur access (Tier 3 only)</div>
+    <input type="range" id="cen-t3" min="10" max="100" step="5" value="30">
+    <div class="slider-val" id="cen-t3-val" style="font-size:11px;">30</div>
+  </div>
+
+  <hr class="sim-divider">
+  <div class="sim-section-title">Node Load — Live (D35 Layout)</div>
+
+  <div class="node-grid">
+    <div class="node-card">
+      <div class="node-title">Node 1</div>
+      <div class="node-name">Evidence + NATS + Embed GPU A</div>
+      <div class="gauge-row">
+        <div class="gauge-label"><span class="gauge-label-text">RAM</span><span class="gauge-label-val" id="n1-ram-val">35GB</span></div>
+        <div class="gauge-bar"><div class="gauge-fill" id="n1-ram" style="width:27%;background:var(--green)"></div></div>
+      </div>
+      <div class="gauge-row">
+        <div class="gauge-label"><span class="gauge-label-text">GPU A (embedding)</span><span class="gauge-label-val" id="n1-gpu-val">0%</span></div>
+        <div class="gauge-bar"><div class="gauge-fill" id="n1-gpu" style="width:0%;background:var(--green)"></div></div>
+      </div>
+      <div class="node-status status-ok" id="n1-status">NOMINAL</div>
+    </div>
+    <div class="node-card">
+      <div class="node-title">Node 2</div>
+      <div class="node-name">TRUSTMARK + Gateway + PG Replica</div>
+      <div class="gauge-row">
+        <div class="gauge-label"><span class="gauge-label-text">RAM</span><span class="gauge-label-val" id="n2-ram-val">23GB</span></div>
+        <div class="gauge-bar"><div class="gauge-fill" id="n2-ram" style="width:18%;background:var(--green)"></div></div>
+      </div>
+      <div class="gauge-row">
+        <div class="gauge-label"><span class="gauge-label-text">Gateway req/sec</span><span class="gauge-label-val" id="n2-gw-val">0/s</span></div>
+        <div class="gauge-bar"><div class="gauge-fill" id="n2-gw" style="width:0%;background:var(--green)"></div></div>
+      </div>
+      <div class="node-status status-ok" id="n2-status">NOMINAL</div>
+    </div>
+    <div class="node-card">
+      <div class="node-title">Node 3</div>
+      <div class="node-name">Botawiki + Mesh + pgvector + Embed GPU B</div>
+      <div class="gauge-row">
+        <div class="gauge-label"><span class="gauge-label-text">RAM</span><span class="gauge-label-val" id="n3-ram-val">39GB</span></div>
+        <div class="gauge-bar"><div class="gauge-fill" id="n3-ram" style="width:30%;background:var(--green)"></div></div>
+      </div>
+      <div class="gauge-row">
+        <div class="gauge-label"><span class="gauge-label-text">GPU B (RAG+embed)</span><span class="gauge-label-val" id="n3-gpu-val">0%</span></div>
+        <div class="gauge-bar"><div class="gauge-fill" id="n3-gpu" style="width:0%;background:var(--green)"></div></div>
+      </div>
+      <div class="gauge-row">
+        <div class="gauge-label"><span class="gauge-label-text">NATS msgs/sec</span><span class="gauge-label-val" id="n3-nats-val">0/s</span></div>
+        <div class="gauge-bar"><div class="gauge-fill" id="n3-nats" style="width:0%;background:var(--green)"></div></div>
+      </div>
+      <div class="node-status status-ok" id="n3-status">NOMINAL</div>
+    </div>
+    <div class="node-card">
+      <div class="node-title">Node 4</div>
+      <div class="node-name">Centaur Primary — GPU dedicated</div>
+      <div class="gauge-row">
+        <div class="gauge-label"><span class="gauge-label-text">RAM</span><span class="gauge-label-val" id="n4-ram-val">43GB</span></div>
+        <div class="gauge-bar"><div class="gauge-fill" id="n4-ram" style="width:34%;background:var(--green)"></div></div>
+      </div>
+      <div class="gauge-row">
+        <div class="gauge-label"><span class="gauge-label-text">GPU C (Centaur)</span><span class="gauge-label-val" id="n4-gpu-val">0%</span></div>
+        <div class="gauge-bar"><div class="gauge-fill" id="n4-gpu" style="width:0%;background:var(--green)"></div></div>
+      </div>
+      <div class="gauge-row">
+        <div class="gauge-label"><span class="gauge-label-text">Queue growth/sec</span><span class="gauge-label-val" id="n4-q-val">stable</span></div>
+        <div class="gauge-bar"><div class="gauge-fill" id="n4-q" style="width:0%;background:var(--green)"></div></div>
+      </div>
+      <div class="node-status status-ok" id="n4-status">NOMINAL</div>
+    </div>
+    <div class="node-card">
+      <div class="node-title">Node 5</div>
+      <div class="node-name">Centaur Failover — GPU dedicated + MinIO</div>
+      <div class="gauge-row">
+        <div class="gauge-label"><span class="gauge-label-text">RAM</span><span class="gauge-label-val" id="n5-ram-val">43GB</span></div>
+        <div class="gauge-bar"><div class="gauge-fill" id="n5-ram" style="width:34%;background:var(--green)"></div></div>
+      </div>
+      <div class="gauge-row">
+        <div class="gauge-label"><span class="gauge-label-text">GPU D (Centaur)</span><span class="gauge-label-val" id="n5-gpu-val">0%</span></div>
+        <div class="gauge-bar"><div class="gauge-fill" id="n5-gpu" style="width:0%;background:var(--green)"></div></div>
+      </div>
+      <div class="gauge-row">
+        <div class="gauge-label"><span class="gauge-label-text">MinIO dead-drops</span><span class="gauge-label-val" id="n5-minio-val">0GB</span></div>
+        <div class="gauge-bar"><div class="gauge-fill" id="n5-minio" style="width:0%;background:var(--green)"></div></div>
+      </div>
+      <div class="node-status status-ok" id="n5-status">NOMINAL</div>
+    </div>
+  </div>
+
+  <hr class="sim-divider">
+  <div class="sim-section-title">Per-Service Rates — Live</div>
+
+  <div class="service-grid">
+    <div class="svc-card">
+      <div class="svc-name">Botawiki Read</div>
+      <div class="svc-stat">Cluster reads/sec: <span id="svc-bwr-rps">—</span></div>
+      <div class="svc-stat">PG SELECTs/sec (Node 3): <span id="svc-bwr-pg">—</span></div>
+      <div class="svc-stat">Node 3 RAM impact: <span id="svc-bwr-ram">—</span></div>
+      <div class="svc-alert alert-ok" id="svc-bwr-alert">OK</div>
+    </div>
+    <div class="svc-card">
+      <div class="svc-name">Botawiki Write</div>
+      <div class="svc-stat">Writes/sec: <span id="svc-bww-rps">—</span></div>
+      <div class="svc-stat">NATS downstream/sec: <span id="svc-bww-nats">—</span></div>
+      <div class="svc-stat">Quarantine queue est.: <span id="svc-bww-q">—</span></div>
+      <div class="svc-alert alert-ok" id="svc-bww-alert">OK</div>
+    </div>
+    <div class="svc-card">
+      <div class="svc-name">RAG Query</div>
+      <div class="svc-stat">RAG queries/sec: <span id="svc-rag-rps">—</span></div>
+      <div class="svc-stat">GPU B load (Node 3): <span id="svc-rag-gpu">—</span></div>
+      <div class="svc-stat">Latency (always GPU): <span id="svc-rag-lat">~8ms</span></div>
+      <div class="svc-alert alert-ok" id="svc-rag-alert">OK</div>
+    </div>
+    <div class="svc-card">
+      <div class="svc-name">Mesh Packets</div>
+      <div class="svc-stat">Packets/sec: <span id="svc-mesh-rps">—</span></div>
+      <div class="svc-stat">NATS relay msgs/sec: <span id="svc-mesh-nats">—</span></div>
+      <div class="svc-stat">MinIO dead-drops (72h): <span id="svc-mesh-dd">—</span></div>
+      <div class="svc-alert alert-ok" id="svc-mesh-alert">OK</div>
+    </div>
+    <div class="svc-card">
+      <div class="svc-name">Embedding (direct)</div>
+      <div class="svc-stat">Calls/sec: <span id="svc-emb-rps">—</span></div>
+      <div class="svc-stat">GPU A load (Node 1): <span id="svc-emb-gpua">—</span></div>
+      <div class="svc-stat">GPU B load (Node 3): <span id="svc-emb-gpub">—</span></div>
+      <div class="svc-alert alert-ok" id="svc-emb-alert">OK</div>
+    </div>
+    <div class="svc-card">
+      <div class="svc-name">Centaur</div>
+      <div class="svc-stat">Queries/sec: <span id="svc-cen-rps">—</span></div>
+      <div class="svc-stat">Capacity (2 dedicated GPUs): <span id="svc-cen-cap">0.54/s (T3 only)</span></div>
+      <div class="svc-stat">Queue growth/sec: <span id="svc-cen-q">—</span></div>
+      <div class="svc-alert alert-ok" id="svc-cen-alert">OK</div>
+    </div>
+  </div>
+
+  <hr class="sim-divider">
+  <div class="sim-section-title">Active Bottlenecks</div>
+  <div class="bottleneck-box" id="bottleneck-box">
+    <div class="bottleneck-title">System status</div>
+    <div class="bottleneck-item" id="bottleneck-content">No bottlenecks detected at current configuration.</div>
+  </div>
+
+</div><!-- end sim-wrap -->
+
+<script>
+(function() {
+  const $ = id => document.getElementById(id);
+  const fmt = n => n >= 1000 ? (n/1000).toFixed(1)+'K' : n.toFixed(n < 10 ? 2 : 1);
+  const fmtInt = n => Math.round(n).toLocaleString();
+
+  function gaugeColor(pct) {
+    if (pct < 55) return 'var(--green)';
+    if (pct < 80) return 'var(--amber)';
+    return 'var(--red)';
+  }
+
+  function setGauge(barId, valId, pct, label, color) {
+    const c = color || gaugeColor(pct);
+    const el = $(barId); if (!el) return;
+    el.style.width = Math.min(pct, 100) + '%';
+    el.style.background = c;
+    const v = $(valId); if (v) { v.textContent = label; v.style.color = c; }
+  }
+
+  function setNodeStatus(id, level) {
+    const el = $(id); if (!el) return;
+    el.className = 'node-status';
+    if (level === 'ok')   { el.classList.add('status-ok');   el.textContent = 'NOMINAL'; }
+    if (level === 'warn') { el.classList.add('status-warn'); el.textContent = 'PRESSURE'; }
+    if (level === 'crit') { el.classList.add('status-crit'); el.textContent = 'CRITICAL'; }
+  }
+
+  function setSvcAlert(id, level, msg) {
+    const el = $(id); if (!el) return;
+    el.className = 'svc-alert visible';
+    if (level === 'ok')   el.className += ' alert-ok';
+    if (level === 'warn') el.className += ' alert-warn';
+    if (level === 'crit') el.className += ' alert-crit';
+    el.textContent = msg;
+  }
+
+  function hideSvcAlert(id) { const el = $(id); if (el) { el.className = 'svc-alert'; el.textContent = ''; } }
+
+  const sliders = [
+    ['t1bots','t1bots-val', v=>v], ['t2bots','t2bots-val', v=>v],
+    ['t3bots','t3bots-val', v=>v], ['util','util-val', v=>v+'%'],
+    ['bwr-t2','bwr-t2-val',v=>v], ['bwr-t3','bwr-t3-val',v=>v],
+    ['bww-t2','bww-t2-val',v=>v], ['bww-t3','bww-t3-val',v=>v],
+    ['rag-t2','rag-t2-val',v=>v], ['rag-t3','rag-t3-val',v=>v],
+    ['mesh-t2','mesh-t2-val',v=>v], ['mesh-t3','mesh-t3-val',v=>v],
+    ['cen-t3','cen-t3-val',v=>v],
+  ];
+  sliders.forEach(([sid,vid,fn]) => {
+    const s=$(sid), v=$(vid); if(!s||!v) return;
+    s.addEventListener('input', ()=>{ v.textContent=fn(s.value); recalc(); });
+  });
+
+  function recalc() {
+    const t1=+$('t1bots').value, t2=+$('t2bots').value, t3=+$('t3bots').value;
+    const util=+$('util').value/100;
+    const totalBots = t1+t2+t3;
+
+    const lim = {
+      bwRead:  {t1:200,  t2:+$('bwr-t2').value, t3:+$('bwr-t3').value},
+      bwWrite: {t1:20,   t2:+$('bww-t2').value, t3:+$('bww-t3').value},
+      rag:     {t1:50,   t2:+$('rag-t2').value, t3:+$('rag-t3').value},
+      mesh:    {t1:1000, t2:+$('mesh-t2').value,t3:+$('mesh-t3').value},
+      embed:   {t1:100,  t2:300,                t3:600},
+      centaur: {t1:5,    t2:0,                  t3:+$('cen-t3').value},
+    };
+
+    // cluster-wide req/hr
+    const totalBwRead  = (t1*lim.bwRead.t1  + t2*lim.bwRead.t2  + t3*lim.bwRead.t3)  * util;
+    const totalBwWrite = (t1*lim.bwWrite.t1 + t2*lim.bwWrite.t2 + t3*lim.bwWrite.t3) * util;
+    const totalRag     = (t3*lim.rag.t3)    * util;
+    const totalMesh    = (t3*lim.mesh.t3)   * util;
+    const totalEmbed   = (t3*lim.embed.t3)  * util;
+    // Centaur is T3-only — T1 gets 5/hr (negligible), T2 gets 0
+    const totalCentaur = (t3*lim.centaur.t3) * util;
+
+    // /sec
+    const bwrRps=totalBwRead/3600, bwwRps=totalBwWrite/3600;
+    const ragRps=totalRag/3600, meshRps=totalMesh/3600;
+    const embedRps=totalEmbed/3600, cenRps=totalCentaur/3600;
+
+    // ── D35: Centaur capacity = 2 dedicated GPUs, no embedding clash
+    // No model eviction = ~0.27/sec per node (vs old 0.10/sec)
+    const cenCapacity = 0.54; // 2 × 0.27
+
+    // ── D35: Embedding pool = GPU A (Node 1) + GPU B (Node 3)
+    // RAG always goes to GPU B, direct calls split A+B
+    const ragEmbedRps   = ragRps;           // GPU B only
+    const directEmbedA  = embedRps * 0.5;   // GPU A
+    const directEmbedB  = embedRps * 0.5;   // GPU B
+    const totalEmbedB   = ragEmbedRps + directEmbedB;
+
+    // GPU load: embedding model 90MB, ~2ms per batch of 8 avg → ~125 batches/sec per GPU
+    const gpuALoad = Math.min(directEmbedA  / 125 * 100, 100);
+    const gpuBLoad = Math.min(totalEmbedB   / 125 * 100, 100);
+
+    // ── Service cards
+    $('svc-bwr-rps').textContent = fmt(bwrRps)+'/s';
+    $('svc-bwr-pg').textContent  = fmt(bwrRps)+'/s';
+    $('svc-bwr-ram').textContent = Math.min(30+bwrRps*0.02,60).toFixed(1)+'GB';
+    if(bwrRps>500) setSvcAlert('svc-bwr-alert','warn','High read rate — check PG buffer pool');
+    else hideSvcAlert('svc-bwr-alert');
+
+    const bwwNats=bwwRps*5, bwwQ=bwwRps*30;
+    $('svc-bww-rps').textContent  = fmt(bwwRps)+'/s';
+    $('svc-bww-nats').textContent = fmt(bwwNats)+'/s';
+    $('svc-bww-q').textContent    = fmtInt(bwwQ)+' claims';
+    if(bwwQ>800)      setSvcAlert('svc-bww-alert','crit','Queue overflow — 503 risk');
+    else if(bwwQ>400) setSvcAlert('svc-bww-alert','warn','Queue building — monitor');
+    else hideSvcAlert('svc-bww-alert');
+
+    $('svc-rag-rps').textContent = fmt(ragRps)+'/s';
+    $('svc-rag-gpu').textContent = gpuBLoad.toFixed(1)+'%';
+    $('svc-rag-lat').textContent = '~8ms (always GPU B — no fallback)';
+    if(gpuBLoad>80) setSvcAlert('svc-rag-alert','warn','GPU B under pressure — scale embedding pool');
+    else hideSvcAlert('svc-rag-alert');
+
+    const ddGB=(meshRps*0.1*2048*3600*72)/(1024*1024*1024);
+    $('svc-mesh-rps').textContent  = fmt(meshRps)+'/s';
+    $('svc-mesh-nats').textContent = fmt(meshRps*2)+'/s';
+    $('svc-mesh-dd').textContent   = ddGB.toFixed(1)+'GB (MinIO)';
+    if(ddGB>500) setSvcAlert('svc-mesh-alert','warn','Dead-drop >500GB — MinIO NVMe usage rising');
+    else hideSvcAlert('svc-mesh-alert');
+
+    $('svc-emb-rps').textContent  = fmt(embedRps)+'/s';
+    $('svc-emb-gpua').textContent = gpuALoad.toFixed(1)+'%';
+    $('svc-emb-gpub').textContent = gpuBLoad.toFixed(1)+'% (incl RAG)';
+    if(gpuALoad>80||gpuBLoad>80) setSvcAlert('svc-emb-alert','warn','Embedding pool pressure — add GPU C (Node 2)');
+    else hideSvcAlert('svc-emb-alert');
+
+    const cenOverflow=Math.max(0,cenRps-cenCapacity);
+    const cenQGrowth=cenOverflow;
+    $('svc-cen-rps').textContent = fmt(cenRps)+'/s';
+    $('svc-cen-cap').textContent = fmt(cenCapacity)+'/s (2 dedicated GPUs)';
+    $('svc-cen-q').textContent   = cenQGrowth>0 ? '+'+fmt(cenQGrowth)+'/s ⚠' : 'stable';
+    if(cenQGrowth>0.5)  setSvcAlert('svc-cen-alert','crit','Queue growing — add GPU node or cut limit');
+    else if(cenQGrowth>0) setSvcAlert('svc-cen-alert','warn','Queue growing slowly');
+    else setSvcAlert('svc-cen-alert','ok','Within capacity');
+
+    // ── Node gauges (D35 layout)
+
+    // Node 1: NATS Primary + Evidence + PG Primary + Embedding GPU A
+    const n1Ram = 35 + Math.min(bwrRps*0.01,5);
+    const n1RamPct = n1Ram/128*100;
+    setGauge('n1-ram','n1-ram-val', n1RamPct, n1Ram.toFixed(0)+'GB');
+    setGauge('n1-gpu','n1-gpu-val', gpuALoad,  gpuALoad.toFixed(1)+'%');
+    setNodeStatus('n1-status', gpuALoad>80?'warn':'ok');
+
+    // Node 2: NATS Secondary + TRUSTMARK + PG Replica + Gateway
+    const totalReqRps = bwrRps+bwwRps+ragRps+meshRps+embedRps+cenRps;
+    const gwPct = Math.min(totalReqRps/2000*100,100);
+    const n2Ram = 23 + Math.min(totalBots*0.001,8);
+    setGauge('n2-ram','n2-ram-val', n2Ram/128*100, n2Ram.toFixed(0)+'GB');
+    setGauge('n2-gw', 'n2-gw-val',  gwPct,          fmt(totalReqRps)+'/s');
+    setNodeStatus('n2-status', gwPct>85?'crit':gwPct>60?'warn':'ok');
+
+    // Node 3: NATS Tertiary + Botawiki + Mesh + pgvector + Embedding GPU B
+    const n3NatsTotal = meshRps*2 + bwwNats;
+    const n3NatsPct = Math.min(n3NatsTotal/3000*100,100);
+    const n3Ram = 39 + Math.min(meshRps*0.05,10);
+    setGauge('n3-ram', 'n3-ram-val', n3Ram/128*100,   n3Ram.toFixed(0)+'GB');
+    setGauge('n3-gpu', 'n3-gpu-val', gpuBLoad,         gpuBLoad.toFixed(1)+'%');
+    setGauge('n3-nats','n3-nats-val',n3NatsPct,         fmtInt(n3NatsTotal)+'/s');
+    const n3Level = n3NatsPct>85||gpuBLoad>80 ? 'crit' : n3NatsPct>60||gpuBLoad>55 ? 'warn' : 'ok';
+    setNodeStatus('n3-status', n3Level);
+
+    // Node 4: Centaur Primary — DEDICATED GPU C
+    // GPU load = fraction of capacity used by this node (half of total centaur demand)
+    const cenPerNode = cenRps/2;
+    const cenGpuPct  = Math.min(cenPerNode/0.27*100,100);
+    const n4Ram = 40 + Math.min(cenRps*3, 80); // KV cache grows with concurrent queries
+    const n4RamPct = Math.min(n4Ram/128*100,100);
+    setGauge('n4-ram','n4-ram-val', n4RamPct, n4Ram.toFixed(0)+'GB');
+    setGauge('n4-gpu','n4-gpu-val', cenGpuPct, cenGpuPct.toFixed(0)+'%');
+    const qPct = Math.min(cenQGrowth/1*100,100);
+    setGauge('n4-q', 'n4-q-val', qPct,
+      cenQGrowth>0?'+'+fmt(cenQGrowth)+'/s':'stable',
+      cenQGrowth>0?'var(--red)':'var(--green)');
+    setNodeStatus('n4-status', cenGpuPct>95||cenQGrowth>0.5?'crit':cenGpuPct>75||cenQGrowth>0?'warn':'ok');
+
+    // Node 5: Centaur Failover — DEDICATED GPU D + MinIO
+    const n5Ram = 40 + 2 + Math.min(ddGB*0.001, 5); // model + MinIO process + dead-drop index
+    const minio72Pct = Math.min(ddGB/500*100,100); // 500GB warn threshold
+    setGauge('n5-ram',  'n5-ram-val',   Math.min(n5Ram/128*100,100), n5Ram.toFixed(0)+'GB');
+    setGauge('n5-gpu',  'n5-gpu-val',   cenGpuPct, cenGpuPct.toFixed(0)+'%');
+    setGauge('n5-minio','n5-minio-val', minio72Pct, ddGB.toFixed(1)+'GB',
+      ddGB>500?'var(--red)':ddGB>100?'var(--amber)':'var(--green)');
+    setNodeStatus('n5-status', cenGpuPct>95?'crit':cenGpuPct>75?'warn':'ok');
+
+    // ── Bottleneck summary
+    const issues=[];
+    if(cenQGrowth>0)
+      issues.push(`<div class="bottleneck-item">🔴 <strong>Centaur queue growing at +${fmt(cenQGrowth)}/s</strong> — D35 capacity is 0.54/sec (2 dedicated GPUs). Safe ceiling: ~${Math.floor(cenCapacity*3600/lim.centaur.t3/util)} active T3 bots at current limits. Either reduce limit or add a 3rd GPU node (Node 2's GPU is currently idle).</div>`);
+    if(gpuBLoad>80)
+      issues.push(`<div class="bottleneck-item">🟠 <strong>GPU B (Node 3) at ${gpuBLoad.toFixed(0)}%</strong> — RAG+embedding sharing GPU B. Next step: activate Node 2's idle GPU for the embedding pool. 3-GPU pool would handle ~375 embedding calls/sec.</div>`);
+    if(gpuALoad>80)
+      issues.push(`<div class="bottleneck-item">🟠 <strong>GPU A (Node 1) at ${gpuALoad.toFixed(0)}%</strong> — direct embedding load. Load-balance relief: activate Node 2 GPU.</div>`);
+    if(n3NatsPct>70)
+      issues.push(`<div class="bottleneck-item">🟠 <strong>Node 3 NATS ${fmtInt(n3NatsTotal)} msgs/sec</strong> — write amplification (5× per Botawiki write) + mesh relay combined. Monitor LAN inter-node latency.</div>`);
+    if(bwwQ>800)
+      issues.push(`<div class="bottleneck-item">🟠 <strong>Botawiki quarantine queue ${fmtInt(bwwQ)} pending claims</strong> — validator throughput may not keep pace. Increase validators or reduce write rate.</div>`);
+    if(gwPct>85)
+      issues.push(`<div class="bottleneck-item">🟡 <strong>Gateway (Node 2) at ${fmt(totalReqRps)} req/sec</strong> — consider second Gateway instance behind load balancer above 1,500/sec.</div>`);
+    if(ddGB>500)
+      issues.push(`<div class="bottleneck-item">🟡 <strong>MinIO dead-drops ${ddGB.toFixed(0)}GB</strong> — MinIO has 10TB NVMe so no hard limit, but review D25 TTL if storage growth continues.</div>`);
+
+    const box=$('bottleneck-box');
+    if(issues.length===0) {
+      box.innerHTML='<div class="bottleneck-title">System status</div><div class="bottleneck-item" style="color:var(--green);">✓ No bottlenecks detected. D35 architecture operating within all limits.</div>';
+    } else {
+      box.innerHTML='<div class="bottleneck-title">Active bottlenecks ('+issues.length+')</div>'+issues.join('');
+    }
+  }
+  recalc();
+})();
+</script>
+
+
+<style>
+/* ── Simulator styles ── */
+.sim-wrap { background: var(--surface); border: 1px solid var(--border2); border-radius: 8px; padding: 24px; margin: 18px 0; }
+.sim-section-title { font-family: var(--mono); font-size: 9px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--dim); margin-bottom: 14px; margin-top: 20px; }
+.sim-section-title:first-child { margin-top: 0; }
+.slider-row { display: grid; grid-template-columns: 180px 1fr 80px; align-items: center; gap: 12px; margin-bottom: 12px; }
+.slider-label { font-size: 12px; color: var(--text); font-weight: 300; }
+.slider-label span { display: block; font-family: var(--mono); font-size: 9px; color: var(--dim); margin-top: 1px; }
+input[type=range] { -webkit-appearance: none; width: 100%; height: 4px; background: var(--border2); border-radius: 2px; outline: none; }
+input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; width: 14px; height: 14px; border-radius: 50%; background: #60a5fa; cursor: pointer; border: 2px solid var(--bg); }
+.slider-val { font-family: var(--mono); font-size: 12px; color: var(--text-bright); text-align: right; }
+.node-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px; margin: 16px 0; }
+.node-card { background: var(--surface2); border: 1px solid var(--border); border-radius: 6px; padding: 12px; }
+.node-title { font-family: var(--mono); font-size: 9px; font-weight: 600; letter-spacing: 0.05em; color: var(--dim); margin-bottom: 8px; text-transform: uppercase; }
+.node-name { font-size: 11px; font-weight: 500; color: var(--text-bright); margin-bottom: 10px; line-height: 1.4; }
+.gauge-row { margin-bottom: 8px; }
+.gauge-label { display: flex; justify-content: space-between; align-items: center; margin-bottom: 3px; }
+.gauge-label-text { font-size: 10px; color: var(--dim); }
+.gauge-label-val { font-family: var(--mono); font-size: 10px; }
+.gauge-bar { height: 6px; background: var(--border); border-radius: 3px; overflow: hidden; }
+.gauge-fill { height: 100%; border-radius: 3px; transition: width 0.3s ease, background 0.3s ease; }
+.node-status { font-family: var(--mono); font-size: 9px; font-weight: 600; text-align: center; padding: 4px 8px; border-radius: 3px; margin-top: 10px; border: 1px solid; }
+.status-ok   { color: var(--green); background: var(--green-dim); border-color: var(--green-border); }
+.status-warn { color: var(--amber); background: var(--amber-dim); border-color: var(--amber-border); }
+.status-crit { color: var(--red);   background: var(--red-dim);   border-color: var(--red-border); }
+.service-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin: 16px 0; }
+.svc-card { background: var(--surface2); border: 1px solid var(--border); border-radius: 6px; padding: 12px; }
+.svc-name { font-size: 11px; font-weight: 500; color: var(--text-bright); margin-bottom: 6px; }
+.svc-stat { font-family: var(--mono); font-size: 10px; color: var(--dim); margin-bottom: 3px; }
+.svc-stat span { color: var(--text); }
+.svc-alert { font-family: var(--mono); font-size: 9px; font-weight: 600; margin-top: 6px; padding: 3px 6px; border-radius: 3px; border: 1px solid; display: none; }
+.svc-alert.visible { display: inline-block; }
+.alert-warn { color: var(--amber); background: var(--amber-dim); border-color: var(--amber-border); }
+.alert-crit { color: var(--red); background: var(--red-dim); border-color: var(--red-border); }
+.alert-ok   { color: var(--green); background: var(--green-dim); border-color: var(--green-border); }
+.bottleneck-box { border: 1px solid var(--border2); border-radius: 6px; padding: 14px 16px; margin: 14px 0; min-height: 48px; }
+.bottleneck-title { font-family: var(--mono); font-size: 9px; font-weight: 600; color: var(--dim); text-transform: uppercase; letter-spacing: 0.07em; margin-bottom: 8px; }
+.bottleneck-item { font-size: 12px; color: var(--text); margin-bottom: 4px; font-weight: 300; }
+.bottleneck-item strong { color: var(--text-bright); }
+.sim-divider { border: none; border-top: 1px solid var(--border); margin: 20px 0; }
+.callout.cyan { border-color: var(--cyan-border, #0e7490); background: var(--cyan-dim, rgba(6,182,212,0.08)); }
+.callout.cyan .callout-label { color: var(--cyan, #22d3ee); }
+@media(max-width:900px) { .node-grid { grid-template-columns: 1fr 1fr 1fr; } }
+@media(max-width:600px) { .node-grid { grid-template-columns: 1fr 1fr; } .service-grid { grid-template-columns: 1fr 1fr; } }
+</style>
+</body>
+</html>
