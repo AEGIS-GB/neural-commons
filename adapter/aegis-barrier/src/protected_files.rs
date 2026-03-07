@@ -65,6 +65,10 @@ impl ProtectedFileManager {
     ///
     /// Default system files:
     ///   SOUL.md         — WorkspaceRoot, critical, Standard
+    ///   AGENTS.md       — WorkspaceRoot, critical, Standard
+    ///   IDENTITY.md     — WorkspaceRoot, critical, Standard
+    ///   TOOLS.md        — WorkspaceRoot, critical, Standard
+    ///   BOOT.md         — WorkspaceRoot, critical, Standard
     ///   MEMORY.md       — WorkspaceRoot, critical, Standard
     ///   *.memory.md     — DepthLimited(3), critical, Standard
     ///   .env*           — DepthLimited(2), critical, Credential
@@ -73,6 +77,34 @@ impl ProtectedFileManager {
         let system_files = vec![
             ProtectedFileEntry {
                 pattern: "SOUL.md".into(),
+                scope: FileScope::WorkspaceRoot,
+                max_depth: None,
+                critical: true,
+                sensitivity: SensitivityClass::Standard,
+            },
+            ProtectedFileEntry {
+                pattern: "AGENTS.md".into(),
+                scope: FileScope::WorkspaceRoot,
+                max_depth: None,
+                critical: true,
+                sensitivity: SensitivityClass::Standard,
+            },
+            ProtectedFileEntry {
+                pattern: "IDENTITY.md".into(),
+                scope: FileScope::WorkspaceRoot,
+                max_depth: None,
+                critical: true,
+                sensitivity: SensitivityClass::Standard,
+            },
+            ProtectedFileEntry {
+                pattern: "TOOLS.md".into(),
+                scope: FileScope::WorkspaceRoot,
+                max_depth: None,
+                critical: true,
+                sensitivity: SensitivityClass::Standard,
+            },
+            ProtectedFileEntry {
+                pattern: "BOOT.md".into(),
                 scope: FileScope::WorkspaceRoot,
                 max_depth: None,
                 critical: true,
@@ -352,7 +384,7 @@ mod tests {
     #[test]
     fn default_system_files_count() {
         let mgr = ProtectedFileManager::new();
-        assert_eq!(mgr.system_files.len(), 5);
+        assert_eq!(mgr.system_files.len(), 9);
         assert!(mgr.warden_files.is_empty());
         assert_eq!(mgr.current_version, 1);
     }
@@ -362,6 +394,34 @@ mod tests {
         let mgr = ProtectedFileManager::new();
         assert!(mgr.is_protected(Path::new("SOUL.md")));
         assert!(mgr.is_critical(Path::new("SOUL.md")));
+    }
+
+    #[test]
+    fn default_agents_md_is_critical() {
+        let mgr = ProtectedFileManager::new();
+        assert!(mgr.is_protected(Path::new("AGENTS.md")));
+        assert!(mgr.is_critical(Path::new("AGENTS.md")));
+    }
+
+    #[test]
+    fn default_identity_md_is_critical() {
+        let mgr = ProtectedFileManager::new();
+        assert!(mgr.is_protected(Path::new("IDENTITY.md")));
+        assert!(mgr.is_critical(Path::new("IDENTITY.md")));
+    }
+
+    #[test]
+    fn default_tools_md_is_critical() {
+        let mgr = ProtectedFileManager::new();
+        assert!(mgr.is_protected(Path::new("TOOLS.md")));
+        assert!(mgr.is_critical(Path::new("TOOLS.md")));
+    }
+
+    #[test]
+    fn default_boot_md_is_critical() {
+        let mgr = ProtectedFileManager::new();
+        assert!(mgr.is_protected(Path::new("BOOT.md")));
+        assert!(mgr.is_critical(Path::new("BOOT.md")));
     }
 
     #[test]
@@ -714,7 +774,7 @@ mod tests {
     #[test]
     fn default_trait_works() {
         let mgr = ProtectedFileManager::default();
-        assert_eq!(mgr.system_files.len(), 5);
+        assert_eq!(mgr.system_files.len(), 9);
     }
 
     // ─── Edge cases ──────────────────────────────────────────────
