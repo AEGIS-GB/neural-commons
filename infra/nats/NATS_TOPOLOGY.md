@@ -31,9 +31,12 @@ Layer 2 tests implement this document.
   - `dispute-handler` (push, ack-explicit, max-deliver 5) — handle disputes
 
 ### `MESH` Stream
+
+> **Dead-drop storage moved to MinIO per D35. See `infra/minio/dead_drop_lifecycle.md` for TTL policy.**
+
 - **Subjects:** `mesh.relay`, `mesh.key.update`
-- **Storage:** Memory (ephemeral — relay messages don't need persistence)
-- **Retention:** Limits (max 256MB, max 72h for dead-drop TTL alignment)
+- **Storage:** Memory (live relay only — dead-drops removed)
+- **Retention:** Limits (max 32MB — in-flight relay messages only, no dead-drop persistence)
 - **Consumers:**
   - `mesh-router` (push, ack-none) — fire-and-forget relay
   - `key-directory` (push, ack-explicit, max-deliver 3) — update key directory

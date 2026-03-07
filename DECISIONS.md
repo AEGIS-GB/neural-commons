@@ -736,6 +736,8 @@ Periodic re-benchmark to prevent one-time faking
 
 **Blocks:** Edge Gateway rate limiter
 
+> **D35 prerequisite:** The rate limit matrix, safe bot ceilings, and the `d24_analysis.html` simulator were derived assuming the D35 node layout (Gateway on Node 2, dedicated Centaur on Nodes 4–5, embedding pool on Nodes 1 and 3). D35 must be merged before D24 is finalised.
+
 **Default:**
 ```
 Botawiki read:    200 requests/hour
@@ -756,11 +758,13 @@ Centaur:           20 requests/hour
 
 **Blocks:** Mesh dead-drop implementation
 
+> **D35 dependency:** Dead-drops now live in **MinIO** (`nc-dead-drops` bucket on Node 5), not NATS JetStream. The 72h TTL default is unchanged but the enforcement mechanism changes from NATS stream `max_age` to a MinIO object lifecycle rule. See `infra/minio/dead_drop_lifecycle.md`.
+
 **Default:**
 ```
 TTL: 72 hours
 On expiry: expiry receipt sent to sender
-Storage: encrypted at rest, deleted after TTL
+Storage: AES-256-GCM encrypted at rest in MinIO, deleted after TTL via lifecycle rule
 ```
 
 **What I need from you:** Confirm 72h TTL.
@@ -791,14 +795,16 @@ Deactivation is one-way — cannot be re-enabled without Foundation broadcast
 
 **Blocks:** GPU scheduler implementation
 
+> **D35 dependency:** Nodes 4 and 5 are now **fully dedicated to Centaur** with no embedding model competing for GPU memory. The KV cache budget is larger (up to ~80GB on Node 4). Hot-pin threshold and node count should be re-evaluated: with no GPU contention, hot-pinning at a lower query threshold becomes viable.
+
 **Default:**
 ```
-Threshold: >50 daily Centaur queries → hot-pin to 2 GPU nodes
+Threshold: >50 daily Centaur queries → hot-pin to 2 GPU nodes (Nodes 4 and 5)
 Below 50: on-demand loading, cold start <30s
 Hot-pin re-evaluated daily
 ```
 
-**What I need from you:** Confirm threshold and node count.
+**What I need from you:** Confirm threshold and node count. With D35 layout, both Centaur nodes are always available — consider whether the threshold should be lower.
 
 ---
 
@@ -866,6 +872,8 @@ Step 3 - Execute: Adapter manages context + coordination internally
 
 **Blocks:** Embedding service (Python FastAPI)
 
+> **D35 note:** The embedding service now runs on **Nodes 1 and 3** (not Node 4) as a load-balanced GPU pool. Deployment configuration must target both nodes. GPU routing is always available — CPU fallback is no longer needed. See D35 for pool routing rules.
+
 **Default:**
 ```
 Model: all-MiniLM-L6-v2
@@ -873,12 +881,51 @@ Model: all-MiniLM-L6-v2
   - Fast inference, CPU-friendly
   - Upgrade to larger model if accuracy insufficient for quarantine
 
-Deployment: Python FastAPI service
-  - GPU routing when available, CPU fallback
+Deployment: Python FastAPI service — two instances
+  - GPU A: Node 1 (direct embedding calls, round-robin)
+  - GPU B: Node 3 (RAG embedding always here; direct calls round-robin)
+  - No CPU fallback required (dedicated GPUs, no Centaur competition)
   - Shared by: quarantine checks + Botawiki semantic search
 ```
 
 **What I need from you:** Confirm model choice. Alternatives: `all-mpnet-base-v2` (768-dim, better quality, 2x slower) or `e5-large-v2` (1024-dim, best quality, 4x slower).
+
+---
+
+### D35: Node Service Redistribution ✅ ANSWERED
+
+**Status:** ANSWERED — Applied before Phase 3 build begins
+**Phase:** 3
+
+**What:** Redistribute cluster services across all five nodes to activate three idle Radeon 8060S GPUs (Nodes 1, 2, 3). Move Edge Gateway from Node 5 → Node 2. Split embedding into a two-GPU pool on Nodes 1 and 3. Dedicate Nodes 4 and 5 entirely to Centaur. Migrate dead-drop storage from NATS JetStream to MinIO on Node 5.
+
+**Why it matters:** The original layout created three compounding problems: (1) Embedding and Centaur competed for the same GPU on Node 4, reducing effective Centaur throughput to ~0.20/sec. (2) RAG queries required two cross-node NATS hops adding ~17ms latency. (3) NATS `MESH` stream `max_file: 1GB` fills within hours at 1,000 mesh bots. All three resolved at zero hardware cost.
+
+**Blocks:** All Phase 3 service deployment configs, D24, D25, D27, D34, NC_System_Architecture.md, NATS_TOPOLOGY.md
+
+**Answer:**
+```
+Node 1: NATS Primary + PG Primary + Evidence Ingestion + Embedding GPU A
+Node 2: NATS Secondary + PG Replica + TRUSTMARK Engine + Edge Gateway
+Node 3: NATS Tertiary + PG+pgvector + Botawiki + Mesh Relay + Embedding GPU B
+Node 4: Centaur Primary + GPU Scheduler
+Node 5: Centaur Failover + MinIO (dead-drop storage)
+
+Embedding pool: GPU A (Node 1) + GPU B (Node 3)
+  - Direct calls: round-robin across A and B
+  - RAG calls: always GPU B (Node 3, co-located with pgvector)
+
+Dead-drop storage: MinIO nc-dead-drops bucket (Node 5)
+  - TTL: 72h via MinIO lifecycle rule (D25 default unchanged)
+  - Max objects/recipient: 500 (enforced at Gateway)
+
+Capacity:
+  - Centaur: 720 → 1,944 queries/hr (2.7x, no new hardware)
+  - T3 bot ceiling: ~36 → ~108 active bots at 30/hr, 60% utilisation
+  - RAG latency: ~42ms → ~16ms (CPU fallback path eliminated)
+```
+
+**Full decision document:** `docs/decisions/D35_node_redistribution.md`
 
 ---
 
@@ -920,3 +967,4 @@ Deployment: Python FastAPI service
 | D29 | 3 | Source diversity minimums | ⏳ Pending |
 | D33 | 3 | Swarm composite tool | ⏳ Pending |
 | D34 | 3 | Embedding model choice | ⏳ Pending |
+| D35 | 3 | Node service redistribution — idle GPUs activated | ✅ ANSWERED |
