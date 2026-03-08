@@ -675,26 +675,40 @@ These decisions define the network economics, mesh behavior, and knowledge layer
 ---
 
 ### D19: Credit Earn/Spend Rates
+**Status: LOCKED**
 
-**What:** How many compute credits does each action earn or cost?
+Earning credits:
+  Botawiki canonical write (claim promoted to canonical):  10 credits
+  Quarantine validation (reviewing a quarantined claim):    5 credits
+  Mesh relay:                                               0.1 credits/KB
 
-**Blocks:** Credit ledger, circuit breaker, GPU scheduler
+Spending credits:
+  Centaur query (one inference call):                      10 credits
+  RAG query (semantic search):                              5 credits
+  Direct embedding query (explicit POST /embedding):        1 credit
+  1 GPU-hour (Phase 4 marketplace):                       100 credits
 
-**Default:**
-```
-Earning:
-  Botawiki canonical write:    10 credits earned
-  Quarantine validation:        5 credits earned
-  Mesh relay:                   0.1 credits/KB relayed
+Internal calls = 0 credits:
+  RAG → embedding (local call on Node 3): does not hit Gateway,
+  does not tick credit counter.
+  Botawiki → background embed (NATS async): does not hit Gateway,
+  does not tick credit counter.
+  Credit counter ticks only at Gateway boundary, same rule as
+  rate limits (D24). Same Gateway, same tick, same boundary.
 
-Spending:
-  1 GPU-hour:                 100 credits
-  Embedding query:              1 credit
-  RAG query:                    5 credits
-  Centaur query:               10 credits
-```
-
-**What I need from you:** Confirm or adjust rates. These are calibration values — they'll be tuned with real data.
+Zero-balance circuit breaker:
+  Credit check at Centaur queue ENTRY (not at billing).
+  Zero-balance bots rejected before occupying a queue slot.
+  402 response body:
+    {
+      "error":         "insufficient_credits",
+      "service":       "centaur",
+      "query_cost":    10,
+      "balance":       <current balance>,
+      "deficit":       <abs(balance - cost)>,
+      "earn_path":     "contribute GPU time or write Botawiki claims",
+      "fiat_topup_url":"https://igentity.foundation/credits"
+    }
 
 ---
 
@@ -770,23 +784,27 @@ Periodic re-benchmark to prevent one-time faking
 
 ---
 
-### D24: Edge Gateway Rate Limits Per Service
+### D24: Edge Gateway Rate Limit Matrix
+**Status: LOCKED**
 
-**What:** Per-identity rate limits for each cluster service through the Edge Gateway.
+All limits: sliding 60-minute window, Redis sorted-set token bucket.
+Tier-aware. Counter key: {pubkey}:{endpoint}.
+RAG internal embedding calls do not count against embedding quota
+(resolved structurally by D3 v3 — internal calls never hit Gateway).
 
-**Blocks:** Edge Gateway rate limiter
+| Service     | T1       | T2       | T3       | Bottleneck (D35) |
+|-------------|----------|----------|----------|------------------|
+| BW Read     | 200/hr   | 500/hr   | 1,000/hr | Node 3 PG |
+| BW Write    | 20/hr    | 50/hr    | 100/hr   | Node 3 NATS |
+| RAG         | 50/hr    | 150/hr   | 300/hr   | Node 3 GPU B+pgvector |
+| Mesh        | 1,000/hr | 2,500/hr | 5,000/hr | Node 3+5 |
+| Embedding   | 100/hr   | 300/hr   | 600/hr   | Node 1+3 GPU pool |
+| Centaur     | 5/hr     | 0/hr     | 30/hr    | Nodes 2+4+5 (Option B) |
 
-**Default:**
-```
-Botawiki read:    200 requests/hour
-Botawiki write:    20 requests/hour
-RAG query:         50 requests/hour
-Mesh packets:    1000 packets/hour
-Embedding:        100 requests/hour
-Centaur:           20 requests/hour
-```
-
-**What I need from you:** Confirm limits. These are per-identity, enforced at the Gateway.
+Centaur = T3 only. T2 = 0/hr by design.
+Global Centaur queue cap = 50. Hard 503 at position 51.
+BW Write queue full = 503 (capacity signal, not 429 rate signal).
+All 429 responses include: retry_after_s, tier_ceiling, upgrade_tier.
 
 ---
 
@@ -1065,12 +1083,12 @@ If the adapter reports which non-standard files appear across multiple warden wo
 | D17 | 2 | Botawiki seed corpus | ⏳ Pending |
 | D18 | 2 | Key revocation window | ⏳ Pending |
 | D32 | 2 | Testing/Dry-Run rate | ⏳ Pending |
-| D19 | 3 | Credit earn/spend rates | ⏳ Pending |
+| D19 | 3 | Credit earn/spend rates | 🔒 LOCKED |
 | D20 | 3 | Evaluator penalties | ⏳ Pending |
 | D21 | 3 | Mesh routing function | ⏳ Pending |
 | D22 | 3 | Quarantine quorum | ⏳ Pending |
 | D23 | 3 | Anti-gaming benchmark | ⏳ Pending |
-| D24 | 3 | Gateway rate limits | ⏳ Pending |
+| D24 | 3 | Gateway rate limit matrix — 18 values, sliding 60min, tier-aware | 🔒 LOCKED |
 | D25 | 3 | Dead drop TTL | ⏳ Pending |
 | D26 | 3 | Vanguard sunset | ⏳ Pending |
 | D27 | 3 | Centaur hot-pin | ⏳ Pending |
