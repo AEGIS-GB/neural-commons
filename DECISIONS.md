@@ -139,6 +139,31 @@ Common fields (all claim types):
 
 ---
 
+### D3: Adapter ↔ Cluster Communication — v3 Addendum
+**Status: LOCKED (v3 — addendum to existing v2 lock)**
+
+v2 established: adapter uses HTTPS+WSS, NATS is internal only.
+v3 addendum narrows NATS scope further — even internally:
+
+| Embedding path | Transport | NATS? | Why |
+|---|---|---|---|
+| RAG query — embed question | Local in-process call, Node 3 | No | D35 co-location. RAG and GPU B same process. ~2ms. |
+| POST /embedding from bot | Load balancer at Gateway → GPU A or B | No | Option B GPUs dedicated to embedding. No GPU-state needed. Simple least-connections. |
+| Botawiki write — index claim | NATS async botawiki.embed | Yes | Bot is done. Background side effect. No user waiting. Retry on failure via JetStream. |
+| Centaur query | NATS → GPU Scheduler → Centaur node | Yes | Queue management, TRUSTMARK priority, credit check at entry. Async result push via WSS. |
+
+Principle locked: NATS is used only where work is genuinely async
+(bot has moved on, no user is waiting). Synchronous paths where a
+bot is waiting use direct HTTP + load balancer at the Gateway.
+
+Option C note: when active T3 bots exceed 150 and Option C is
+enabled (Centaur added to Nodes 1+3), the GPU Scheduler is also
+used for embedding routing — because GPU-busy state on Nodes 1+3
+must be checked before sending an embedding call there. This is
+a config change (config.toml + SIGHUP), not a code change.
+
+---
+
 ### D4: SLM Structured Output Schema (was "Wire Format") 🔒
 
 **Status:** LOCKED — Applied to `adapter/aegis-slm/src/{types.rs, scoring.rs, parser.rs, holster.rs}`
@@ -979,7 +1004,7 @@ has been moved to the backlog and is not part of this decision.
 | D0  | 0 | BIP-39 → SLIP-0010 → Ed25519 (path 784') | 🔒 LOCKED |
 | D1  | 0 | Evidence receipt: ReceiptCore + ReceiptContext split | 🔒 LOCKED |
 | D2  | 0 | Wire format: RFC 8785 JCS, lowercase hex, basis points | 🔒 LOCKED |
-| D3  | 0 | Adapter↔Cluster: NC-Ed25519 auth, HTTPS+WSS | 🔒 LOCKED |
+| D3  | 0 | Transport: HTTPS+WSS adapter, NATS internal only. v3: NATS scope narrowed — embedding uses load balancer or local call, not NATS Scheduler | 🔒 LOCKED (v3) |
 | D4  | 0 | SLM: 3-way separation, 14 patterns, scoring_v1 | 🔒 LOCKED |
 | D5  | 0 | Write barrier: triple-layer, WriteToken, HashRegistry | 🔒 LOCKED |
 | D6  | 1 | SLM structured output (absorbed into D4) | 🔒 LOCKED |

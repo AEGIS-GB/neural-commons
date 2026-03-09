@@ -23,12 +23,18 @@ Layer 2 tests implement this document.
   - `tier-gate` (push, ack-explicit, max-deliver 3) — evaluate tier transitions
 
 ### `BOTAWIKI` Stream
-- **Subjects:** `botawiki.claim.new`, `botawiki.quarantine.vote`, `botawiki.dispute.new`
+- **Subjects:** `botawiki.claim.new`, `botawiki.quarantine.vote`, `botawiki.dispute.new`, `botawiki.embed`
 - **Storage:** File
 - **Retention:** Limits (max 5GB, max 90 days)
 - **Consumers:**
   - `quarantine-validator` (push, ack-explicit, max-deliver 3) — trigger validation
   - `dispute-handler` (push, ack-explicit, max-deliver 5) — handle disputes
+  - `embed-indexer` (push, ack-explicit, max-deliver 3) — consumes
+    botawiki.embed subject. Runs on Node 3. Calls Embedding Service B
+    locally to build pgvector index for the new claim.
+    Storage: Memory (background job, no persistence needed — if
+    Node 3 restarts, Botawiki Service republishes unindexed claims
+    on startup via a reconciliation query).
 
 ### `MESH` Stream
 
@@ -42,11 +48,26 @@ Layer 2 tests implement this document.
   - `key-directory` (push, ack-explicit, max-deliver 3) — update key directory
 
 ### `SCHEDULER` Stream
-- **Subjects:** `scheduler.request`, `scheduler.assigned`
+- **Subjects:** `scheduler.request`, `scheduler.assigned`,
+                `scheduler.heartbeat`, `scheduler.completed`
 - **Storage:** Memory
 - **Retention:** WorkQueue (consumed once)
 - **Consumers:**
-  - `gpu-router` (pull, ack-explicit, max-deliver 1) — assign to GPU node
+  - `gpu-router` (pull, ack-explicit, max-deliver 1) — Centaur only
+
+SCOPE — Option B (Phase 3 launch):
+  This stream handles CENTAUR REQUESTS ONLY.
+  Direct embedding calls (POST /embedding) are NOT routed through
+  this stream — they use a least-connections HTTP load balancer
+  at the Edge Gateway across Nodes 1 and 3.
+  RAG embedding is a local in-process call on Node 3 — no NATS.
+
+SCOPE — Option C (escalation, config change):
+  When Centaur is added to Nodes 1+3 (edit config.toml, SIGHUP),
+  embedding routing is added to this stream. The Scheduler checks
+  GPU-busy state on Nodes 1+3 before routing embedding calls there.
+  Enable by adding "centaur" to node1/node3 model lists in
+  cluster/scheduler/config.toml.
 
 ### `BROADCAST` Stream
 - **Subjects:** `broadcast.emergency`, `broadcast.policy`
@@ -83,10 +104,13 @@ trustmark.query           — request TRUSTMARK for a bot
 botawiki.claim.new        — new claim submitted
 botawiki.quarantine.vote  — validator vote on quarantined claim
 botawiki.dispute.new      — dispute filed against a claim
+botawiki.embed            — background vector indexing of new claims
 mesh.relay                — mesh message relay
 mesh.key.update           — key rotation broadcast
 scheduler.request         — GPU compute request
 scheduler.assigned        — GPU compute assigned
+scheduler.heartbeat       — GPU node heartbeat
+scheduler.completed       — GPU compute completed
 broadcast.emergency       — Foundation emergency broadcast
 broadcast.policy          — Foundation policy distribution
 ```
