@@ -307,27 +307,80 @@ All presets default to warn-only (observe mode) — they don't actually block un
 
 ### D9: Vault Key Derivation Function
 
+**Status:** ✅ CONFIRMED
+
 **What:** How does the Credential Vault derive encryption keys for stored secrets?
 
 **Why it matters:** The vault encrypts detected plaintext credentials. Wrong KDF = weak encryption or key collision risk.
 
 **Blocks:** `aegis-vault` (encryption implementation)
 
-**Default:**
+**Answer:**
 ```
-KDF:     HKDF-SHA256
-Domain:  "aegis-vault-v1"
-Info:    bot fingerprint (Ed25519 public key thumbprint)
-Output:  256-bit key for AES-256-GCM
+Algorithm:  HKDF-SHA256
+Salt:       "aegis-vault-v1" — stable for kdf_version=1
+IKM:        VaultKdf seed from HD path m/44'/784'/2'/0' (D0)
+Info:       bot_fingerprint (Ed25519 public key thumbprint)
+Output:     32 bytes → AES-256-GCM encryption key
+Nonce:      unique random 12-byte nonce per secret (standard AES-256-GCM)
 
-Each secret gets a unique nonce. Domain separation ensures vault keys
-can't be confused with other derived keys in the system.
+KDF versioning:  kdf_version column stored per-secret row in SQLite
+                 (not encoded in domain string)
+
+Key rotation:    wipe and rescan — no re-encryption migration
+                 (no metamorphic encryption yet)
 ```
 
-**What I need from you:**
-1. Confirm HKDF-SHA256 (vs Argon2, scrypt — those are for password hashing, not key derivation from high-entropy input)
-2. Confirm domain string `"aegis-vault-v1"`
-3. Should the vault also support per-secret access policies from Day 1, or is that a Phase 2 refinement?
+**Reasoning:**
+
+1. **HKDF-SHA256 over Argon2/scrypt:** The IKM is a high-entropy seed derived
+   via SLIP-0010 (D0), not a password. Argon2 and scrypt are designed to slow
+   down brute-force attacks on low-entropy inputs — unnecessary overhead here.
+   HKDF is the correct primitive for extracting and expanding high-entropy
+   keying material (RFC 5869).
+
+2. **Salt "stable for kdf_version=1" (not "never bumped"):** A fixed salt is
+   acceptable when the IKM is already high-entropy. However, committing to
+   "never bumped" would prevent future KDF upgrades from using a new salt.
+   Since `kdf_version` is tracked per-row, a future kdf_version=2 can introduce
+   a different salt without breaking existing v1 secrets.
+
+3. **Single vault key + unique nonces (not per-secret keys):** The original
+   proposal used `info = bot_fingerprint:secret_id` to derive a unique key per
+   secret. This was rejected because:
+   - AES-256-GCM with unique nonces per secret is already cryptographically
+     sound — the standard construction.
+   - Per-secret keys would require `VaultStorage` to hold the raw IKM and
+     bot_fingerprint instead of a single pre-derived key, changing the API
+     surface of the entire storage layer.
+   - Per-secret key isolation is a Phase 2 hardening candidate if threat
+     modeling justifies it, but adds complexity without meaningful security
+     gain in Phase 1.
+
+4. **kdf_version per-secret row:** Allows future KDF upgrades (algorithm change,
+   salt rotation, info field changes) without a big-bang migration. Secrets
+   encrypted with v1 can coexist with v2 rows during a transition window.
+   The version is stored in SQLite, not encoded in the domain string, so the
+   domain string remains stable.
+
+5. **Wipe and rescan for key rotation:** All Phase 1 secrets are scanner-detected
+   (not manually added), so they can be re-found after a wipe. This avoids
+   complex re-encryption migration logic. The brief window between wipe and
+   rescan completion where credentials are unprotected is acceptable in
+   observe-only mode.
+
+**Deferred to separate decision (vault access control):**
+The vault locking mechanism (token-based timed sessions vs. process-lifetime
+unlock) is an access control question, not a KDF question. MoltBook bots run
+24/7 unattended, so a fixed-TTL token (e.g. 1-hour) would require repeated
+re-authentication with no warden present. The recommended approach — vault
+unlocks on adapter startup, locks on shutdown — will be specified when the
+vault access flow is designed. This keeps D9 focused on the cryptographic
+construction.
+
+**Code changes required:**
+1. `VaultStorage` schema — add `kdf_version INTEGER NOT NULL DEFAULT 1` column to the secrets table
+2. `kdf.rs` — update doc comments to reflect confirmed HKDF parameters
 
 ---
 
@@ -1100,7 +1153,7 @@ If the adapter reports which non-standard files appear across multiple warden wo
 | D6  | 1 | SLM structured output (absorbed into D4) | 🔒 LOCKED |
 | D7  | 1 | Write barrier severity (absorbed into D5) | 🔒 LOCKED |
 | D8  | 1 | SLM Holster presets (absorbed into D4) | 🔒 LOCKED |
-| D9  | 1 | Vault key derivation | ⏳ Pending |
+| D9  | 1 | Vault key derivation: HKDF-SHA256, per-row kdf_version | ✅ CONFIRMED |
 | D11 | 1 | Memory file patterns | ✅ CONFIRMED |
 | D12 | 1 | Dashboard refresh | ✅ CONFIRMED |
 | D30 | 1 | Observe-only enforcement points | ⏳ Pending |
