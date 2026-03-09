@@ -1,0 +1,1234 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Neural Commons — Decision Flow Map</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: 'Segoe UI', system-ui, sans-serif;
+    background: #0f1117;
+    color: #e2e8f0;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+  }
+  header {
+    padding: 16px 24px;
+    border-bottom: 1px solid #2d3748;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    background: #161b27;
+  }
+  header h1 { font-size: 16px; font-weight: 600; color: #e2e8f0; }
+  header p { font-size: 12px; color: #718096; }
+  .legend {
+    display: flex; gap: 16px; margin-left: auto; align-items: center;
+  }
+  .legend-item { display: flex; align-items: center; gap: 6px; font-size: 12px; color: #a0aec0; }
+  .dot { width: 10px; height: 10px; border-radius: 50%; }
+  .dot-locked { background: #48bb78; }
+  .dot-pending { background: #ed8936; }
+
+  .main {
+    display: flex;
+    flex: 1;
+    overflow: hidden;
+  }
+
+  /* FLOW CANVAS */
+  .canvas {
+    flex: 1;
+    overflow: auto;
+    padding: 40px 40px 40px 40px;
+    position: relative;
+  }
+
+  .flow-wrapper {
+    display: flex;
+    gap: 60px;
+    align-items: flex-start;
+    min-width: 900px;
+  }
+
+  /* MAIN COLUMN */
+  .main-flow {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0;
+    min-width: 280px;
+  }
+
+  /* CLUSTER COLUMN */
+  .cluster-flow {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0;
+    margin-top: 480px;
+    min-width: 220px;
+  }
+
+  /* NODES */
+  .node {
+    position: relative;
+    border-radius: 8px;
+    padding: 12px 16px;
+    cursor: pointer;
+    transition: all 0.15s ease;
+    border: 1.5px solid transparent;
+    text-align: center;
+    min-width: 200px;
+    user-select: none;
+  }
+  .node:hover { transform: translateY(-1px); }
+  .node.active { border-color: #63b3ed !important; }
+
+  .node-bot {
+    background: #2d3748;
+    border-color: #4a5568;
+    color: #e2e8f0;
+  }
+  .node-proxy {
+    background: #1a365d;
+    border-color: #2b6cb0;
+  }
+  .node-slm {
+    background: #1a202c;
+    border-color: #553c9a;
+  }
+  .node-vault {
+    background: #1a202c;
+    border-color: #285e61;
+  }
+  .node-upstream {
+    background: #2d3748;
+    border-color: #4a5568;
+    font-style: italic;
+  }
+  .node-barrier {
+    background: #1a202c;
+    border-color: #744210;
+  }
+  .node-memory {
+    background: #1a202c;
+    border-color: #44337a;
+  }
+  .node-evidence {
+    background: #1a202c;
+    border-color: #276749;
+  }
+  .node-crypto {
+    background: #1a202c;
+    border-color: #c05621;
+  }
+  .node-gateway {
+    background: #1a202c;
+    border-color: #2c7a7b;
+  }
+
+  .node-title {
+    font-size: 13px;
+    font-weight: 600;
+    letter-spacing: 0.3px;
+  }
+  .node-sub {
+    font-size: 10px;
+    color: #718096;
+    margin-top: 3px;
+  }
+
+  /* DECISION BADGES */
+  .badges {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    justify-content: center;
+    margin-top: 8px;
+  }
+  .badge {
+    font-size: 10px;
+    font-weight: 600;
+    padding: 2px 6px;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: opacity 0.1s;
+  }
+  .badge:hover { opacity: 0.8; }
+  .badge-locked {
+    background: #276749;
+    color: #9ae6b4;
+    border: 1px solid #38a169;
+  }
+  .badge-pending {
+    background: #7b341e;
+    color: #fbd38d;
+    border: 1px solid #dd6b20;
+  }
+
+  /* ARROWS */
+  .arrow {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0;
+    padding: 2px 0;
+  }
+  .arrow-line {
+    width: 2px;
+    background: #4a5568;
+    flex: 1;
+    min-height: 20px;
+  }
+  .arrow-label {
+    font-size: 10px;
+    color: #718096;
+    padding: 2px 6px;
+    background: #1a202c;
+    border: 1px solid #2d3748;
+    border-radius: 4px;
+    white-space: nowrap;
+  }
+  .arrow-head {
+    width: 0;
+    height: 0;
+    border-left: 5px solid transparent;
+    border-right: 5px solid transparent;
+    border-top: 7px solid #4a5568;
+  }
+  .arrow-warn {
+    font-size: 9px;
+    color: #ed8936;
+    padding: 1px 5px;
+    background: #7b341e22;
+    border: 1px solid #7b341e;
+    border-radius: 3px;
+    margin-top: 2px;
+    white-space: nowrap;
+  }
+
+  /* SIDE CONNECTOR (to cluster) */
+  .side-connector {
+    position: relative;
+    margin-top: 8px;
+    font-size: 10px;
+    color: #718096;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    white-space: nowrap;
+  }
+  .side-line {
+    height: 1px;
+    width: 40px;
+    background: #4a5568;
+  }
+
+  /* SECTION LABELS */
+  .section-label {
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    color: #4a5568;
+    margin-bottom: 12px;
+    text-align: center;
+  }
+
+  /* DETAIL PANEL */
+  .panel {
+    width: 360px;
+    min-width: 360px;
+    background: #161b27;
+    border-left: 1px solid #2d3748;
+    overflow-y: auto;
+    padding: 24px;
+    transition: width 0.2s;
+  }
+  .panel-empty {
+    color: #4a5568;
+    font-size: 13px;
+    text-align: center;
+    margin-top: 60px;
+  }
+  .panel-empty svg {
+    display: block;
+    margin: 0 auto 12px;
+    opacity: 0.3;
+  }
+
+  .panel-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    margin-bottom: 16px;
+  }
+  .panel-id {
+    font-size: 11px;
+    font-weight: 700;
+    padding: 2px 8px;
+    border-radius: 4px;
+    margin-bottom: 6px;
+    display: inline-block;
+  }
+  .panel-id-locked { background: #276749; color: #9ae6b4; }
+  .panel-id-pending { background: #7b341e; color: #fbd38d; }
+
+  .panel-title {
+    font-size: 15px;
+    font-weight: 600;
+    color: #e2e8f0;
+    line-height: 1.4;
+    margin-bottom: 4px;
+  }
+  .panel-phase {
+    font-size: 11px;
+    color: #718096;
+    margin-bottom: 16px;
+  }
+  .panel-section {
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.8px;
+    color: #4a5568;
+    margin: 14px 0 6px;
+  }
+  .panel-text {
+    font-size: 12px;
+    color: #a0aec0;
+    line-height: 1.6;
+  }
+  .panel-code {
+    background: #0f1117;
+    border: 1px solid #2d3748;
+    border-radius: 6px;
+    padding: 10px 12px;
+    font-size: 11px;
+    font-family: 'Fira Code', 'Cascadia Code', monospace;
+    color: #9ae6b4;
+    line-height: 1.7;
+    margin-top: 6px;
+    white-space: pre;
+    overflow-x: auto;
+  }
+  .panel-list {
+    list-style: none;
+    margin-top: 6px;
+  }
+  .panel-list li {
+    font-size: 12px;
+    color: #a0aec0;
+    padding: 3px 0 3px 12px;
+    position: relative;
+    line-height: 1.5;
+  }
+  .panel-list li::before {
+    content: '→';
+    position: absolute;
+    left: 0;
+    color: #4a5568;
+  }
+  .close-btn {
+    background: none;
+    border: none;
+    color: #4a5568;
+    cursor: pointer;
+    font-size: 18px;
+    padding: 0 4px;
+    line-height: 1;
+  }
+  .close-btn:hover { color: #a0aec0; }
+
+  /* Phase badge in panel */
+  .phase-tag {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 10px;
+    padding: 2px 7px;
+    border-radius: 4px;
+    font-weight: 600;
+  }
+  .phase-tag-0 { background: #1a365d; color: #90cdf4; border: 1px solid #2b6cb0; }
+  .phase-tag-1 { background: #1a3340; color: #81e6d9; border: 1px solid #2c7a7b; }
+
+  /* highlight active badge */
+  .badge.badge-active-locked {
+    background: #38a169;
+    color: #fff;
+  }
+  .badge.badge-active-pending {
+    background: #dd6b20;
+    color: #fff;
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div>
+    <h1>Neural Commons — Decision Flow Map</h1>
+    <p>Click any component or decision badge to see details</p>
+  </div>
+  <div class="legend">
+    <div class="legend-item"><div class="dot dot-locked"></div> Locked decision</div>
+    <div class="legend-item"><div class="dot dot-pending"></div> Pending decision</div>
+  </div>
+</header>
+
+<div class="main">
+  <div class="canvas">
+    <div class="flow-wrapper">
+
+      <!-- MAIN FLOW -->
+      <div>
+        <div class="section-label">Bot → Upstream → Bot</div>
+        <div class="main-flow">
+
+          <!-- BOT -->
+          <div class="node node-bot" onclick="showNode('bot')">
+            <div class="node-title">Bot / Client</div>
+            <div class="node-sub">sends HTTP request</div>
+          </div>
+
+          <!-- arrow -->
+          <div class="arrow" style="height:36px">
+            <div class="arrow-line" style="flex:1"></div>
+            <div class="arrow-label">HTTP request</div>
+            <div class="arrow-line" style="flex:1"></div>
+            <div class="arrow-head"></div>
+          </div>
+
+          <!-- PROXY -->
+          <div class="node node-proxy" onclick="showNode('proxy')">
+            <div class="node-title">aegis-proxy</div>
+            <div class="node-sub">transparent HTTP proxy (axum/tower)</div>
+          </div>
+
+          <!-- arrow -->
+          <div class="arrow" style="height:32px">
+            <div class="arrow-line" style="flex:1"></div>
+            <div class="arrow-head"></div>
+          </div>
+
+          <!-- SLM -->
+          <div class="node node-slm" onclick="showNode('slm')">
+            <div class="node-title">aegis-slm</div>
+            <div class="node-sub">prompt injection scan</div>
+            <div class="badges">
+              <span class="badge badge-locked" onclick="showDecision('D4');event.stopPropagation()">D4</span>
+            </div>
+          </div>
+          <div style="font-size:10px;color:#ed8936;text-align:center;padding:3px 0;">observe-only (Phase 1)</div>
+
+          <!-- arrow -->
+          <div class="arrow" style="height:32px">
+            <div class="arrow-line" style="flex:1"></div>
+            <div class="arrow-label">admit / warn</div>
+            <div class="arrow-line" style="flex:1"></div>
+            <div class="arrow-head"></div>
+          </div>
+
+          <!-- VAULT -->
+          <div class="node node-vault" onclick="showNode('vault')">
+            <div class="node-title">aegis-vault</div>
+            <div class="node-sub">scan for plaintext secrets</div>
+            <div class="badges">
+              <span class="badge badge-locked" onclick="showDecision('D0');event.stopPropagation()">D0</span>
+              <span class="badge badge-pending" onclick="showDecision('D9');event.stopPropagation()">D9</span>
+            </div>
+          </div>
+          <div style="font-size:10px;color:#ed8936;text-align:center;padding:3px 0;">observe-only (Phase 1)</div>
+
+          <!-- arrow -->
+          <div class="arrow" style="height:32px">
+            <div class="arrow-line" style="flex:1"></div>
+            <div class="arrow-label">request forwarded</div>
+            <div class="arrow-line" style="flex:1"></div>
+            <div class="arrow-head"></div>
+          </div>
+
+          <!-- UPSTREAM -->
+          <div class="node node-upstream" onclick="showNode('upstream')">
+            <div class="node-title">Upstream API</div>
+            <div class="node-sub">OpenClaw / LLM</div>
+            <div class="badges">
+              <span class="badge badge-pending" onclick="showDecision('D31');event.stopPropagation()">D31</span>
+            </div>
+          </div>
+
+          <!-- arrow -->
+          <div class="arrow" style="height:32px">
+            <div class="arrow-line" style="flex:1"></div>
+            <div class="arrow-label">response</div>
+            <div class="arrow-line" style="flex:1"></div>
+            <div class="arrow-head"></div>
+          </div>
+
+          <!-- BARRIER -->
+          <div class="node node-barrier" onclick="showNode('barrier')">
+            <div class="node-title">aegis-barrier</div>
+            <div class="node-sub">write protection check</div>
+            <div class="badges">
+              <span class="badge badge-locked" onclick="showDecision('D5');event.stopPropagation()">D5</span>
+            </div>
+          </div>
+          <div style="font-size:10px;color:#ed8936;text-align:center;padding:3px 0;">observe-only (Phase 1)</div>
+
+          <!-- arrow -->
+          <div class="arrow" style="height:32px">
+            <div class="arrow-line" style="flex:1"></div>
+            <div class="arrow-head"></div>
+          </div>
+
+          <!-- MEMORY -->
+          <div class="node node-memory" onclick="showNode('memory')">
+            <div class="node-title">aegis-memory</div>
+            <div class="node-sub">memory file integrity check</div>
+            <div class="badges">
+              <span class="badge badge-pending" onclick="showDecision('D11');event.stopPropagation()">D11</span>
+              <span class="badge badge-pending" onclick="showDecision('D30');event.stopPropagation()">D30</span>
+            </div>
+          </div>
+          <div style="font-size:10px;color:#ed8936;text-align:center;padding:3px 0;">observe-only (Phase 1)</div>
+
+          <!-- arrow -->
+          <div class="arrow" style="height:32px">
+            <div class="arrow-line" style="flex:1"></div>
+            <div class="arrow-head"></div>
+          </div>
+
+          <!-- EVIDENCE -->
+          <div class="node node-evidence" onclick="showNode('evidence')">
+            <div class="node-title">aegis-evidence</div>
+            <div class="node-sub">stamp event receipt</div>
+            <div class="badges">
+              <span class="badge badge-locked" onclick="showDecision('D1');event.stopPropagation()">D1</span>
+              <span class="badge badge-locked" onclick="showDecision('D2');event.stopPropagation()">D2</span>
+            </div>
+          </div>
+
+          <!-- arrow -->
+          <div class="arrow" style="height:32px">
+            <div class="arrow-line" style="flex:1"></div>
+            <div class="arrow-head"></div>
+          </div>
+
+          <!-- CRYPTO -->
+          <div class="node node-crypto" onclick="showNode('crypto')">
+            <div class="node-title">aegis-crypto</div>
+            <div class="node-sub">sign receipt with Ed25519 identity key</div>
+            <div class="badges">
+              <span class="badge badge-locked" onclick="showDecision('D0');event.stopPropagation()">D0</span>
+              <span class="badge badge-locked" onclick="showDecision('D2');event.stopPropagation()">D2</span>
+            </div>
+          </div>
+
+          <!-- arrow -->
+          <div class="arrow" style="height:36px">
+            <div class="arrow-line" style="flex:1"></div>
+            <div class="arrow-label">response returned</div>
+            <div class="arrow-line" style="flex:1"></div>
+            <div class="arrow-head"></div>
+          </div>
+
+          <!-- BOT AGAIN -->
+          <div class="node node-bot" onclick="showNode('bot')">
+            <div class="node-title">Bot / Client</div>
+            <div class="node-sub">receives response</div>
+          </div>
+
+        </div>
+      </div>
+
+      <!-- CLUSTER COLUMN -->
+      <div>
+        <div class="section-label">Cluster (Phase 2+)</div>
+        <div class="cluster-flow">
+
+          <div class="node node-gateway" onclick="showNode('gateway')" style="min-width:200px">
+            <div class="node-title">Cluster Gateway</div>
+            <div class="node-sub">receives evidence batches from adapter</div>
+            <div class="badges">
+              <span class="badge badge-locked" onclick="showDecision('D3');event.stopPropagation()">D3</span>
+            </div>
+          </div>
+
+          <div class="arrow" style="height:32px">
+            <div class="arrow-line" style="flex:1"></div>
+            <div class="arrow-head"></div>
+          </div>
+
+          <div class="node node-slm" onclick="showNode('trustmark')" style="min-width:200px">
+            <div class="node-title">TRUSTMARK Scoring</div>
+            <div class="node-sub">score per bot, 6 weighted dimensions</div>
+            <div class="badges">
+              <span class="badge badge-pending" onclick="showDecision('D13');event.stopPropagation()">D13</span>
+              <span class="badge badge-pending" onclick="showDecision('D14');event.stopPropagation()">D14</span>
+              <span class="badge badge-pending" onclick="showDecision('D15');event.stopPropagation()">D15</span>
+            </div>
+          </div>
+
+          <div class="arrow" style="height:32px">
+            <div class="arrow-line" style="flex:1"></div>
+            <div class="arrow-head"></div>
+          </div>
+
+          <div class="node node-evidence" onclick="showNode('botawiki')" style="min-width:200px">
+            <div class="node-title">Botawiki</div>
+            <div class="node-sub">distributed knowledge base</div>
+            <div class="badges">
+              <span class="badge badge-pending" onclick="showDecision('D17');event.stopPropagation()">D17</span>
+              <span class="badge badge-pending" onclick="showDecision('D22');event.stopPropagation()">D22</span>
+              <span class="badge badge-pending" onclick="showDecision('D29');event.stopPropagation()">D29</span>
+            </div>
+          </div>
+
+          <!-- connector label -->
+          <div style="margin-top:20px;font-size:10px;color:#4a5568;text-align:center;max-width:200px;line-height:1.5;">
+            ↑ adapter pushes evidence<br>via POST /evidence/batch
+          </div>
+
+        </div>
+      </div>
+
+      <!-- DASHBOARD COLUMN -->
+      <div>
+        <div class="section-label">Local Dashboard</div>
+        <div class="cluster-flow" style="margin-top:0">
+
+          <div class="node node-proxy" onclick="showNode('dashboard')" style="min-width:200px">
+            <div class="node-title">aegis-dashboard</div>
+            <div class="node-sub">embedded UI, 2s polling</div>
+            <div class="badges">
+              <span class="badge badge-pending" onclick="showDecision('D12');event.stopPropagation()">D12</span>
+              <span class="badge badge-pending" onclick="showDecision('D16');event.stopPropagation()">D16</span>
+            </div>
+          </div>
+
+          <div style="margin-top:16px;font-size:10px;color:#4a5568;text-align:center;max-width:200px;line-height:1.5;">
+            reads from local adapter REST API<br>shows receipts, barrier alerts, badge progress
+          </div>
+
+          <div class="arrow" style="height:32px;margin-top:16px">
+            <div class="arrow-line" style="flex:1"></div>
+            <div class="arrow-head"></div>
+          </div>
+
+          <div class="node node-barrier" onclick="showNode('failure')" style="min-width:200px">
+            <div class="node-title">aegis-failure</div>
+            <div class="node-sub">anomaly detection + heartbeat</div>
+          </div>
+
+          <div class="arrow" style="height:32px">
+            <div class="arrow-line" style="flex:1"></div>
+            <div class="arrow-head"></div>
+          </div>
+
+          <div class="node node-crypto" onclick="showNode('cli')" style="min-width:200px">
+            <div class="node-title">aegis-cli</div>
+            <div class="node-sub">aegis init / status / evolve</div>
+          </div>
+
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- DETAIL PANEL -->
+  <div class="panel" id="panel">
+    <div class="panel-empty" id="panel-empty">
+      <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+        <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><circle cx="12" cy="16" r="1" fill="currentColor"/>
+      </svg>
+      Click a component or decision badge to see details
+    </div>
+    <div id="panel-content" style="display:none"></div>
+  </div>
+</div>
+
+<script>
+const decisions = {
+  D0: {
+    id: 'D0', phase: 0, status: 'locked',
+    title: 'Key Derivation: BIP-39 → SLIP-0010 → Ed25519',
+    what: 'How bot identity keys are generated from a mnemonic phrase.',
+    answer: [
+      'Standard: SLIP-0010 for Ed25519 derivation from BIP-39 seed',
+      'Coin type 784 (AI leetspeak) — avoids Bitcoin/Ethereum collisions',
+      'English wordlist only, NFKD normalization',
+      'Entropy-first: entropy → mnemonic → seed (not the reverse)',
+      'Key file protected with Argon2id (OS credential store)'
+    ],
+    code: `HD paths (4 domain-separated keys):
+m/44'/784'/0'/0'  → Signing key     (receipts, identity)
+m/44'/784'/1'/0'  → Mesh encryption (X25519 key agreement)
+m/44'/784'/2'/0'  → Vault KDF       (vault encryption material)
+m/44'/784'/3'/0'  → Transport auth  (gateway request signing)
+
+Rule: Ed25519→X25519 conversion is BANNED.
+      Each purpose has its own separate derived key.`,
+  },
+  D1: {
+    id: 'D1', phase: 0, status: 'locked',
+    title: 'Evidence Receipt Schema',
+    what: 'The structure of every event receipt that gets signed and stored.',
+    answer: [
+      'Two-part design: ReceiptCore (signed) + ReceiptContext (owner-only)',
+      'ReceiptCore is what gets hashed and signed with Ed25519',
+      'ReceiptContext is stored alongside but never signed directly',
+      'Optional fields are omitted entirely — never serialized as null',
+      'Genesis receipt: seq=1, prev_hash = 64 zero characters'
+    ],
+    code: `ReceiptCore (signed):
+  id:           UUID v7 (time-ordered)
+  bot_id:       lowercase hex Ed25519 public key
+  type:         snake_case string enum
+  ts_ms:        i64 epoch milliseconds
+  prev_hash:    SHA-256 lowercase hex (chain link)
+  payload_hash: SHA-256 of JCS(ReceiptContext)
+  seq:          u64 monotonic counter
+  sig:          Ed25519 signature, lowercase hex
+
+ReceiptContext (owner-only):
+  blinding_nonce: 16-byte random hex (mandatory)
+  action, subject, trigger, outcome: optional strings
+  detail:         optional JSONB
+  enterprise:     optional { fleet_id, warden_key,
+                  policy_url, issuer_key_id, ... }
+
+Signing:
+  sig_input = JCS({id, bot_id, type, ts_ms,
+                   prev_hash, payload_hash, seq})
+  sig = Ed25519(signing_key, sig_input)`,
+  },
+  D2: {
+    id: 'D2', phase: 0, status: 'locked',
+    title: 'Wire Format Rules',
+    what: 'How data is serialized for signing and transmission.',
+    answer: [
+      'RFC 8785 JCS for all canonical serialization — bytes signed = bytes on wire',
+      'All binary fields: lowercase hex, no exceptions',
+      'Timestamps: i64 epoch milliseconds (never RFC 3339)',
+      'Optional fields: omit entirely, never null',
+      'All scores in integer basis points (0–10000), never floats in signed data',
+      'Protobuf for schema generation only — never used as wire encoding'
+    ],
+    code: `Claim common fields (also use these wire rules):
+  id:                     UUID v7
+  type:                   snake_case enum
+  attester_id:            lowercase hex bot fingerprint
+  confidence_bp:          u32 basis points (0-10000)
+  temporal_scope:         { start_ms: i64, end_ms: i64? }
+  confabulation_score_bp: u32 basis points
+  schema_version:         u32 (not semver)`,
+  },
+  D3: {
+    id: 'D3', phase: 0, status: 'locked',
+    title: 'Adapter → Cluster Communication',
+    what: 'How the adapter on a bot machine talks to the shared cluster services.',
+    answer: [
+      'HTTPS to Edge Gateway + WSS (WebSocket) from Edge Gateway',
+      'Auth header: NC-Ed25519 <pubkey>:<sig> — verified statelessly',
+      'Gateway rejects requests with ts_ms outside ±15 seconds',
+      'WSS: challenge-response on upgrade only, then persistent push channel',
+      'NATS is internal to cluster only — adapters never touch NATS directly',
+      'Receipt batching: POST /evidence/batch (max 100 receipts or 1MB)',
+      'WSS: ping/pong every 30s, JetStream durable consumers for offline replay'
+    ],
+    code: `Auth signature:
+  sig = Ed25519(transport_key,
+    JCS({ method, path, ts_ms, body_hash }))
+  Header: NC-Ed25519 <pubkey>:<sig>
+  Key used: m/44'/784'/3'/0' (transport path, NOT root)
+
+Gateway routes:
+  POST /evidence           single receipt
+  POST /evidence/batch     up to 100 receipts or 1MB
+  GET  /trustmark/:bot_id  fetch score
+  POST /botawiki/query     knowledge base query
+  GET  /verify/:fingerprint verify identity
+  POST /rollup             Merkle rollup`,
+  },
+  D4: {
+    id: 'D4', phase: 0, status: 'locked',
+    title: 'SLM Structured Output + Holster Thresholds',
+    what: 'How the Small Language Model detects threats and how the holster acts on the result.',
+    answer: [
+      'Three-way separation: SLM detects (qualitative) → Adapter scores (deterministic) → Holster decides (private)',
+      '14-pattern threat taxonomy (see below)',
+      'Scores in basis points (0–10000), never floats',
+      'Holster threshold is never included in any outbound structure',
+      'Parse failures → quarantine + slm.parse_failure receipt',
+      'Phase 1 default: observe-only — no requests are actually dropped'
+    ],
+    code: `14 threat patterns:
+  system_override, role_hijack, context_smuggle,
+  instruction_inject, boundary_probe, encoding_abuse,
+  chain_of_thought_hijack, tool_misuse, data_exfil,
+  persistence_attempt, multi_turn_manipulation,
+  social_engineering, memory_poisoning,
+  capability_escalation
+
+Holster thresholds (default = Balanced):
+  Aggressive:  reject if score > 6000bp
+  Balanced:    reject if score > 8000bp  ← default
+  Permissive:  reject if score > 9000bp
+
+Compounding (k≥3 patterns detected):
+  compound_bonus = 500 + 250 * (k - 2)`,
+  },
+  D5: {
+    id: 'D5', phase: 0, status: 'locked',
+    title: 'Write Barrier: Triple-Layer Detection',
+    what: 'How the system detects unauthorized changes to protected files.',
+    answer: [
+      'Layer 1: Filesystem watcher — inotify/FSEvents/ReadDirectoryChangesW (real-time)',
+      'Layer 2: 60-second hash sweep — catches inode swaps, symlink attacks, missed events',
+      'Layer 3: Outbound proxy interlock — proxy checks WriteToken before allowing write results',
+      'WriteToken: 500ms TTL, single-use, HMAC-verified, stays in-process',
+      'No token + file change = unauthorized write',
+      'Quarantine: never destroys files, 30-day retention',
+      'Phase 1 default: Tier 1 = warn only'
+    ],
+    code: `WriteToken lifecycle:
+  1. Bot calls a write tool → proxy intercepts
+  2. Proxy issues WriteToken (HMAC, 500ms TTL)
+  3. Filesystem watcher sees the change
+  4. Token present → authorized → receipt generated
+  5. Token missing → unauthorized → alert + receipt
+
+HashRegistry (signed + encrypted SQLite WAL):
+  path, SHA-256, inode, last_modified_ms,
+  modified_by, sensitivity_class
+
+SensitivityClass:
+  Standard    → normal monitoring
+  Credential  → NEVER sent to non-local SLM
+
+Severity:
+  Cosmetic    → whitespace, formatting changes
+  Behavioral  → instruction or goal changes
+  Structural  → >50% content, new endpoints, new refs
+  Credential  → auto-promoted to Structural`,
+  },
+  D9: {
+    id: 'D9', phase: 1, status: 'pending',
+    title: 'Vault Key Derivation Function',
+    what: 'How encryption keys are derived for secrets stored in the credential vault.',
+    answer: [
+      'Default proposed: HKDF-SHA256',
+      'Domain string: "aegis-vault-v1"',
+      'Info field: bot fingerprint (Ed25519 public key thumbprint)',
+      'Output: 256-bit key for AES-256-GCM',
+      'Each secret gets a unique nonce',
+      'Per-secret access policies: proposed for Phase 2, not Phase 1'
+    ],
+    code: `Proposed (pending confirmation):
+  KDF:    HKDF-SHA256
+  Domain: "aegis-vault-v1"
+  Info:   bot_fingerprint (Ed25519 pubkey thumbprint)
+  Output: 256-bit → AES-256-GCM encryption key
+
+  Note: Domain separation means vault keys cannot
+  be confused with other keys derived from the
+  same root material.`,
+  },
+  D11: {
+    id: 'D11', phase: 1, status: 'pending',
+    title: 'Memory Integrity: Which Files to Monitor',
+    what: 'Which files the memory module watches for unauthorized changes.',
+    answer: [
+      'Default hard-coded paths: MEMORY.md, *.memory.md, memory/*.md',
+      'Additional paths configurable via config.json → memory_paths[]',
+      'Supports glob patterns in config',
+      'Open question: should SOUL.md be hard-coded or covered by write barrier separately?',
+      'All monitoring defaults to observe-only (Phase 1)'
+    ],
+    code: `Proposed defaults (pending confirmation):
+  Hard-coded:
+    MEMORY.md
+    *.memory.md
+    memory/*.md
+
+  Configurable (config.json):
+    memory_paths: ["custom/*.md", "notes/GOALS.md"]
+
+  Open: SOUL.md — hard-coded here or write barrier?`,
+  },
+  D12: {
+    id: 'D12', phase: 1, status: 'pending',
+    title: 'Dashboard Refresh Mechanism',
+    what: 'How the embedded dashboard gets updated data from the adapter.',
+    answer: [
+      'Default: 2-second polling via GET requests to local adapter REST API',
+      'No WebSocket, no SSE — keeps size under 50KB',
+      'Dashboard is entirely <50KB (HTML + CSS + JS)',
+      'Open question: is 50KB a hard limit or a guideline?'
+    ],
+    code: `Proposed (pending confirmation):
+  Method:   HTTP polling
+  Interval: 2 seconds
+  Target:   local adapter REST API (localhost)
+  Size:     <50KB total (HTML + CSS + JS)
+  No WebSocket or Server-Sent Events`,
+  },
+  D13: {
+    id: 'D13', phase: 2, status: 'pending',
+    title: 'TRUSTMARK Score Dimension Weights',
+    what: 'The 6 dimensions that make up a bot\'s TRUSTMARK score and how much each counts.',
+    answer: [
+      'Score is a weighted sum normalized to [0.0, 1.0]',
+      'Used for tier gating, mesh routing, and evaluator accountability',
+      'All weights are pending final confirmation'
+    ],
+    code: `Proposed weights (pending confirmation):
+  persona_integrity:     0.25  (SOUL.md intact)
+  chain_integrity:       0.20  (evidence chain unbroken)
+  relay_reliability:     0.15  (mesh message relay)
+  temporal_consistency:  0.15  (activity consistency)
+  vault_hygiene:         0.15  (credentials secured)
+  contribution_volume:   0.10  (activity volume)
+  ─────────────────────────────
+  Total:                 1.00`,
+  },
+  D14: {
+    id: 'D14', phase: 2, status: 'pending',
+    title: 'Tier Thresholds',
+    what: 'What gates entry into each trust tier.',
+    answer: [
+      'Tier 1: any installed adapter (TRUSTMARK ≥ 0)',
+      'Tier 2: identity activated + ≥72h evidence history + vault active',
+      'Tier 3: TRUSTMARK ≥ 0.4 + evaluator admission (3 evaluators, 2/3 approve)',
+      'Botawiki read: available on identity activation, rate-limited at 50 reads/hour',
+    ],
+    code: `Proposed (pending confirmation):
+  Tier 1: adapter installed, any score
+    → full local protection, evidence, dashboard
+
+  Tier 2: identity + 72h history + vault active
+    → encrypted backup, higher rate limits (200/hr)
+    → gamification metrics
+
+  Tier 3: TRUSTMARK ≥ 0.4 + evaluator 2/3 quorum
+    → mesh access, Botawiki writes
+    → swarm, compute credits`,
+  },
+  D15: {
+    id: 'D15', phase: 2, status: 'pending',
+    title: 'TRUSTMARK Temporal Decay Half-Life',
+    what: 'How quickly old evidence receipts lose their influence on the TRUSTMARK score.',
+    answer: [
+      'Default half-life: 90 days',
+      'A receipt 180 days old contributes 25% of its original weight',
+      'A receipt 365 days old contributes ~6%',
+      'Activity floor kicks in after 30 days of no new receipts',
+      'Score never drops below the floor (prevents vacation penalty)'
+    ],
+    code: `Proposed (pending confirmation):
+  Half-life: 90 days
+  weight(age) = 0.5 ^ (age_days / 90)
+
+  Age 0 days   → 100% weight
+  Age 90 days  → 50% weight
+  Age 180 days → 25% weight
+  Age 365 days → ~6% weight
+
+  Activity floor: after 30 days no activity,
+  score decays but stays ≥ floor.
+  Floor value: TBD (suggested: 0.1 or 10% of peak)`,
+  },
+  D16: {
+    id: 'D16', phase: 2, status: 'pending',
+    title: 'Gamification Badge Thresholds',
+    what: 'The milestones at which wardens earn badges on the dashboard.',
+    answer: [
+      '5 badge categories proposed',
+      'Each has 3–4 tier levels',
+      'Open question: public or dashboard-only visibility?'
+    ],
+    code: `Proposed badges (pending confirmation):
+  Integrity Streak:   7 / 30 / 90 / 365 days
+                      (consecutive days without chain break)
+  Vault Hygiene:      50% / 80% / 100% credentials secured
+  Evidence Depth:     100 / 1,000 / 10,000 total receipts
+  Network Helper:     10 / 100 / 1,000 mesh msgs relayed
+  Knowledge Contrib:  1 / 10 / 50 Botawiki claims`,
+  },
+  D17: {
+    id: 'D17', phase: 2, status: 'pending',
+    title: 'Botawiki Seed Corpus',
+    what: 'The initial content loaded into Botawiki when it first launches.',
+    answer: [
+      '50+ b/lore summaries: bot behavioral patterns, common configurations',
+      '100+ b/skills hashes: known tool/skill fingerprints',
+      '5–10 b/peers: Vanguard bot identities (Foundation-controlled)',
+      'This is content work, not code — requires someone to read MoltBook threads',
+      'Open question: who authors this? Leon, community, or both?'
+    ],
+    code: `Content format (to be defined):
+  b/lore:   behavioral patterns, bot configs
+  b/skills: tool/skill fingerprints (hashed)
+  b/peers:  Vanguard identity entries
+
+  Source: MoltBook threads → compressed structured entries
+  Author: TBD`,
+  },
+  D22: {
+    id: 'D22', phase: 3, status: 'pending',
+    title: 'Quarantine Quorum Requirements',
+    what: 'How many validators must review and approve a Botawiki claim.',
+    answer: [
+      'Standard: 3 validators, 2/3 must approve',
+      'Dispute escalation: 5 validators, 4/5 must approve',
+      'Validator selection: top TRUSTMARK scores + opt-in flag'
+    ],
+    code: `Proposed (pending confirmation):
+  Standard:  3 validators, 2/3 approve
+  Dispute:   5 validators, 4/5 approve
+  Selection: highest TRUSTMARK + opted-in wardens`,
+  },
+  D29: {
+    id: 'D29', phase: 3, status: 'pending',
+    title: 'Source Diversity Minimums Per Namespace',
+    what: 'How many distinct wardens must attest a claim before it can be promoted to canonical.',
+    answer: [
+      'b/lore: 2 distinct wardens',
+      'b/skills malicious: 3 distinct wardens',
+      'b/skills safe: 2 distinct wardens',
+      'b/cognition: 5 distinct wardens (highest bar — behavioral claims)',
+      'b/peers: 1 (self-attestation allowed)',
+      'b/reputation: 3 distinct wardens',
+      'b/provenance: 1 (self-attestation allowed)'
+    ],
+    code: `Proposed per-namespace minimums:
+  b/lore:            2 distinct wardens
+  b/skills/malicious: 3 distinct wardens
+  b/skills/safe:      2 distinct wardens
+  b/cognition:        5 distinct wardens
+  b/peers:            1 (self-attest ok)
+  b/reputation:       3 distinct wardens
+  b/provenance:       1 (self-attest ok)`,
+  },
+  D30: {
+    id: 'D30', phase: 1, status: 'pending',
+    title: 'Observe-Only Default: Which Enforcement Points',
+    what: 'Which specific enforcement points default to warn-only in Phase 1 (no blocking).',
+    answer: [
+      '4 independently switchable observe-only points',
+      'Rate limiting and size limits are always active regardless of observe mode',
+      'Receipt generation is always on — the chain always records',
+      'aegis --observe-only sets all four to warn mode at once'
+    ],
+    code: `Proposed observe-only points (pending confirmation):
+  1. Write barrier   → detect + receipt, NOT revert/block
+  2. SLM reject      → receipt, NOT drop the request
+  3. Vault block     → detect plaintext, NOT prevent API call
+  4. Memory write    → detect change, NOT revert
+
+Always active (not affected by observe-only):
+  - Request size limit: 10MB body
+  - Per-IP rate limit:  1000 req/min
+  - Receipt generation: always on
+  - Hash chain:         always maintained`,
+  },
+  D31: {
+    id: 'D31', phase: 1, status: 'pending',
+    title: 'OpenClaw Compatibility Harness: Fixture Count',
+    what: 'How many golden request/response fixtures are needed before proxy implementation starts.',
+    answer: [
+      'Minimum 20 request/response pairs',
+      'Must cover: auth, standard API call, streaming, WebSocket, error responses, multi-turn, file upload',
+      'Format: JSON files in tests/fixtures/openclaw/',
+      'Open question: recorded from a real OpenClaw instance, or mock data initially?'
+    ],
+    code: `Fixture format:
+{
+  "name": "standard-chat-completion",
+  "request": {
+    "method": "POST",
+    "path": "/v1/chat/completions",
+    "headers": {},
+    "body": {}
+  },
+  "response": {
+    "status": 200,
+    "headers": {},
+    "body": {}
+  },
+  "metadata": {
+    "category": "api-call",
+    "streaming": false
+  }
+}`,
+  },
+};
+
+const nodes = {
+  bot: {
+    title: 'Bot / Client',
+    description: 'The AI bot that sends requests. It connects to the aegis-proxy instead of directly to the upstream API. The bot does not need to change anything — aegis-proxy is transparent.',
+    decisions: [],
+  },
+  proxy: {
+    title: 'aegis-proxy',
+    description: 'The entry point for all bot traffic. Built with axum and tower. It intercepts every HTTP request, runs the middleware pipeline (SLM → vault checks), forwards the request to the upstream API, then runs the response pipeline (barrier → memory → evidence) before returning the response to the bot.',
+    decisions: [],
+  },
+  slm: {
+    title: 'aegis-slm',
+    description: 'Scans the prompt for injection attacks before the request is forwarded. Uses a Small Language Model to detect 14 threat patterns. Scores the output in basis points (0–10000). The holster then decides whether to admit, quarantine, or reject — but in Phase 1, it only warns.',
+    decisions: ['D4'],
+  },
+  vault: {
+    title: 'aegis-vault',
+    description: 'Scans the request for plaintext secrets (API keys, passwords, tokens). If found, it encrypts them locally using AES-256-GCM with an HKDF-derived key. The encryption key is derived from the bot\'s Ed25519 identity key (D0). In Phase 1, it detects and encrypts but does not block the request.',
+    decisions: ['D0', 'D9'],
+  },
+  upstream: {
+    title: 'Upstream API (OpenClaw)',
+    description: 'The external API the bot is talking to. The aegis-proxy forwards the request here after all local checks pass. The OpenClaw Compatibility Harness (D31) defines golden fixtures to ensure the proxy passes traffic correctly without breaking the bot\'s existing workflows.',
+    decisions: ['D31'],
+  },
+  barrier: {
+    title: 'aegis-barrier',
+    description: 'Checks whether the response triggered any unauthorized file writes. Uses three layers: a real-time filesystem watcher (inotify/FSEvents), a 60-second hash sweep, and an outbound proxy interlock using short-lived WriteTokens. If a file changed without a valid token, it\'s flagged as unauthorized.',
+    decisions: ['D5'],
+  },
+  memory: {
+    title: 'aegis-memory',
+    description: 'Monitors memory files (MEMORY.md, SOUL.md, etc.) for unauthorized changes or injection attempts. Uses heuristic screening. Which files are monitored is defined by D11. In Phase 1 this is observe-only per D30.',
+    decisions: ['D11', 'D30'],
+  },
+  evidence: {
+    title: 'aegis-evidence',
+    description: 'Stamps a signed receipt for every significant event. Receipts are hash-chained (SHA-256), time-ordered (UUID v7), and stored in local SQLite. The receipt schema is defined by D1. The wire format rules (how data is serialized before signing) are defined by D2.',
+    decisions: ['D1', 'D2'],
+  },
+  crypto: {
+    title: 'aegis-crypto',
+    description: 'Signs every receipt with the bot\'s Ed25519 identity key, derived from a BIP-39 mnemonic via SLIP-0010 (D0). Handles all cryptographic primitives: SHA-256 hashing, Ed25519 signing, AES-256-GCM encryption, and RFC 8785 JCS canonical serialization (D2).',
+    decisions: ['D0', 'D2'],
+  },
+  gateway: {
+    title: 'Cluster Gateway',
+    description: 'The cluster-side endpoint that receives evidence batches from adapters. Authentication uses the NC-Ed25519 stateless header scheme (D3). The adapter uses the transport key (m/44\'/784\'/3\'/0\') to sign requests — not the root identity key. NATS is internal-only; adapters never touch it directly.',
+    decisions: ['D3'],
+  },
+  trustmark: {
+    title: 'TRUSTMARK Scoring',
+    description: 'Computes a trust score per bot from 6 weighted dimensions (D13). Score gates tier access (D14). Old evidence loses weight over time via temporal decay (D15). Scores are used for mesh routing priority and evaluator accountability.',
+    decisions: ['D13', 'D14', 'D15'],
+  },
+  botawiki: {
+    title: 'Botawiki',
+    description: 'A distributed knowledge base shared across the bot network. Claims go through quarantine (D22) before becoming canonical. Each namespace has minimum source diversity requirements (D29). Seeded with initial content at launch (D17).',
+    decisions: ['D17', 'D22', 'D29'],
+  },
+  dashboard: {
+    title: 'aegis-dashboard',
+    description: 'An embedded local dashboard (<50KB). Polls the adapter REST API every 2 seconds (D12) to show receipt history, barrier alerts, and badge progress. Badge thresholds are defined in D16.',
+    decisions: ['D12', 'D16'],
+  },
+  failure: {
+    title: 'aegis-failure',
+    description: 'Monitors the adapter itself for anomalies. Tracks heartbeats, detects unusual patterns, and triggers rollback when needed. Runs independently from the main request pipeline.',
+    decisions: [],
+  },
+  cli: {
+    title: 'aegis-cli',
+    description: 'Command-line interface for wardens. Commands: aegis init (generate identity, first scan), aegis status (show current state), aegis evolve (managed file edit with diff + confirm + receipt). The evolution flow uses a file lock to prevent concurrent edits.',
+    decisions: [],
+  },
+};
+
+let activeBadge = null;
+
+function showDecision(id) {
+  const d = decisions[id];
+  if (!d) return;
+
+  // clear node highlights
+  document.querySelectorAll('.node').forEach(n => n.classList.remove('active'));
+
+  // highlight badge
+  if (activeBadge) activeBadge.classList.remove('badge-active-locked', 'badge-active-pending');
+  activeBadge = event?.target || null;
+  if (activeBadge) {
+    activeBadge.classList.add(d.status === 'locked' ? 'badge-active-locked' : 'badge-active-pending');
+  }
+
+  renderPanel(d.status === 'locked' ? 'locked' : 'pending', `
+    <div class="panel-header">
+      <div>
+        <span class="panel-id ${d.status === 'locked' ? 'panel-id-locked' : 'panel-id-pending'}">${d.id} — ${d.status === 'locked' ? '🔒 Locked' : '⏳ Pending'}</span>
+        <div class="panel-title">${d.title}</div>
+        <div class="panel-phase">
+          <span class="phase-tag phase-tag-${d.phase}">Phase ${d.phase}</span>
+        </div>
+      </div>
+      <button class="close-btn" onclick="closePanel()">×</button>
+    </div>
+    <div class="panel-section">What</div>
+    <div class="panel-text">${d.what}</div>
+    <div class="panel-section">${d.status === 'locked' ? 'Answer' : 'Proposed Default'}</div>
+    <ul class="panel-list">${d.answer.map(a => `<li>${a}</li>`).join('')}</ul>
+    ${d.code ? `<div class="panel-section">Detail</div><div class="panel-code">${d.code}</div>` : ''}
+  `);
+}
+
+function showNode(id) {
+  const n = nodes[id];
+  if (!n) return;
+
+  document.querySelectorAll('.node').forEach(nd => nd.classList.remove('active'));
+  event?.currentTarget?.classList.add('active');
+
+  const decisionLinks = n.decisions.map(did => {
+    const d = decisions[did];
+    if (!d) return '';
+    return `<span class="badge ${d.status === 'locked' ? 'badge-locked' : 'badge-pending'}"
+      style="cursor:pointer;font-size:11px;padding:3px 8px"
+      onclick="showDecision('${did}')">${did}: ${d.title}</span>`;
+  }).join('');
+
+  renderPanel('node', `
+    <div class="panel-header">
+      <div>
+        <div class="panel-title">${n.title}</div>
+      </div>
+      <button class="close-btn" onclick="closePanel()">×</button>
+    </div>
+    <div class="panel-section">What it does</div>
+    <div class="panel-text">${n.description}</div>
+    ${n.decisions.length > 0 ? `
+      <div class="panel-section">Related Decisions</div>
+      <div class="badges" style="justify-content:flex-start;flex-direction:column;gap:6px;margin-top:6px">${decisionLinks}</div>
+    ` : ''}
+  `);
+}
+
+function renderPanel(type, html) {
+  document.getElementById('panel-empty').style.display = 'none';
+  const content = document.getElementById('panel-content');
+  content.style.display = 'block';
+  content.innerHTML = html;
+}
+
+function closePanel() {
+  document.getElementById('panel-empty').style.display = 'block';
+  document.getElementById('panel-content').style.display = 'none';
+  document.querySelectorAll('.node').forEach(n => n.classList.remove('active'));
+  if (activeBadge) {
+    activeBadge.classList.remove('badge-active-locked', 'badge-active-pending');
+    activeBadge = null;
+  }
+}
+</script>
+</body>
+</html>

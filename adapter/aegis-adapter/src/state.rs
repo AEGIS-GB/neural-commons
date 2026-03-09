@@ -7,6 +7,9 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use aegis_evidence::EvidenceRecorder;
+use tokio::sync::broadcast;
+
+pub use aegis_dashboard::DashboardAlert;
 
 use crate::mode::ModeController;
 use crate::replay::{MonotonicCounter, NonceRegistry};
@@ -38,6 +41,11 @@ pub struct AdapterState {
 
     /// Upstream URL.
     pub upstream_url: String,
+
+    /// Broadcast channel for pushing critical alerts to SSE clients.
+    /// Sender is cloned into each subsystem that can generate alerts.
+    /// SSE handler calls `.subscribe()` to get a per-connection receiver.
+    pub alert_tx: broadcast::Sender<DashboardAlert>,
 }
 
 impl AdapterState {
@@ -100,6 +108,7 @@ mod tests {
     fn make_state() -> AdapterState {
         let key = generate_keypair();
         let recorder = Arc::new(EvidenceRecorder::new_in_memory(key).unwrap());
+        let (alert_tx, _) = broadcast::channel(32);
         AdapterState {
             evidence: recorder,
             mode: Arc::new(ModeController::default()),
@@ -109,6 +118,7 @@ mod tests {
             data_dir: PathBuf::from(".aegis"),
             listen_addr: "127.0.0.1:8080".into(),
             upstream_url: "http://localhost:11434".into(),
+            alert_tx,
         }
     }
 

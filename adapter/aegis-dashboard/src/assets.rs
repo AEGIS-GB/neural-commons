@@ -82,14 +82,49 @@ body{font-family:system-ui,-apple-system,sans-serif;background:#0f1117;color:#e1
 <div class="panel" id="panel-alerts"><div class="card"><h2>Emergency Alerts</h2><p>No alerts.</p></div></div>
 </div>
 <script>
+let activeTab='overview';
+let pageVisible=!document.hidden;
+let failCount=0;
 document.querySelectorAll('.tab').forEach(t=>{
   t.addEventListener('click',()=>{
     document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));
     document.querySelectorAll('.panel').forEach(x=>x.classList.remove('active'));
     t.classList.add('active');
     document.getElementById('panel-'+t.dataset.tab).classList.add('active');
+    activeTab=t.dataset.tab;
   });
 });
+document.addEventListener('visibilitychange',()=>{
+  pageVisible=!document.hidden;
+  if(pageVisible){poll();}
+});
+const alertSource=new EventSource('/dashboard/api/alerts/stream');
+alertSource.onmessage=(e)=>{
+  try{
+    const alert=JSON.parse(e.data);
+    showAlert(alert);
+  }catch{}
+};
+// alertSource.onerror: EventSource reconnects automatically, no code needed.
+// The 5s fallback poll below catches anything missed during reconnect gap.
+function showAlert(alert){
+  const panel=document.getElementById('panel-alerts');
+  if(!panel)return;
+  const card=panel.querySelector('.card');
+  if(!card)return;
+  const el=document.createElement('div');
+  el.style.cssText='padding:8px;margin-bottom:8px;background:#2d1f1f;border:1px solid #da3633;border-radius:4px;font-size:13px';
+  el.textContent='['+new Date(alert.ts_ms).toLocaleTimeString()+'] '+alert.kind+': '+alert.message;
+  card.insertBefore(el,card.firstChild);
+}
+async function fetchAlerts(){
+  try{
+    const a=await(await fetch('/dashboard/api/alerts')).json();
+    // Fallback only — SSE is primary. This catches alerts missed during
+    // EventSource reconnect gaps (RecvError::Lagged on the Rust side).
+    if(a.alerts&&a.alerts.length>0){a.alerts.forEach(showAlert);}
+  }catch(e){}
+}
 async function poll(){
   try{
     const s=await(await fetch('/dashboard/api/status')).json();
@@ -101,21 +136,30 @@ async function poll(){
     const badge=document.getElementById('mode-badge');
     badge.textContent=s.mode.replace('_',' ');
     badge.className='mode-badge mode-'+s.mode.split('_')[0];
-  }catch(e){}
-  try{
-    const e=await(await fetch('/dashboard/api/evidence')).json();
-    document.getElementById('evidence-info').textContent=
-      'Chain head: seq '+e.chain_head_seq+' | Total: '+e.total_receipts+' receipts';
-  }catch(e){}
-  try{
-    const m=await(await fetch('/dashboard/api/memory')).json();
-    document.getElementById('memory-info').textContent=
-      'Tracked: '+m.tracked_files+' files | Changes: '+m.changes_detected+
-      ' | Unacknowledged: '+m.unacknowledged_changes;
-  }catch(e){}
+    failCount=0;
+  }catch(e){
+    if(++failCount>=5)document.getElementById('stat-health').textContent='Disconnected';
+  }
+  if(!pageVisible)return;
+  if(activeTab==='evidence'||activeTab==='overview'){
+    try{
+      const e=await(await fetch('/dashboard/api/evidence')).json();
+      document.getElementById('evidence-info').textContent=
+        'Chain head: seq '+e.chain_head_seq+' | Total: '+e.total_receipts+' receipts';
+    }catch(e){}
+  }
+  if(activeTab==='memory'||activeTab==='overview'){
+    try{
+      const m=await(await fetch('/dashboard/api/memory')).json();
+      document.getElementById('memory-info').textContent=
+        'Tracked: '+m.tracked_files+' files | Changes: '+m.changes_detected+
+        ' | Unacknowledged: '+m.unacknowledged_changes;
+    }catch(e){}
+  }
 }
-poll();
-setInterval(poll,2000);
+function schedule(fn,ms){fn().finally(()=>setTimeout(()=>schedule(fn,ms),ms));}
+schedule(poll,2000);
+schedule(fetchAlerts,5000);
 </script>
 </body>
 </html>"#;

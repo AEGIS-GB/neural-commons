@@ -86,6 +86,8 @@ pub async fn start(
         .map_err(|e| StartupError::Evidence(format!("{e}")))?;
     let recorder = Arc::new(recorder);
 
+    let (alert_tx, _) = tokio::sync::broadcast::channel::<aegis_dashboard::DashboardAlert>(32);
+
     let chain_head = recorder.chain_head();
     info!(
         seq = chain_head.head_seq,
@@ -103,10 +105,27 @@ pub async fn start(
         data_dir: data_dir.clone(),
         listen_addr: config.proxy.listen_addr.clone(),
         upstream_url: config.proxy.upstream_url.clone(),
+        alert_tx: alert_tx.clone(),
     });
 
+    // 5b. Build dashboard shared state
+    let dashboard_state = Arc::new(aegis_dashboard::DashboardSharedState {
+        alert_tx: alert_tx.clone(),
+        evidence: recorder.clone(),
+        mode_fn: Arc::new({
+            let mc = mode_controller.clone();
+            move || match mc.current() {
+                crate::Mode::ObserveOnly => "observe_only",
+                crate::Mode::Enforce => "enforce",
+                crate::Mode::PassThrough => "pass_through",
+            }
+        }),
+        start_time,
+    });
+    let _dashboard_router = aegis_dashboard::routes::routes(dashboard_state);
+
     // 6. Create middleware hooks
-    let hooks = create_middleware_hooks(recorder.clone(), mode);
+    let hooks = create_middleware_hooks(recorder.clone(), mode, alert_tx.clone());
 
     // 7. Build proxy config
     let proxy_config = ProxyConfig {
@@ -161,6 +180,7 @@ pub async fn start(
 fn create_middleware_hooks(
     recorder: Arc<EvidenceRecorder>,
     mode: Mode,
+    alert_tx: tokio::sync::broadcast::Sender<aegis_dashboard::DashboardAlert>,
 ) -> MiddlewareHooks {
     match mode {
         Mode::PassThrough => {
@@ -172,7 +192,7 @@ fn create_middleware_hooks(
         _ => {
             info!("middleware hooks: evidence=yes vault=yes barrier=stub slm=stub");
             MiddlewareHooks {
-                evidence: Some(Arc::new(EvidenceHookImpl { recorder })),
+                evidence: Some(Arc::new(EvidenceHookImpl { recorder, alert_tx })),
                 barrier: Some(Arc::new(BarrierHookImpl)),
                 slm: Some(Arc::new(SlmHookImpl)),
                 vault: Some(Arc::new(VaultHookImpl)),
@@ -271,7 +291,8 @@ mod tests {
     fn create_hooks_observe_only() {
         let key = ed25519::generate_keypair();
         let recorder = Arc::new(EvidenceRecorder::new_in_memory(key).unwrap());
-        let hooks = create_middleware_hooks(recorder, Mode::ObserveOnly);
+        let (alert_tx, _) = tokio::sync::broadcast::channel(32);
+        let hooks = create_middleware_hooks(recorder, Mode::ObserveOnly, alert_tx);
         assert!(hooks.evidence.is_some());
         assert!(hooks.barrier.is_some());
         assert!(hooks.slm.is_some());
@@ -282,7 +303,8 @@ mod tests {
     fn create_hooks_pass_through() {
         let key = ed25519::generate_keypair();
         let recorder = Arc::new(EvidenceRecorder::new_in_memory(key).unwrap());
-        let hooks = create_middleware_hooks(recorder, Mode::PassThrough);
+        let (alert_tx, _) = tokio::sync::broadcast::channel(32);
+        let hooks = create_middleware_hooks(recorder, Mode::PassThrough, alert_tx);
         assert!(hooks.evidence.is_none());
         assert!(hooks.barrier.is_none());
         assert!(hooks.slm.is_none());

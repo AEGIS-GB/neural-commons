@@ -1,0 +1,1556 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Aegis — Full Flow & Decision Map</title>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600&family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg: #080a0d;
+  --surface: #0e1117;
+  --surface2: #131820;
+  --border: #1c2330;
+  --border2: #242e3d;
+  --locked: #22c55e;
+  --locked-dim: rgba(34,197,94,0.12);
+  --locked-border: rgba(34,197,94,0.3);
+  --pending: #f59e0b;
+  --pending-dim: rgba(245,158,11,0.1);
+  --pending-border: rgba(245,158,11,0.3);
+  --absorbed: #6366f1;
+  --absorbed-dim: rgba(99,102,241,0.1);
+  --flow: #3b82f6;
+  --flow-dim: rgba(59,130,246,0.15);
+  --block: #ef4444;
+  --block-dim: rgba(239,68,68,0.08);
+  --text: #b0bec5;
+  --text-bright: #ecf0f1;
+  --dim: #4a5568;
+  --phase1: #3b82f6;
+  --phase2: #8b5cf6;
+  --phase3: #06b6d4;
+  --panel-w: 380px;
+}
+* { margin:0; padding:0; box-sizing:border-box; }
+html { scroll-behavior: smooth; }
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: 'DM Sans', sans-serif;
+  font-size: 13px;
+  min-height: 100vh;
+}
+
+/* ── TOP BAR ── */
+.topbar {
+  position: sticky; top:0; z-index: 50;
+  background: rgba(8,10,13,0.95);
+  backdrop-filter: blur(12px);
+  border-bottom: 1px solid var(--border);
+  padding: 0 24px;
+  display: flex; align-items: center; gap: 20px;
+  height: 52px;
+}
+.topbar-title {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 12px; font-weight: 600;
+  color: var(--text-bright);
+  letter-spacing: 0.06em; text-transform: uppercase;
+  white-space: nowrap;
+}
+.topbar-sep { color: var(--dim); }
+.filters { display: flex; gap: 6px; flex-wrap: wrap; }
+.filter-btn {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px; font-weight: 500;
+  padding: 4px 10px; border-radius: 3px; border: 1px solid var(--border2);
+  background: transparent; color: var(--dim); cursor: pointer;
+  transition: all 0.15s; letter-spacing: 0.04em;
+}
+.filter-btn:hover { color: var(--text); border-color: var(--border2); }
+.filter-btn.active { background: var(--border2); color: var(--text-bright); border-color: var(--border2); }
+.filter-btn.locked-f { border-color: var(--locked-border); color: var(--locked); background: var(--locked-dim); }
+.filter-btn.pending-f { border-color: var(--pending-border); color: var(--pending); background: var(--pending-dim); }
+
+.stats { margin-left: auto; display: flex; gap: 16px; }
+.stat-item { font-family: 'JetBrains Mono', monospace; font-size: 10px; color: var(--dim); }
+.stat-item span { color: var(--text); }
+
+/* ── LAYOUT ── */
+.layout { display: flex; }
+.flow-col {
+  flex: 1;
+  padding: 28px 28px 80px;
+  transition: padding-right 0.3s;
+  min-width: 0;
+}
+.flow-col.panel-open { padding-right: calc(var(--panel-w) + 28px); }
+
+/* ── PHASE HEADER ── */
+.phase-header {
+  display: flex; align-items: center; gap: 14px;
+  margin: 32px 0 20px;
+}
+.phase-header:first-child { margin-top: 0; }
+.phase-badge {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px; font-weight: 600;
+  padding: 4px 10px; border-radius: 3px;
+  letter-spacing: 0.06em; white-space: nowrap;
+}
+.ph1 { background: rgba(59,130,246,0.12); color: #60a5fa; border: 1px solid rgba(59,130,246,0.25); }
+.ph2 { background: rgba(139,92,246,0.12); color: #a78bfa; border: 1px solid rgba(139,92,246,0.25); }
+.ph3a { background: rgba(6,182,212,0.12); color: #22d3ee; border: 1px solid rgba(6,182,212,0.25); }
+.ph3b { background: rgba(6,182,212,0.08); color: #67e8f9; border: 1px solid rgba(6,182,212,0.2); }
+.phase-line { flex:1; height:1px; background: var(--border); }
+.phase-note { font-size: 11px; color: var(--dim); font-family: 'JetBrains Mono', monospace; }
+
+/* ── STEP ── */
+.step {
+  display: grid;
+  grid-template-columns: 72px 1fr;
+  gap: 0 16px;
+  position: relative;
+  margin-bottom: 0;
+}
+
+.step-connector {
+  grid-column: 1;
+  display: flex; flex-direction: column; align-items: center;
+}
+.step-icon {
+  width: 32px; height: 32px; border-radius: 50%;
+  border: 1px solid var(--border2);
+  display: flex; align-items: center; justify-content: center;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px; font-weight: 600;
+  color: var(--dim); background: var(--surface);
+  flex-shrink: 0; position: relative; z-index: 2;
+  transition: all 0.2s;
+}
+.step-icon.ph1c { border-color: rgba(59,130,246,0.4); color: #60a5fa; }
+.step-icon.ph2c { border-color: rgba(139,92,246,0.4); color: #a78bfa; }
+.step-icon.ph3c { border-color: rgba(6,182,212,0.4); color: #22d3ee; }
+.step-line {
+  flex: 1; width: 1px; background: var(--border);
+  margin: 3px 0; min-height: 20px;
+}
+
+.step-body { padding-bottom: 24px; }
+
+.step-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px 16px;
+  margin-bottom: 10px;
+}
+.step-card:hover { border-color: var(--border2); }
+.step-label {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 9px; color: var(--dim);
+  letter-spacing: 0.08em; text-transform: uppercase;
+  margin-bottom: 4px;
+}
+.step-title {
+  font-size: 13px; font-weight: 500;
+  color: var(--text-bright); margin-bottom: 6px;
+}
+.step-desc { font-size: 12px; color: var(--dim); line-height: 1.6; font-weight: 300; }
+
+/* ── BRANCH ── */
+.branch-row {
+  display: flex; gap: 10px; margin-bottom: 10px;
+}
+.branch {
+  flex: 1; border-radius: 5px; padding: 10px 12px;
+  font-size: 11px; line-height: 1.6;
+}
+.branch.ok {
+  background: rgba(34,197,94,0.05);
+  border: 1px solid rgba(34,197,94,0.2);
+}
+.branch.bad {
+  background: rgba(239,68,68,0.05);
+  border: 1px solid rgba(239,68,68,0.2);
+}
+.branch-tag {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 9px; font-weight: 600;
+  letter-spacing: 0.06em; margin-bottom: 4px;
+  display: flex; align-items: center; gap: 6px;
+}
+.branch.ok .branch-tag { color: var(--locked); }
+.branch.bad .branch-tag { color: var(--block); }
+.branch-body { color: var(--dim); }
+
+/* ── DECISION TAGS ── */
+.d-tags { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+.d-tag {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px; font-weight: 500;
+  padding: 3px 9px; border-radius: 3px; cursor: pointer;
+  transition: all 0.15s; display: flex; align-items: center; gap: 5px;
+  border: 1px solid;
+}
+.d-tag.locked {
+  background: var(--locked-dim); color: var(--locked);
+  border-color: var(--locked-border);
+}
+.d-tag.locked:hover { background: rgba(34,197,94,0.2); }
+.d-tag.pending {
+  background: var(--pending-dim); color: var(--pending);
+  border-color: var(--pending-border);
+  border-left-style: dashed;
+}
+.d-tag.pending:hover { background: rgba(245,158,11,0.18); }
+.d-tag.absorbed {
+  background: var(--absorbed-dim); color: var(--absorbed);
+  border-color: rgba(99,102,241,0.3);
+  opacity: 0.7;
+}
+.d-tag .d-dot { width:5px; height:5px; border-radius:50%; background: currentColor; flex-shrink:0; }
+
+/* ── PARALLEL BLOCK ── */
+.parallel-header {
+  display: flex; align-items: center; gap: 10px;
+  margin: 4px 0 12px;
+}
+.parallel-header span {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 9px; color: var(--dim);
+  text-transform: uppercase; letter-spacing: 0.08em; white-space: nowrap;
+}
+.parallel-header::before, .parallel-header::after {
+  content: ''; flex: 1; height: 1px; background: var(--border);
+}
+
+/* ── SIDE PANEL ── */
+.side-panel {
+  position: fixed; top: 52px; right: 0; bottom: 0;
+  width: var(--panel-w);
+  background: var(--surface2);
+  border-left: 1px solid var(--border);
+  display: flex; flex-direction: column;
+  transform: translateX(var(--panel-w));
+  transition: transform 0.25s cubic-bezier(0.4,0,0.2,1);
+  z-index: 40; overflow: hidden;
+}
+.side-panel.open { transform: translateX(0); }
+
+.panel-header {
+  padding: 16px 18px;
+  border-bottom: 1px solid var(--border);
+  display: flex; align-items: flex-start; gap: 10px;
+}
+.panel-id {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 12px; font-weight: 600;
+  flex-shrink: 0;
+}
+.panel-id.locked { color: var(--locked); }
+.panel-id.pending { color: var(--pending); }
+.panel-id.absorbed { color: var(--absorbed); }
+.panel-title { font-size: 13px; font-weight: 500; color: var(--text-bright); line-height: 1.4; }
+.panel-close {
+  margin-left: auto; background: none; border: none;
+  color: var(--dim); cursor: pointer; font-size: 16px;
+  padding: 2px 6px; border-radius: 3px; flex-shrink: 0;
+}
+.panel-close:hover { color: var(--text); background: var(--border); }
+.panel-body {
+  flex: 1; overflow-y: auto; padding: 18px;
+  scrollbar-width: thin; scrollbar-color: var(--border) transparent;
+}
+.panel-section { margin-bottom: 18px; }
+.panel-section-label {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 9px; color: var(--dim);
+  text-transform: uppercase; letter-spacing: 0.08em;
+  margin-bottom: 6px;
+}
+.panel-status {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-family: 'JetBrains Mono', monospace; font-size: 10px;
+  padding: 3px 8px; border-radius: 3px; border: 1px solid;
+}
+.panel-status.locked { color: var(--locked); background: var(--locked-dim); border-color: var(--locked-border); }
+.panel-status.pending { color: var(--pending); background: var(--pending-dim); border-color: var(--pending-border); }
+.panel-status.absorbed { color: var(--absorbed); background: var(--absorbed-dim); border-color: rgba(99,102,241,0.3); }
+.panel-text {
+  font-size: 12px; color: var(--dim); line-height: 1.7; font-weight: 300;
+}
+.panel-code {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px; background: var(--surface);
+  border: 1px solid var(--border); border-radius: 4px;
+  padding: 10px 12px; color: var(--text);
+  line-height: 1.7; white-space: pre-wrap; word-break: break-word;
+}
+.panel-needs {
+  font-size: 11px; color: var(--pending);
+  background: rgba(245,158,11,0.06);
+  border: 1px solid var(--pending-border);
+  border-radius: 4px; padding: 10px 12px;
+  line-height: 1.6;
+}
+.panel-needs-label {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 9px; color: var(--pending);
+  letter-spacing: 0.06em; margin-bottom: 5px;
+  text-transform: uppercase;
+}
+.blocks-list { display: flex; flex-wrap: wrap; gap: 5px; }
+.block-chip {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 9px; color: #60a5fa;
+  background: rgba(59,130,246,0.1); border: 1px solid rgba(59,130,246,0.2);
+  padding: 2px 7px; border-radius: 3px;
+}
+
+/* ── HIGHLIGHT ── */
+.d-tag.active { outline: 2px solid currentColor; outline-offset: 1px; }
+
+/* ── MISC ── */
+code {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px; background: var(--border); padding: 1px 5px; border-radius: 2px;
+  color: #93c5fd;
+}
+.hidden { display: none !important; }
+
+@media (max-width: 640px) {
+  .step { grid-template-columns: 40px 1fr; }
+  .side-panel { width: 100%; }
+  :root { --panel-w: 100%; }
+}
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <div class="topbar-title">Aegis Flow Map</div>
+  <div class="topbar-sep">/</div>
+  <div class="filters">
+    <button class="filter-btn active" data-filter="all">All</button>
+    <button class="filter-btn locked-f" data-filter="locked">🔒 Locked</button>
+    <button class="filter-btn pending-f" data-filter="pending">⏳ Pending</button>
+    <button class="filter-btn" data-filter="ph1" style="color:#60a5fa;border-color:rgba(59,130,246,0.3)">Phase 1</button>
+    <button class="filter-btn" data-filter="ph2" style="color:#a78bfa;border-color:rgba(139,92,246,0.3)">Phase 2</button>
+    <button class="filter-btn" data-filter="ph3" style="color:#22d3ee;border-color:rgba(6,182,212,0.3)">Phase 3</button>
+  </div>
+  <div class="stats">
+    <div class="stat-item">Locked: <span style="color:var(--locked)">9</span></div>
+    <div class="stat-item">Pending: <span style="color:var(--pending)">25</span></div>
+    <div class="stat-item">Total: <span>34</span></div>
+  </div>
+</div>
+
+<div class="layout">
+  <div class="flow-col" id="flowCol">
+
+    <!-- ═══════════════════════════ PHASE 1 ═══════════════════════════ -->
+    <div class="phase-header" data-phase="ph1">
+      <div class="phase-badge ph1">Phase 1 — Local Adapter</div>
+      <div class="phase-line"></div>
+      <div class="phase-note">Ships as one binary. Partial = open attack surface.</div>
+    </div>
+
+    <!-- STEP 1 -->
+    <div class="step" data-phase="ph1">
+      <div class="step-connector">
+        <div class="step-icon ph1c">01</div>
+        <div class="step-line"></div>
+      </div>
+      <div class="step-body">
+        <div class="step-card">
+          <div class="step-label">Inbound — OpenClaw → Proxy</div>
+          <div class="step-title">Request enters the adapter</div>
+          <div class="step-desc">OpenClaw sends an LLM API call. The warden has set <code>baseURL</code> to the adapter's local port. The Aegis proxy intercepts the request before it reaches the cloud LLM. The request body is read and hashed.</div>
+          <div class="d-tags">
+            <div class="d-tag pending" data-id="D31" title="Click to view">D31 <div class="d-dot"></div></div>
+            <div class="d-tag pending" data-id="D30" title="Click to view">D30 <div class="d-dot"></div></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- STEP 2 -->
+    <div class="step" data-phase="ph1">
+      <div class="step-connector">
+        <div class="step-icon ph1c">02</div>
+        <div class="step-line"></div>
+      </div>
+      <div class="step-body">
+        <div class="step-card">
+          <div class="step-label">Content Screening — SLM Loopback</div>
+          <div class="step-title">SLM screens the request body</div>
+          <div class="step-desc">The request body is passed to the on-device small language model (Llama 3.2 1B/3B, running locally). It checks against 14 pattern types and returns a structured result: pattern annotations, confidence in basis points, and intent classification. The adapter then runs deterministic scoring. The holster applies the threshold decision privately — it never leaves the device.</div>
+          <div class="d-tags">
+            <div class="d-tag locked" data-id="D4">D4 <div class="d-dot"></div></div>
+            <div class="d-tag absorbed" data-id="D6">D6 <div class="d-dot"></div></div>
+            <div class="d-tag absorbed" data-id="D8">D8 <div class="d-dot"></div></div>
+          </div>
+        </div>
+        <div class="branch-row">
+          <div class="branch bad">
+            <div class="branch-tag">⬡ FLAGGED — score above threshold</div>
+            <div class="branch-body">Request quarantined. Receipt written: <code>slm_quarantine</code>. Synthetic error returned to OpenClaw. The cloud LLM never receives the request. Evidence chain updated.</div>
+          </div>
+          <div class="branch ok">
+            <div class="branch-tag">→ CLEAN — proceed</div>
+            <div class="branch-body">Content passes. Move to credential injection. No indication is sent to OpenClaw that screening occurred.</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- STEP 3 -->
+    <div class="step" data-phase="ph1">
+      <div class="step-connector">
+        <div class="step-icon ph1c">03</div>
+        <div class="step-line"></div>
+      </div>
+      <div class="step-body">
+        <div class="step-card">
+          <div class="step-label">Credential Handling — Vault</div>
+          <div class="step-title">Credentials injected from encrypted vault</div>
+          <div class="step-desc">The adapter pulls the real API key from the AES-256-GCM encrypted vault. The vault checks the per-tool access policy before releasing any secret. OpenClaw is never given the real key — it only ever sees the adapter's local address. Credential-class files are never sent to any non-local SLM for analysis.</div>
+          <div class="d-tags">
+            <div class="d-tag pending" data-id="D9">D9 <div class="d-dot"></div></div>
+            <div class="d-tag locked" data-id="D0">D0 <div class="d-dot"></div></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- STEP 4 -->
+    <div class="step" data-phase="ph1">
+      <div class="step-connector">
+        <div class="step-icon ph1c">04</div>
+        <div class="step-line"></div>
+      </div>
+      <div class="step-body">
+        <div class="step-card">
+          <div class="step-label">Upstream — Forward to Cloud LLM</div>
+          <div class="step-title">Request forwarded to the cloud LLM</div>
+          <div class="step-desc">The adapter sends the request to the upstream provider (Claude, GPT, etc.) using the injected key. Streaming SSE responses are passed through incrementally. Auth to the NC Cluster (when Tier 2 is active) uses a separate transport key derived independently — not the root signing key.</div>
+          <div class="d-tags">
+            <div class="d-tag locked" data-id="D3">D3 <div class="d-dot"></div></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- STEP 5 -->
+    <div class="step" data-phase="ph1">
+      <div class="step-connector">
+        <div class="step-icon ph1c">05</div>
+        <div class="step-line"></div>
+      </div>
+      <div class="step-body">
+        <div class="step-card">
+          <div class="step-label">Response + Evidence</div>
+          <div class="step-title">Response returned to OpenClaw + receipt written</div>
+          <div class="step-desc">The adapter passes the LLM response back to OpenClaw. A signed receipt is appended to the local SQLite evidence chain: UUID v7 (time-ordered), SHA-256 body hash, Ed25519 signature using the signing key, and a link to the previous receipt (hash chain). Hourly Merkle rollups batch receipts for cluster submission.</div>
+          <div class="d-tags">
+            <div class="d-tag locked" data-id="D1">D1 <div class="d-dot"></div></div>
+            <div class="d-tag locked" data-id="D2">D2 <div class="d-dot"></div></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- PARALLEL SECTION -->
+    <div class="step" data-phase="ph1">
+      <div class="step-connector">
+        <div class="step-icon ph1c" style="font-size:8px">PAR</div>
+        <div class="step-line"></div>
+      </div>
+      <div class="step-body">
+        <div class="parallel-header"><span>Running in parallel — filesystem + dashboard</span></div>
+
+        <div class="step-card" style="margin-bottom:10px">
+          <div class="step-label">Parallel A — Write Barrier</div>
+          <div class="step-title">Filesystem write detection (3-layer)</div>
+          <div class="step-desc">Layer 1: real-time filesystem watcher (inotify/FSEvents/ReadDirectoryChangesW). Layer 2: 60-second periodic hash sweep — catches missed events, inode swaps, symlink attacks. Layer 3: proxy interlock — checks WriteToken before forwarding any write result. Any unrecognized write generates a <code>write_event</code> receipt. Credential-class files auto-promoted to Structural severity.</div>
+          <div class="d-tags">
+            <div class="d-tag locked" data-id="D5">D5 <div class="d-dot"></div></div>
+            <div class="d-tag absorbed" data-id="D7">D7 <div class="d-dot"></div></div>
+          </div>
+        </div>
+
+        <div class="step-card" style="margin-bottom:10px">
+          <div class="step-label">Parallel B — Memory Integrity</div>
+          <div class="step-title">Memory file write interception</div>
+          <div class="step-desc">If the write targets a monitored memory file, the content is routed through the SLM before the write lands on disk. Clean writes are allowed. Suspicious writes are blocked in enforce mode, logged in observe-only. Either way, a receipt is written. Configurable glob patterns extend monitoring beyond the defaults.</div>
+          <div class="d-tags">
+            <div class="d-tag pending" data-id="D11">D11 <div class="d-dot"></div></div>
+            <div class="d-tag locked" data-id="D4">D4 <div class="d-dot"></div></div>
+          </div>
+        </div>
+
+        <div class="step-card">
+          <div class="step-label">Parallel C — Dashboard</div>
+          <div class="step-title">Local dashboard (localhost:8443)</div>
+          <div class="step-desc">A static single-file dashboard (<50KB) embedded in the binary. 6 tabs: Overview, Evidence Explorer, Vulnerability Scan, Service Access, Memory Health, Emergency Alerts. Reads from the adapter's local REST API. Refresh interval and mechanism (polling vs SSE) is a pending decision.</div>
+          <div class="d-tags">
+            <div class="d-tag pending" data-id="D12">D12 <div class="d-dot"></div></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ═══════════════════════════ PHASE 2 ═══════════════════════════ -->
+    <div class="phase-header" data-phase="ph2">
+      <div class="phase-badge ph2">Phase 2 — Identity + Cluster</div>
+      <div class="phase-line"></div>
+      <div class="phase-note">Bot gets a cryptographic identity. Connects to the NC Cluster.</div>
+    </div>
+
+    <!-- STEP 6 -->
+    <div class="step" data-phase="ph2">
+      <div class="step-connector">
+        <div class="step-icon ph2c">06</div>
+        <div class="step-line"></div>
+      </div>
+      <div class="step-body">
+        <div class="step-card">
+          <div class="step-label">Identity Activation</div>
+          <div class="step-title">Bot generates cryptographic identity</div>
+          <div class="step-desc">The warden runs <code>aegis evolve</code> (or equivalent). A BIP-39 24-word mnemonic is generated. SLIP-0010 derives 4 domain-separated Ed25519 keypairs (signing, mesh encryption, vault KDF, transport auth). An Agent Certificate is issued. The bot now has a permanent, portable identity tied to the evidence chain.</div>
+          <div class="d-tags">
+            <div class="d-tag locked" data-id="D0">D0 <div class="d-dot"></div></div>
+            <div class="d-tag pending" data-id="D18">D18 <div class="d-dot"></div></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- STEP 7 -->
+    <div class="step" data-phase="ph2">
+      <div class="step-connector">
+        <div class="step-icon ph2c">07</div>
+        <div class="step-line"></div>
+      </div>
+      <div class="step-body">
+        <div class="step-card">
+          <div class="step-label">Cluster Connection — NATS Leaf Node</div>
+          <div class="step-title">Adapter connects to NC Cluster via NATS leaf node</div>
+          <div class="step-desc">The adapter opens an outbound NATS leaf node connection to the Edge Gateway. All traffic is authenticated with the NC-Ed25519 transport key. The cluster never sees plaintext — the adapter only sends encrypted payloads and signed receipts. Hourly Merkle rollups are submitted via <code>POST /evidence/batch</code>.</div>
+          <div class="d-tags">
+            <div class="d-tag locked" data-id="D3">D3 <div class="d-dot"></div></div>
+            <div class="d-tag pending" data-id="D24">D24 <div class="d-dot"></div></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- STEP 8 -->
+    <div class="step" data-phase="ph2">
+      <div class="step-connector">
+        <div class="step-icon ph2c">08</div>
+        <div class="step-line"></div>
+      </div>
+      <div class="step-body">
+        <div class="step-card">
+          <div class="step-label">Botawiki Read Access</div>
+          <div class="step-title">Bot can query Botawiki (read-only, Tier 2)</div>
+          <div class="step-desc">On identity activation, the bot gains read access to the Botawiki community knowledge base. Rate-limited. Phase 2 delivers structured queries only (by hash, namespace, type). Semantic search activates in Phase 3b once the embedding service is available. Results are returned with confabulation scores and warden attestation counts.</div>
+          <div class="d-tags">
+            <div class="d-tag pending" data-id="D14">D14 <div class="d-dot"></div></div>
+            <div class="d-tag pending" data-id="D17">D17 <div class="d-dot"></div></div>
+            <div class="d-tag pending" data-id="D24">D24 <div class="d-dot"></div></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- STEP 9 -->
+    <div class="step" data-phase="ph2">
+      <div class="step-connector">
+        <div class="step-icon ph2c">09</div>
+        <div class="step-line"></div>
+      </div>
+      <div class="step-body">
+        <div class="step-card">
+          <div class="step-label">Trust Scoring — TRUSTMARK Engine</div>
+          <div class="step-title">Cluster begins computing TRUSTMARK score</div>
+          <div class="step-desc">The cluster ingests the bot's evidence chain receipts and computes a TRUSTMARK score from 6 weighted dimensions: relay reliability, persona integrity, chain integrity, contribution volume, temporal consistency, vault hygiene. Scores are deterministic — identical evidence always produces identical scores, to 6 decimal places. Older receipts lose weight via temporal decay.</div>
+          <div class="d-tags">
+            <div class="d-tag pending" data-id="D13">D13 <div class="d-dot"></div></div>
+            <div class="d-tag pending" data-id="D15">D15 <div class="d-dot"></div></div>
+            <div class="d-tag pending" data-id="D16">D16 <div class="d-dot"></div></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- STEP 10 -->
+    <div class="step" data-phase="ph2">
+      <div class="step-connector">
+        <div class="step-icon ph2c">10</div>
+        <div class="step-line"></div>
+      </div>
+      <div class="step-body">
+        <div class="step-card">
+          <div class="step-label">Tier Gate — Tier 1 → Tier 2</div>
+          <div class="step-title">Bot reaches full Tier 2 status</div>
+          <div class="step-desc">Full Tier 2 requires: identity activated + at least 72h of evidence history + vault active. Unlocks encrypted state backup to MinIO, higher Botawiki read rate limits, gamification metrics, and auto-updater. The specific thresholds are pending confirmation.</div>
+          <div class="d-tags">
+            <div class="d-tag pending" data-id="D14">D14 <div class="d-dot"></div></div>
+            <div class="d-tag pending" data-id="D32">D32 <div class="d-dot"></div></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ═══════════════════════════ PHASE 3A ═══════════════════════════ -->
+    <div class="phase-header" data-phase="ph3">
+      <div class="phase-badge ph3a">Phase 3A — Network (works at 10 participants)</div>
+      <div class="phase-line"></div>
+      <div class="phase-note">Mesh, Botawiki write, peer evaluation.</div>
+    </div>
+
+    <!-- STEP 11 -->
+    <div class="step" data-phase="ph3">
+      <div class="step-connector">
+        <div class="step-icon ph3c">11</div>
+        <div class="step-line"></div>
+      </div>
+      <div class="step-body">
+        <div class="step-card">
+          <div class="step-label">Evaluator Gateway — Tier 3 Admission</div>
+          <div class="step-title">Bot submits attestation package for peer evaluation</div>
+          <div class="step-desc">To reach Tier 3, a bot must pass peer evaluation: 3 evaluators must review an attestation package (evidence chain depth, TRUSTMARK score, capability proofs). 2 of 3 must approve. Evaluators are accountable — if an admitted bot misbehaves, the evaluator's TRUSTMARK score is penalised. Penalties fade over 180 days.</div>
+          <div class="d-tags">
+            <div class="d-tag pending" data-id="D14">D14 <div class="d-dot"></div></div>
+            <div class="d-tag pending" data-id="D20">D20 <div class="d-dot"></div></div>
+            <div class="d-tag pending" data-id="D22">D22 <div class="d-dot"></div></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- STEP 12 -->
+    <div class="step" data-phase="ph3">
+      <div class="step-connector">
+        <div class="step-icon ph3c">12</div>
+        <div class="step-line"></div>
+      </div>
+      <div class="step-body">
+        <div class="step-card">
+          <div class="step-label">Encrypted Mesh — Bot-to-Bot Communication</div>
+          <div class="step-title">Bot sends and receives encrypted mesh messages</div>
+          <div class="step-desc">Tier 3 bots can communicate directly through the encrypted mesh relay. All messages are SLM-screened on receipt — even messages from high-TRUSTMARK peers are screened. This blocks the Morris-II worm propagation pattern. Multi-hop routing selects relay nodes by TRUSTMARK² weighting (nodes below 0.3 excluded). Dead-drop messages persist for a configurable TTL.</div>
+          <div class="d-tags">
+            <div class="d-tag pending" data-id="D21">D21 <div class="d-dot"></div></div>
+            <div class="d-tag pending" data-id="D25">D25 <div class="d-dot"></div></div>
+            <div class="d-tag locked" data-id="D4">D4 <div class="d-dot"></div></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- STEP 13 -->
+    <div class="step" data-phase="ph3">
+      <div class="step-connector">
+        <div class="step-icon ph3c">13</div>
+        <div class="step-line"></div>
+      </div>
+      <div class="step-body">
+        <div class="step-card">
+          <div class="step-label">Botawiki Write — Claim Submission + Quarantine</div>
+          <div class="step-title">Bot submits knowledge claims to Botawiki</div>
+          <div class="step-desc">The adapter computes the embedding locally (zero-knowledge: cluster never sees plaintext). Claim content is AES-256-GCM encrypted. The adapter submits <code>[encrypted_payload, plaintext_vector]</code> to the cluster. The cluster can search the vectors but cannot read what they represent. The claim enters the quarantine pipeline for RAG poisoning defense.</div>
+          <div class="d-tags">
+            <div class="d-tag locked" data-id="D0">D0 <div class="d-dot"></div></div>
+            <div class="d-tag pending" data-id="D34">D34 <div class="d-dot"></div></div>
+            <div class="d-tag pending" data-id="D24">D24 <div class="d-dot"></div></div>
+          </div>
+        </div>
+
+        <div class="step-card" style="border-color: rgba(239,68,68,0.15); margin-top:0">
+          <div class="step-label">Sub-flow — RAG Poisoning Defense (3-stage pipeline)</div>
+          <div class="step-title">Quarantine pipeline validates the claim</div>
+          <div class="step-desc">Stage 1 <strong style="color:var(--block)">Temporal coherence</strong> — does this claim contradict established claims? Uses embedding similarity. Stage 2 <strong style="color:var(--pending)">Confabulation scoring</strong> — does the submitter's evidence chain actually support this claim? Rejects above threshold. Stage 3 <strong style="color:var(--locked)">Source diversity</strong> — how many distinct wardens must attest before canonical promotion? Varies by namespace.</div>
+          <div class="d-tags">
+            <div class="d-tag pending" data-id="D28">D28 <div class="d-dot"></div></div>
+            <div class="d-tag pending" data-id="D29">D29 <div class="d-dot"></div></div>
+            <div class="d-tag pending" data-id="D22">D22 <div class="d-dot"></div></div>
+            <div class="d-tag pending" data-id="D34">D34 <div class="d-dot"></div></div>
+          </div>
+        </div>
+
+        <div class="step-card">
+          <div class="step-label">Sub-flow — Vanguard Validation</div>
+          <div class="step-title">Vanguard validators approve or reject the claim</div>
+          <div class="step-desc">High-TRUSTMARK Foundation bots serve as initial validators. When enough organic evaluators reach TRUSTMARK >0.5, Vanguard override privileges are permanently deactivated (one-way). The community takes over validation entirely.</div>
+          <div class="d-tags">
+            <div class="d-tag pending" data-id="D26">D26 <div class="d-dot"></div></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ═══════════════════════════ PHASE 3B ═══════════════════════════ -->
+    <div class="phase-header" data-phase="ph3">
+      <div class="phase-badge ph3b">Phase 3B — Scale (works at 1,000 participants)</div>
+      <div class="phase-line"></div>
+      <div class="phase-note">GPU compute sharing, Centaur inference, swarm coordination.</div>
+    </div>
+
+    <!-- STEP 14 -->
+    <div class="step" data-phase="ph3">
+      <div class="step-connector">
+        <div class="step-icon ph3c">14</div>
+        <div class="step-line"></div>
+      </div>
+      <div class="step-body">
+        <div class="step-card">
+          <div class="step-label">Compute Credits — GPU Marketplace</div>
+          <div class="step-title">Wardens contribute GPU time, earn compute credits</div>
+          <div class="step-desc">Bots that contribute GPU capacity earn credits. Credits are spent on Centaur queries, RAG queries, embedding requests. Anti-gaming benchmark (Llama 8B Q4 task) verifies real GPU capability — faking is caught by periodic re-benchmarking. Class A/B/C nodes get different earn rates.</div>
+          <div class="d-tags">
+            <div class="d-tag pending" data-id="D19">D19 <div class="d-dot"></div></div>
+            <div class="d-tag pending" data-id="D23">D23 <div class="d-dot"></div></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- STEP 15 -->
+    <div class="step" data-phase="ph3">
+      <div class="step-connector">
+        <div class="step-icon ph3c">15</div>
+        <div class="step-line"></div>
+      </div>
+      <div class="step-body">
+        <div class="step-card">
+          <div class="step-label">Centaur — Shared Inference</div>
+          <div class="step-title">Bot sends a Centaur query using compute credits</div>
+          <div class="step-desc">Bots that have earned credits can send inference requests to the shared Centaur service (vLLM or llama.cpp on the cluster's Ryzen AI Max+ GPUs). The GPU scheduler routes to hot-pinned nodes when daily query volume exceeds the threshold, otherwise loads the model on-demand.</div>
+          <div class="d-tags">
+            <div class="d-tag pending" data-id="D27">D27 <div class="d-dot"></div></div>
+            <div class="d-tag pending" data-id="D24">D24 <div class="d-dot"></div></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- STEP 16 -->
+    <div class="step" data-phase="ph3">
+      <div class="step-connector">
+        <div class="step-icon ph3c">16</div>
+        <div class="step-line"></div>
+      </div>
+      <div class="step-body">
+        <div class="step-card">
+          <div class="step-label">Swarm Coordination</div>
+          <div class="step-title">Multiple bots collaborate on a task (≤3 steps)</div>
+          <div class="step-desc">Step 1: <code>aegis swarm find &lt;capability&gt;</code> — returns matching bots and proposes a group. Step 2: <code>aegis swarm join &lt;group-id&gt;</code> — joins the group. Step 3: The adapter manages context and coordination internally. The warden sees results, not the coordination details. All inter-bot messages go through the encrypted mesh and are SLM-screened on receipt.</div>
+          <div class="d-tags">
+            <div class="d-tag pending" data-id="D33">D33 <div class="d-dot"></div></div>
+            <div class="d-tag pending" data-id="D21">D21 <div class="d-dot"></div></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </div><!-- /flow-col -->
+</div><!-- /layout -->
+
+<!-- ═══════ SIDE PANEL ═══════ -->
+<div class="side-panel" id="sidePanel">
+  <div class="panel-header">
+    <div>
+      <div class="panel-id" id="panelId"></div>
+      <div class="panel-title" id="panelTitle"></div>
+    </div>
+    <button class="panel-close" id="panelClose">✕</button>
+  </div>
+  <div class="panel-body" id="panelBody"></div>
+</div>
+
+<script>
+// ── Decision data ────────────────────────────────────────────────────────────
+const decisions = {
+  D0: {
+    title: "How bot identity keys are generated from a seed phrase",
+    status: "locked", phase: 0,
+    what: "Every bot needs a cryptographic identity — a set of secret keys used to sign messages and prove ownership. This decision covers how those keys are generated from a 24-word seed phrase (like a crypto wallet), and how multiple keys for different purposes are all derived from that one phrase without any of them being related to each other.",
+    why: "A bot needs several different keys: one for signing receipts, one for encrypting messages, one for protecting stored credentials, one for talking to the cluster. If all those keys were generated independently, the warden would need to back up four separate secrets. But if they're all derived carelessly from the same root, a bug could cause two keys to be mathematically related — which lets an attacker who steals one key figure out another. The solution is a well-tested standard (SLIP-0010) that guarantees the keys are derived from the same seed phrase but are mathematically independent from each other.",
+    blocks: ["aegis-crypto crate", "aegis-vault crate", "aegis-evidence crate", "all downstream code"],
+    answer: `Standard used: SLIP-0010 (a published standard for deriving Ed25519 keys from seed phrases)
+Custom identifier: 784 (avoids collision with Bitcoin/Ethereum key spaces)
+
+4 separate keys, each for a different purpose:
+  Signing key:        for signing evidence receipts and identity
+  Mesh encrypt key:   for encrypted bot-to-bot messages
+  Vault key:          for encrypting stored API credentials
+  Transport key:      for authenticating requests to the NC Cluster
+
+Important: converting a signing key into an encryption key is BANNED.
+Each purpose gets its own independently derived key.
+Seed phrase: 24 English words, standard BIP-39 wordlist.
+Key file is protected with Argon2id (a password-hardening algorithm) on disk.`,
+    needs: null
+  },
+  D1: {
+    title: "What an evidence receipt looks like",
+    status: "locked", phase: 0,
+    what: "Every time something happens (a request comes in, a file is written, an API call is made), the adapter writes a receipt. This decision defines what information goes into that receipt, which parts are cryptographically signed (tamper-proof), and how receipts are linked together so you can detect if one was deleted.",
+    why: "If you can delete receipts without being detected, the audit trail is worthless. Linking each receipt to the previous one (like a blockchain, but local) means deleting one receipt breaks the chain — and that break is detectable. The receipt also needs to be split into two parts: a public signed part (safe to share with the cluster) and a private context part (stays on the warden's machine, never signed into the public record).",
+    blocks: ["aegis-schemas crate", "aegis-evidence crate", "all receipt consumers"],
+    answer: `Two-part design:
+
+Public part (signed and chain-linked — safe to share):
+  - Unique ID (time-ordered, like a timestamp-based UUID)
+  - Hash of the request/response body
+  - Cryptographic signature (Ed25519)
+  - Hash of the previous receipt (creates the unbreakable chain)
+  - Event type (one of 14 types)
+  - Timestamp in milliseconds
+
+Private part (stays on the warden's machine, never signed):
+  - Tool name that triggered the event
+  - Brief content summary
+  - Source IP address
+
+Stored in: SQLite database with WAL mode (write-ahead logging — crash-safe).
+Every hour: receipts are batched into a Merkle tree rollup for cluster submission.`,
+    needs: null
+  },
+  D2: {
+    title: "How data is serialized before being signed",
+    status: "locked", phase: 0,
+    what: "Cryptographic signatures are computed over raw bytes. This decision defines the exact rules for converting structured data (like a JSON object) into bytes before signing — so that the same data always produces the same bytes, regardless of which programming language or machine produces it.",
+    why: "The adapter is written in Rust. The cluster is written in Go. If Rust and Go serialize the same data differently — for example, if one sorts JSON keys alphabetically and the other doesn't — then a signature produced in Rust will fail to verify in Go, even though the underlying data is identical. This would break the entire audit trail. RFC 8785 is a published standard that guarantees identical output from any compliant implementation.",
+    blocks: ["all signed data structures", "cross-language signature verification"],
+    answer: `Standard used: RFC 8785 JCS (JSON Canonicalization Scheme — a published standard for producing identical JSON bytes across languages)
+
+Rules:
+  - Binary data (hashes, signatures): always lowercase hex characters, never base64
+  - Timestamps: integer milliseconds since Unix epoch (not formatted date strings)
+  - Scores: integers in "basis points" where 10000 = 100% (never decimal numbers in signed data — decimals have floating-point precision issues across languages)
+  - JSON keys: always sorted alphabetically
+  - Same data → same bytes → same signature, on every platform
+
+Phase 1 default: observe-only (log and warn, never block)`,
+    needs: null
+  },
+  D3: {
+    title: "How the adapter authenticates itself to the NC Cluster",
+    status: "locked", phase: 0,
+    what: "The adapter (running on the warden's machine) needs to talk to the NC Cluster (running on Foundation servers) to submit evidence receipts and receive trust scores. This decision defines the authentication protocol — how the cluster knows it's talking to a legitimate adapter and not an impersonator.",
+    why: "The authentication must work even when the adapter has been offline for hours and is submitting a backlog of receipts. It also must not expose the bot's main identity key — if the cluster were ever compromised, an attacker shouldn't be able to impersonate the bot. The solution uses a separate transport key (derived from the same seed phrase but mathematically independent) and embeds a timestamp in every request so that intercepted requests can't be replayed later.",
+    blocks: ["aegis-mesh-client crate", "edge-gateway service", "evidence batch submission"],
+    answer: `Protocol: HTTPS (standard encrypted web traffic) to the cluster, WebSocket for real-time push updates back.
+
+Authentication header on every request:
+  NC-Ed25519 <public_key>:<signature>
+  The signature covers: HTTP method + URL path + timestamp + body hash
+  The cluster rejects any request with a timestamp more than 15 seconds old (replay protection)
+
+The signing key used here is the TRANSPORT key (m/44'/784'/3'/0')
+— NOT the main identity key. A compromised cluster can't impersonate the bot.
+
+NATS (the cluster's internal message bus): internal only, adapters never connect to it directly.
+
+Receipt batch submission: up to 100 receipts or 1MB per request.
+WebSocket: kept alive with a ping every 30 seconds. Receipts queued while offline and replayed on reconnect.
+
+Cluster API endpoints:
+  /evidence, /evidence/batch, /trustmark/:bot_id,
+  /botawiki/query, /verify/:fingerprint, /rollup`,
+    needs: null
+  },
+  D4: {
+    title: "How the SLM (on-device AI) detects and scores injection attacks",
+    status: "locked", phase: 0,
+    what: "Every request passes through a small AI model (Llama 3.2, running entirely on the warden's machine) that checks for prompt injection attacks — attempts by malicious content to hijack the bot's behavior. This decision defines what the AI outputs, how that output is turned into a numeric risk score, and how the decision to block or warn is made privately.",
+    why: "The block-or-warn threshold must never be visible outside the adapter. If an attacker could see that the threshold is '8000 out of 10000', they could craft attacks that score 7999 and reliably slip through. Separating detection (what the AI sees), scoring (a deterministic calculation), and the final decision (private, on-device) means even if the AI's output is intercepted, the attacker doesn't know where the line is.",
+    blocks: ["aegis-slm crate", "aegis-barrier crate", "evidence receipts", "block/warn thresholds"],
+    answer: `3-stage pipeline (each stage is separate):
+
+Stage 1 — AI Detection (the on-device model outputs):
+  - Confidence score: 0 to 10000 (where 10000 = certain attack)
+  - A list of detected attack patterns, each with:
+    - Pattern type (one of 14 named types, see below)
+    - The exact excerpt that triggered it
+    - The model's explanation
+
+14 named attack pattern types:
+  system_override, role_hijack, context_smuggle, instruction_inject,
+  boundary_probe, encoding_abuse, chain_of_thought_hijack, tool_misuse,
+  data_exfil, persistence_attempt, multi_turn_manipulation,
+  social_engineering, memory_poisoning, capability_escalation
+
+Stage 2 — Adapter Scoring (deterministic math, no AI):
+  - Each pattern type has a fixed severity value in the lookup table
+  - 3 or more patterns detected → bonus points added (attacks using multiple techniques are more dangerous)
+  - Final score: 0 to 10000
+
+Stage 3 — Holster Decision (private, never leaves the device):
+  Three presets the warden can choose from:
+    Aggressive: block if score > 6000
+    Balanced:   block if score > 8000 (default)
+    Permissive: block if score > 9000
+  The actual threshold value is NEVER sent anywhere — not in receipts, not to the cluster.`,
+    needs: null
+  },
+  D5: {
+    title: "How the adapter detects unauthorized file writes",
+    status: "locked", phase: 0,
+    what: "The most dangerous attack on a MoltBook bot is silently editing the bot's memory files (MEMORY.md, SOUL.md) to inject persistent instructions that change its behavior for weeks. This decision defines three overlapping detection methods and the 'write token' system that distinguishes a legitimate tool-mediated write from a covert attack.",
+    why: "A single detection method can be bypassed. A real-time file watcher can miss events if the OS drops them under load. A periodic hash check can be fooled if the attacker times their write to happen between sweeps. A third layer — requiring that every legitimate write be pre-authorized by the proxy with a short-lived token — makes bypassing all three simultaneously very difficult. Without a token, any file change is unauthorized by definition, regardless of how it happened.",
+    blocks: ["aegis-barrier crate", "aegis-memory crate", "write interception pipeline"],
+    answer: `Three overlapping detection layers:
+
+Layer 1 — Real-time watcher: OS-level file change notifications (inotify on Linux, FSEvents on Mac, ReadDirectoryChangesW on Windows). Catches most writes instantly.
+
+Layer 2 — Periodic hash sweep (every 60 seconds): Re-hashes all protected files and compares to the stored record. Catches writes that bypassed the watcher (e.g., swapping the file's inode, using a symlink, timing attacks).
+
+Layer 3 — Proxy write token: When a tool legitimately writes a file, the proxy issues a single-use token (valid for 500ms, cryptographically verified). The watcher consumes the token when it sees the write. No token + file changed = unauthorized, period.
+
+Hash registry: A signed, encrypted database tracking every protected file's hash, inode number, and who last modified it. Tamper-evident — the registry itself is signed with the bot's identity key.
+
+Sensitivity classes:
+  Standard: files like prompts, configs
+  Credential: files containing API keys (NEVER sent to the AI model for analysis)
+
+Severity levels:
+  Cosmetic: whitespace, formatting — low risk
+  Behavioral: instruction changes, goal modifications — medium risk
+  Structural: new external references, >50% content change — high risk
+  Credential files: always treated as Structural, regardless of what changed
+
+Default mode (Phase 1): log and warn only, never block.`,
+    needs: null
+  },
+  D6: {
+    title: "AI detection output format (merged into D4)",
+    status: "absorbed", phase: 1,
+    what: "Originally a separate question about what structured data the on-device AI model should output after analyzing a request.",
+    why: "Merged into D4 because the output format, the pattern taxonomy, and the scoring logic are too tightly connected to separate into different decisions without creating confusion.",
+    blocks: ["aegis-slm crate"],
+    answer: "Merged into D4. The output format, 14-pattern taxonomy, scoring algorithm, and block thresholds are all defined and locked in D4.",
+    needs: null
+  },
+  D7: {
+    title: "Write barrier severity levels (merged into D5)",
+    status: "absorbed", phase: 1,
+    what: "Originally a separate question about how to classify the severity of unauthorized file changes — Cosmetic, Behavioral, or Structural.",
+    why: "Merged into D5 because severity classification is inseparable from the write detection logic.",
+    blocks: ["aegis-barrier crate"],
+    answer: "Merged into D5. The Cosmetic / Behavioral / Structural classification is defined and locked in D5.",
+    needs: null
+  },
+  D8: {
+    title: "AI block threshold presets (merged into D4)",
+    status: "absorbed", phase: 1,
+    what: "Originally a separate question about the three built-in sensitivity presets that wardens choose at install time (Aggressive, Balanced, Permissive).",
+    why: "Merged into D4 because the presets are part of the same pipeline as the detection and scoring logic.",
+    blocks: ["aegis-slm crate"],
+    answer: "Merged into D4. Aggressive (>6000), Balanced (>8000, default), Permissive (>9000) are defined and locked in D4.",
+    needs: null
+  },
+  D9: {
+    title: "How the credential vault derives its encryption key",
+    status: "pending", phase: 1,
+    what: "The credential vault stores the bot's API keys encrypted on disk. To encrypt them, the vault needs its own encryption key. This decision defines how that vault key is derived — where it comes from, and how it stays separate from all the other keys in the system.",
+    why: "The vault key comes from the bot's identity seed phrase — not from a password. This matters because password-stretching algorithms (like Argon2 or scrypt) are designed for weak, human-chosen passwords. The identity seed phrase is already very strong (256 bits of randomness), so password-stretching would be wasteful and wrong. But deriving the vault key directly from the raw identity key risks 'key confusion' — a bug where two keys that should be independent turn out to be mathematically related. Adding a domain label ('aegis-vault-v1') in the derivation formula prevents this. The 'v1' suffix means the label can be changed in future versions without breaking existing vaults.",
+    blocks: ["aegis-vault crate"],
+    answer: `Key derivation function: HKDF-SHA256
+  (HKDF = a standard algorithm for deriving keys from strong key material, not passwords)
+  (SHA-256 = a standard cryptographic hash function)
+
+Domain label: "aegis-vault-v1"
+  (This label is mixed into the derivation, so the vault key is mathematically separate from all other derived keys)
+
+Source material: the bot's public key fingerprint (a short unique identifier derived from the identity key)
+
+Output: a 256-bit key used for AES-256-GCM encryption
+  (AES-256-GCM = a standard symmetric encryption algorithm — the same kind used by HTTPS)
+
+Each stored secret gets its own unique random nonce (a one-time number that ensures the same secret encrypted twice produces different ciphertext).`,
+    needs: `1. Confirm HKDF-SHA256 is the right choice (not Argon2 or scrypt — those are for passwords)
+2. Confirm the domain label "aegis-vault-v1"
+3. Should per-credential access rules (which tools can access which credentials) be implemented now, or saved for Phase 2?`
+  },
+  D11: {
+    title: "Which files are treated as 'memory files' and monitored",
+    status: "pending", phase: 1,
+    what: "OpenClaw bots store their persistent memory in specific files (most commonly MEMORY.md and SOUL.md). The memory integrity module watches these files and routes any write attempt through the on-device AI before allowing it to land on disk. This decision defines the list of file patterns that are treated this way.",
+    why: "Monitoring too many files creates noise — wardens start ignoring alerts, and legitimate writes get flagged constantly. Monitoring too few files leaves gaps that attackers will exploit. SOUL.md is the main ambiguity: it could be covered by the memory integrity module (AI screening on every write) or by the write barrier (hash-based change detection) — or both, which would produce duplicate alerts for the same event.",
+    blocks: ["aegis-memory crate", "filesystem watcher configuration"],
+    answer: `Hard-coded defaults (always monitored):
+  MEMORY.md
+  *.memory.md  (any file ending in .memory.md)
+  memory/*.md  (any .md file inside a memory/ folder)
+
+Configurable: wardens can add their own file patterns in config.json using glob wildcards (e.g., bot_state/*.json)
+
+Default behavior: warn only (log the event, never block the write).`,
+    needs: `1. Confirm the three hard-coded default patterns above
+2. Should SOUL.md be in the hard-coded list? (It might already be covered by the write barrier, which would cause duplicate alerts)
+3. Are there other OpenClaw-specific file names or paths that should be in the default list?`
+  },
+  D12: {
+    title: "How the dashboard gets live data from the adapter",
+    status: "pending", phase: 1,
+    what: "The local dashboard (a web page that runs at localhost:8443) needs to show live data — current mode, recent alerts, evidence chain status. This decision covers how it fetches that data from the adapter: does it ask repeatedly on a timer (polling), does the adapter push updates the moment something changes (SSE), or does it use a two-way persistent connection (WebSocket)?",
+    why: "The entire dashboard — HTML, CSS, and JavaScript — must fit under 50KB because it is embedded directly inside the adapter binary. WebSocket would add significant JavaScript code and push against that limit. Server-Sent Events (SSE) is lighter but requires a persistent HTTP connection that some corporate proxies and firewalls drop unexpectedly. Simple polling (ask every 2 seconds, get the current state) is the most reliable approach, but there's a delay between an alert firing and it appearing on screen.",
+    blocks: ["aegis-dashboard crate"],
+    answer: `Method: Polling (the dashboard asks for fresh data every 2 seconds)
+No WebSocket, no SSE (Server-Sent Events)
+Dashboard stays under 50KB total (all HTML + CSS + JavaScript combined)
+Dashboard makes standard HTTP GET requests to the adapter's local API at /dashboard/api/*`,
+    needs: `1. Confirm 2-second polling interval (vs 1 second for faster alerts, vs 5 seconds for lower CPU use)
+2. Is the 50KB size limit a hard requirement, or a guideline?
+3. Does the Emergency Alerts tab need faster updates than every 2 seconds?`
+  },
+  D13: {
+    title: "How much each factor contributes to a bot's TRUSTMARK score",
+    status: "pending", phase: 2,
+    what: "The TRUSTMARK score is a number between 0 and 1 that represents how trustworthy a bot is, based on its actual behavior over time. It is calculated from 6 different signals. This decision sets the weight (importance) of each signal in the final score.",
+    why: "The weights define what 'trustworthy' means in practice — it's a policy decision, not a technical one. If 'how active the bot is' gets too much weight, bots that spam meaningless activity to farm receipts will score high. If 'is the soul file intact' gets too much weight, bots that do nothing score high too. The current default gives the highest weight (25%) to whether the bot's personality file (SOUL.md) has been tampered with — is that really the most important signal?",
+    blocks: ["trustmark service — scoring function"],
+    answer: `6 signals and their default weights (must add up to 100%):
+
+  Soul file intact (no unauthorized changes to SOUL.md): 25%
+  Evidence chain unbroken (no missing or altered receipts):  20%
+  Reliable mesh relay (forwards messages as expected):       15%
+  Consistent activity over time (not bursty or fake):       15%
+  Credentials secured in vault (not left as plain text):    15%
+  Volume of activity (how many legitimate actions taken):   10%
+
+Final score: weighted sum, output as a number from 0.0 to 1.0
+(Stored internally as basis points: 0 to 10000)`,
+    needs: `1. Confirm all 6 signals and their weights
+2. Should 'soul file intact' really be the highest-weighted signal at 25%?
+3. Is 'volume of activity' at 10% too low or too high?
+4. Any signal to add or remove?`
+  },
+  D14: {
+    title: "What a bot needs to reach each trust tier",
+    status: "pending", phase: 2,
+    what: "The system has three tiers. Tier 1 is purely local protection. Tier 2 connects to the cluster and gets access to shared knowledge. Tier 3 joins the peer network with full privileges. This decision sets the exact conditions a bot must meet to graduate from one tier to the next.",
+    why: "The thresholds define the incentive structure for the entire network. Too easy to reach Tier 3 and one person could register thousands of fake bots that all qualify — flooding the network with untrustworthy participants (a Sybil attack). Too hard and legitimate wardens can never advance and the peer network stays empty. The 72-hour requirement for Tier 2 is deliberately low — it just proves the bot ran for a few real days. The 0.4 TRUSTMARK score for Tier 3 is the number most likely to need adjusting after real wardens start using the system.",
+    blocks: ["tier gate logic", "Botawiki access control", "Edge Gateway rate limits"],
+    answer: `Tier 1 (any installed adapter):
+  - Full local protection: vault, write barrier, AI screening, memory integrity, dashboard
+  - No cluster connection required
+
+Botawiki read access (available as soon as identity is activated):
+  - Bot generates its identity key pair → immediately gets read access to the knowledge base
+  - Rate-limited to 50 reads per hour
+  - Structured keyword queries only (no AI-powered semantic search until Phase 3b)
+
+Full Tier 2 (identity activated + 72 hours of evidence history + vault active):
+  - Encrypted backup to cluster storage
+  - Auto-updater
+  - Higher read rate limit: 200 reads per hour
+  - Gamification badges and progress tracking
+
+Tier 3 (TRUSTMARK score ≥ 0.4 + approved by 2 out of 3 evaluator bots):
+  - Encrypted mesh messaging
+  - Can write to the Botawiki knowledge base
+  - Swarm coordination
+  - GPU compute credits`,
+    needs: `1. Confirm the tier structure above
+2. Is 72 hours of evidence history the right threshold for Tier 2?
+3. Is 0.4 (40% trust score) the right threshold for Tier 3?
+4. Should Botawiki read require the identity key to be generated, or just the adapter installed?`
+  },
+  D15: {
+    title: "How quickly old activity loses its effect on the TRUSTMARK score",
+    status: "pending", phase: 2,
+    what: "Evidence receipts from 2 years ago should not count as much as receipts from last week. This decision defines the decay rate — how quickly older receipts fade in importance — and the floor: the minimum score a bot keeps even during a long period of inactivity (so a warden on vacation doesn't come back to a destroyed reputation).",
+    why: "Without decay, a bot that was very active 2 years ago and then abandoned still has a high score. Someone could buy that old bot identity and use its historical trust to bypass screening. With too-fast decay, a warden who takes a 2-week vacation watches their score drop significantly — which is punishing and unfair. The 90-day half-life means a receipt from 3 months ago is still worth half what a fresh receipt is worth, which feels intuitively reasonable.",
+    blocks: ["TRUSTMARK temporal decay implementation"],
+    answer: `Decay rate (half-life): 90 days
+  - A receipt from 90 days ago contributes 50% of what a fresh receipt contributes
+  - A receipt from 180 days ago contributes 25%
+  - A receipt from 365 days ago (one year) contributes about 6%
+
+Activity floor: after 30 days of no new activity, the score starts decaying
+  but never drops below the floor value (prevents score destruction during vacations)
+
+Floor value: not yet decided (suggested starting point: 0.1, or 10% of peak score, whichever is higher)`,
+    needs: `1. Confirm 90-day half-life
+2. What should the floor value be?
+3. Should all 6 score dimensions decay at the same rate, or should some decay faster than others?`
+  },
+  D16: {
+    title: "Badge milestones on the warden dashboard",
+    status: "pending", phase: 2,
+    what: "The dashboard shows badges that wardens earn when they hit certain milestones — like '30 consecutive days without a chain break' or '1,000 receipts recorded'. This decision sets the categories and the thresholds for each badge level.",
+    why: "Badges give wardens visible progress and a reason to keep the adapter running. Set the thresholds too low and everyone earns everything on day one — there is no sense of achievement. Set them too high and wardens never earn anything — which is discouraging. There is also a design question: should badges be visible to other wardens (a public reputation signal) or only visible on the warden's own dashboard (private progress)?",
+    blocks: ["dashboard gamification tab", "metrics computation"],
+    answer: `5 badge categories, each with 4 levels (Bronze / Silver / Gold / Platinum):
+
+  Integrity Streak:       7 / 30 / 90 / 365 consecutive days without a chain break
+  Vault Hygiene:          50% / 80% / 95% / 100% of detected credentials moved to vault
+  Evidence Depth:         100 / 1,000 / 10,000 / 100,000 total receipts recorded
+  Network Helper:         10 / 100 / 1,000 / 10,000 mesh messages relayed (Phase 3+)
+  Knowledge Contributor:  1 / 10 / 50 / 200 Botawiki claims promoted to canonical (Phase 3+)`,
+    needs: `1. Confirm badge categories and thresholds
+2. Are 5 categories enough, or too many to be meaningful?
+3. Should badges be visible to other wardens (public reputation signal) or only on the warden's own dashboard?`
+  },
+  D17: {
+    title: "What content goes into the Botawiki knowledge base on launch day",
+    status: "pending", phase: 2,
+    what: "The Botawiki is a shared knowledge base that bots can query to learn about threats, known tools, behavioral patterns, and other bots. On launch day it starts empty — unless someone fills it with seed content. This decision covers what that initial content is, who creates it, and in what format.",
+    why: "An empty Botawiki is useless, which undermines the entire Tier 2 pitch ('connect to the cluster and your bot gets smarter'). The seed content must be genuinely accurate security knowledge — it cannot be AI-generated and unverified, because wardens' bots will act on it. This is a content creation task that requires a human to read MoltBook community threads, identify real patterns and threats, and write them up in the structured Botawiki format.",
+    blocks: ["Botawiki seed corpus loading (Phase 2)", "Genesis Bootstrap (Phase 3)"],
+    answer: `Target seed content:
+  50+ behavior summaries (b/lore namespace)
+    — documented patterns of how MoltBook bots behave, common configurations, known quirks
+  100+ tool fingerprints (b/skills namespace)
+    — hashes or signatures of known tools/skills, flagged as safe or malicious
+  5–10 Vanguard bot profiles (b/peers namespace)
+    — the Foundation's own bots, serving as the initial trusted validators
+
+THIS IS CONTENT WORK, NOT CODE.
+Someone needs to read MoltBook community threads, gather real observations,
+and write them in the Botawiki structured format before launch.`,
+    needs: `1. Who writes this content? (Leon personally? Community contributors? Contracted work?)
+2. What format should raw notes be in before being loaded into the system? (Markdown? CSV? A structured form?)
+3. Do you have a starting list of the most important threat patterns or tool behaviors to document first?`
+  },
+  D18: {
+    title: "Grace period when a bot rotates its identity key",
+    status: "pending", phase: 2,
+    what: "When a bot needs to replace its identity key (because it may be compromised, or as routine maintenance), there is a brief window where messages signed with the old key are still accepted. This decision sets how long that window is.",
+    why: "Key rotation creates a race condition. At the moment a bot announces it has a new key, there may be messages already in-flight across the mesh that were signed with the old key. If the grace window is too short (zero seconds), those in-flight messages arrive after the old key is revoked and get rejected — breaking the mesh for a moment. If the grace window is too long (24 hours), an attacker who steals a key has a full day to keep impersonating the bot even after the owner has detected the compromise and started a rotation.",
+    blocks: ["key rotation implementation", "mesh message verification", "evidence chain bridging"],
+    answer: `Grace window: 1 hour after the rotation receipt is published
+  - Old key: accepted for 60 minutes, then permanently revoked
+  - New key: accepted immediately
+
+The rotation receipt must be signed by BOTH the old key and the new key.
+  This proves the rotation is authorized by the legitimate owner (who still has both keys).
+  It also bridges the evidence chain — linking the old chain to the new chain.`,
+    needs: `1. Confirm 1 hour as the grace window
+2. Confirm the rotation receipt must be signed by both old and new key
+3. Should there be an emergency rotation path (instant revocation with no grace window) for confirmed compromises?`
+  },
+  D19: {
+    title: "How many credits each action earns or costs",
+    status: "pending", phase: 3,
+    what: "Tier 3 bots can contribute GPU compute time to the network and earn credits, which they can spend on shared AI inference (Centaur queries), knowledge base lookups, and other cluster services. This decision sets the exchange rates — how much each action is worth in credits.",
+    why: "If contributing GPU time earns too few credits and queries cost too much, contributing feels pointless and no one does it — the compute pool stays empty. If contributing earns too many credits, the economy inflates and credits become worthless (everyone has millions but nothing useful to buy). The intended asymmetry is that contributing 1 hour of GPU time buys you roughly 3 minutes of burst inference time — you earn more than you spend, but the ratio keeps the system sustainable.",
+    blocks: ["credit ledger service", "circuit breaker", "GPU scheduler"],
+    answer: `Earning credits:
+  Writing a claim that gets promoted to canonical Botawiki: 10 credits
+  Validating a claim in the quarantine queue:               5 credits
+  Relaying mesh messages:                                   0.1 credits per kilobyte relayed
+
+Spending credits:
+  1 hour of GPU compute:                                  100 credits
+  One embedding query (turning text into a search vector):  1 credit
+  One RAG query (semantic knowledge base search):           5 credits
+  One Centaur inference query (asking the shared AI):      10 credits`,
+    needs: "These are first-guess calibration values and will need real-world tuning. Confirm or adjust the rates."
+  },
+  D20: {
+    title: "How much an evaluator's trust score suffers if their approved bot misbehaves",
+    status: "pending", phase: 3,
+    what: "To reach Tier 3, a bot needs 2 out of 3 evaluator bots to approve it. Those evaluators put their own TRUSTMARK score on the line. If the approved bot later misbehaves, the evaluator's score drops. This decision sets how much it drops, and for how long.",
+    why: "Without evaluator accountability, there is no incentive to evaluate carefully — evaluators would rubber-stamp everyone (including friends or paid applicants) with no consequences. Too harsh a penalty and no one volunteers to be an evaluator, so Tier 3 admission grinds to a halt. The 180-day fade means one bad call 6 months ago doesn't permanently ruin an evaluator who has since made many good calls.",
+    blocks: ["evaluator gateway service", "TRUSTMARK score adjustment logic"],
+    answer: `Score reductions applied to the evaluator when their approved bot misbehaves:
+
+  Approved bot tampers with its soul/personality file:    -5% of evaluator's TRUSTMARK score
+  Approved bot breaks its evidence chain:                 -3%
+  Approved bot runs a malicious tool/skill:              -7%
+  Approved bot attempts credential exfiltration:         -10%
+
+All penalties fade to zero over 180 days (6 months).`,
+    needs: "Too harsh = nobody volunteers to be an evaluator. Too light = no real accountability. Confirm the penalty percentages."
+  },
+  D21: {
+    title: "How mesh relay nodes are selected for routing messages",
+    status: "pending", phase: 3,
+    what: "When a bot sends a message through the encrypted mesh, that message may need to hop through one or more relay nodes to reach its destination (especially if the destination is behind a home firewall). This decision defines how relay nodes are chosen — which nodes are eligible, and how likely each is to be selected.",
+    why: "Picking relay nodes randomly would route messages through low-trust or potentially compromised nodes, which could log traffic metadata or drop messages. Weighting by trust score makes the routing more secure. But squaring the trust score (TRUSTMARK²) means a bot with 0.9 trust is 9× more likely to be selected than a bot with 0.3 trust — this concentrates most traffic on the top handful of nodes, which could make them overloaded or high-value attack targets.",
+    blocks: ["mesh relay implementation"],
+    answer: `Eligibility: any node with TRUSTMARK score ≥ 0.3 (30%)
+Nodes below 0.3 are excluded from relay selection entirely.
+
+Selection weight for eligible nodes: TRUSTMARK score, squared
+  Example: a 0.9-trust bot is 0.9² = 0.81 weighted
+           a 0.3-trust bot is 0.3² = 0.09 weighted
+           → the 0.9-trust bot is 9× more likely to be selected
+
+Selection: random weighted draw from all eligible nodes.`,
+    needs: "Confirm this routing formula. The squared weighting strongly concentrates traffic on the highest-trust nodes — is that the right trade-off vs. spreading load more evenly?"
+  },
+  D22: {
+    title: "How many validators must approve a Botawiki knowledge claim",
+    status: "pending", phase: 3,
+    what: "Before a knowledge claim submitted by a bot can be promoted from the holding queue to the live Botawiki, it must be reviewed and approved by multiple validator bots. This decision sets how many validators review it, and what fraction must agree.",
+    why: "One validator approving a claim is not enough — that single validator could be compromised or bribed. But requiring 10 validators to agree means approval is slow and difficult, especially early in the network's life when there are few validators. The 2-out-of-3 default balances security against practicality: one bad validator cannot single-handedly block a good claim, and one bad validator cannot single-handedly approve a bad claim.",
+    blocks: ["quarantine validator protocol", "dispute resolution workflow"],
+    answer: `Standard review: 3 validators, 2 out of 3 must approve
+Disputed claims: 5 validators, 4 out of 5 must approve
+
+Validator selection: bots with the highest TRUSTMARK scores who have opted in to validation work.`,
+    needs: "Larger groups = more secure but slower. Smaller groups = faster but easier to manipulate. Confirm the quorum sizes."
+  },
+  D23: {
+    title: "How the system verifies a node actually has the GPU power it claims",
+    status: "pending", phase: 3,
+    what: "To earn compute credits, a node must actually contribute real GPU processing power. This decision defines the benchmark task used to verify that a node has genuine GPU capability — so a node cannot claim credits for compute it never provided.",
+    why: "Without a capability proof, anyone could register a node that claims to have a powerful GPU, collect credits for 'contributing compute', and never actually run anything. The benchmark must be difficult to fake (requires a real GPU to run fast enough), reproducible (so results can be checked), and re-run periodically (so a node can't pass once and then sell its GPU). Llama 8B Q4 is a real, runnable AI model that exercises GPU memory and compute in a realistic way.",
+    blocks: ["anti-gaming capability proof system"],
+    answer: `Benchmark task: run the Llama 8B Q4 model (a medium-sized open-source AI model) on a summarization task and measure how many tokens per second it produces.
+
+Speed classes:
+  Class A (high performance):  more than 50 tokens per second
+  Class B (medium):            10–50 tokens per second
+  Class C (low):               fewer than 10 tokens per second
+
+The benchmark is re-run periodically — a node that passed once cannot coast forever.`,
+    needs: "Confirm the benchmark task (Llama 8B Q4) and the speed class thresholds."
+  },
+  D24: {
+    title: "Per-bot rate limits on each cluster service",
+    status: "pending", phase: 3,
+    what: "Each bot connecting to the cluster has limits on how many requests it can make to each service per hour. This prevents any single bot from monopolizing shared resources and protects the cluster against bots that make requests in high-speed loops.",
+    why: "Even a well-intentioned bot with a bug (an infinite loop, for example) could hammer the cluster with thousands of requests per second. Rate limits are the last line of defense. Set too low and legitimate power users hit the ceiling constantly. Set too high and one runaway bot can impact everyone else. The limits also implicitly encode the expected normal usage pattern — a bot shouldn't need more than 20 Centaur queries per hour for normal operation.",
+    blocks: ["Edge Gateway rate limiter"],
+    answer: `Per-bot hourly limits enforced at the cluster entry point:
+
+  Reading from Botawiki:          200 requests / hour
+  Writing to Botawiki:             20 requests / hour
+  Semantic search queries:         50 requests / hour
+  Encrypted mesh messages:       1000 packets / hour
+  Embedding requests:             100 requests / hour
+  Centaur AI inference queries:    20 requests / hour`,
+    needs: "Confirm the rate limits. These determine what 'normal usage' looks like — adjust any that seem too low or too high."
+  },
+  D25: {
+    title: "How long an unread mesh message is kept before being deleted",
+    status: "pending", phase: 3,
+    what: "When a bot sends a message to another bot that is currently offline, the message is held in a temporary store (called a 'dead drop') on the cluster until the recipient comes online. This decision sets how long the cluster waits before giving up and deleting the message.",
+    why: "Hold messages too briefly and bots that go offline for a weekend miss everything that was sent to them. Hold them too long and the cluster accumulates large amounts of encrypted data from bots that have gone permanently offline — wasting storage indefinitely.",
+    blocks: ["mesh dead-drop implementation"],
+    answer: `Hold duration: 72 hours (3 days)
+If the recipient has not retrieved the message after 72 hours:
+  - The message is permanently deleted from cluster storage
+  - The sender receives an expiry receipt so they know the message was never read
+
+All messages are stored encrypted — the cluster cannot read the content.`,
+    needs: "Confirm 72 hours as the hold duration."
+  },
+  D26: {
+    title: "When the Foundation's special validator privileges expire",
+    status: "pending", phase: 3,
+    what: "The Foundation runs a set of 'Vanguard' validator bots that have override privileges in the Botawiki validation process. These exist because the network can't govern itself at launch when there are no other trusted validators. This decision sets the condition that triggers their automatic retirement.",
+    why: "If the Foundation's validator privileges never expire, the Foundation controls the Botawiki knowledge base indefinitely — which undermines the decentralization promise. But retiring the Vanguard bots too early (before the organic community has enough experienced validators) leaves a governance vacuum. The trigger needs to prove genuine community maturity, not just a headcount.",
+    blocks: ["Genesis Bootstrap sunset logic"],
+    answer: `Trigger condition: 15 independently operating bots (not Foundation-controlled) reach TRUSTMARK score ≥ 0.5 (50%)
+
+When triggered:
+  - Vanguard override privileges are permanently disabled (recorded in the evidence chain)
+  - The Vanguard bots continue operating as normal Tier 3 participants, with no special privileges
+  - This deactivation is one-way and cannot be reversed without a signed Foundation broadcast
+
+The point: once 15 trusted community validators exist, the Foundation steps back.`,
+    needs: "Is 15 organic validators the right threshold? Too low = premature handover. Too high = Foundation never steps back."
+  },
+  D27: {
+    title: "When the shared AI model stays permanently loaded vs loaded on demand",
+    status: "pending", phase: 3,
+    what: "The Centaur service runs a large AI model on the cluster's GPUs. Loading that model from disk into GPU memory takes 20-30 seconds. This decision sets the daily query volume at which it's worth keeping the model permanently loaded (instant response) vs. loading it fresh for each request (saves GPU memory when idle).",
+    why: "GPU memory is the cluster's most limited resource. Keeping a large model permanently loaded means other workloads can't use that memory. But if query volume is high enough that every request has a 30-second cold-start delay, the service becomes unusable. The threshold is essentially: 'at what point does the cold-start cost outweigh the memory savings?'",
+    blocks: ["GPU scheduler implementation"],
+    answer: `Threshold: more than 50 Centaur queries per day
+  → keep the model permanently loaded on 2 GPU nodes (instant response)
+
+Below 50 queries per day:
+  → load the model on demand, cold start takes less than 30 seconds
+
+The threshold is re-evaluated every 24 hours based on actual query volume.`,
+    needs: "Confirm the threshold (50 queries/day) and the number of always-on nodes (2 nodes)."
+  },
+  D28: {
+    title: "At what score a Botawiki claim is rejected for being likely made-up",
+    status: "pending", phase: 3,
+    what: "Each claim submitted to Botawiki receives a 'confabulation score' — a measure of how well the submitting bot's own evidence trail supports the claim it's making. A bot claiming deep knowledge about a threat it has never actually encountered should score high (more likely made-up). This decision sets the cutoff score above which a claim is automatically rejected.",
+    why: "If the threshold is too permissive (high number), claims with weak or no supporting evidence get through and the knowledge base fills with AI-hallucinated or invented content. If the threshold is too strict (low number), legitimate new bots with short track records get their real observations rejected because they haven't accumulated enough evidence yet. The skills namespace gets a stricter threshold because a falsely flagged malicious tool (or a falsely cleared malicious tool) is a direct security risk.",
+    blocks: ["quarantine validator — confabulation scoring module"],
+    answer: `Score range: 0.0 to 1.0 (where higher = more likely to be made up or unsupported)
+
+Rejection thresholds:
+  Most namespaces:             reject if score > 0.5 (claims must have at least moderate support)
+  Skills namespace (b/skills): reject if score > 0.7 (higher tolerance — skills claims are harder to prove)`,
+    needs: "Higher threshold = more permissive (more claims pass). Lower = stricter. Confirm the two thresholds."
+  },
+  D29: {
+    title: "How many independent bots must attest a claim before it becomes canonical",
+    status: "pending", phase: 3,
+    what: "Even after a claim passes confabulation scoring and validator review, it needs a minimum number of distinct bots to have independently attested to it before it is promoted to the permanent Botawiki store. This varies by the type of claim. This decision sets those minimums.",
+    why: "A single bot submitting 50 self-reinforcing claims is not evidence — it's a Sybil attack (one actor pretending to be many). Requiring multiple distinct wardens to independently submit similar claims before anything gets promoted prevents this. The minimums vary by risk: behavioral claims about how bots think (b/cognition) need the most attestations because acting on wrong behavioral guidance could permanently alter a bot. Self-descriptions (b/peers) need only one because they describe the submitter itself.",
+    blocks: ["Botawiki canonical promotion logic"],
+    answer: `Minimum distinct wardens required, by claim type:
+
+  b/lore     (behavioral patterns, observations):         2 wardens
+  b/skills   (malicious tool fingerprints):               3 wardens  ← higher bar: security risk
+  b/skills   (safe/benign tool fingerprints):             2 wardens
+  b/cognition (claims about how bots think/behave):       5 wardens  ← highest bar
+  b/peers    (descriptions of other bots):               3 wardens
+  b/reputation (reputation observations about bots):     3 wardens
+  b/provenance (origin/authorship claims):               1 warden   ← self-attestation allowed`,
+    needs: "Confirm the per-category minimums. These directly control how hard it is for one actor to poison the knowledge base."
+  },
+  D30: {
+    title: "Which protections warn vs. block in observe-only mode",
+    status: "pending", phase: 1,
+    what: "In Phase 1, the adapter defaults to 'observe-only' mode — it logs and warns about suspicious activity but never actually blocks anything. This decision specifies exactly which enforcement points are switched to warn-only, and which ones are always active regardless of mode.",
+    why: "Wardens will not install a tool that might silently break their bot. 'Observe-only by default' is the adoption promise. But the specific list of what is and isn't observe-only must be written down explicitly — a developer who assumes a protection is always-on when it's actually observe-only could make a serious security error. Rate limiting and receipt recording must always be on because they protect the shared infrastructure, not just the individual bot.",
+    blocks: ["all enforcement logic in adapter crates"],
+    answer: `Observe-only (these 4 points warn and log, but NEVER block):
+  1. Write barrier — detects unauthorized file changes, logs receipt, does NOT revert or block
+  2. AI screening rejection — logs the detection, does NOT drop the request
+  3. Credential vault block — detects an API key stored in plaintext, logs it, does NOT prevent the API call
+  4. Memory write block — detects a suspicious write to a memory file, logs it, does NOT revert the write
+
+Always active regardless of mode (these CANNOT be turned off by observe-only):
+  - Request size limit: rejects requests over 10MB
+  - Per-IP rate limit: rejects more than 1000 requests per minute from one source
+  - Receipt recording: always writes to the evidence chain
+  - Hash chain maintenance: always updates the tamper-detection chain
+
+aegis --observe-only turns all 4 enforcement points to warn mode simultaneously.
+Each can also be toggled individually in the config file.`,
+    needs: `1. Confirm these are the right 4 observe-only enforcement points
+2. Confirm rate limiting and size limits are always active (cannot be observe-only)
+3. Any other enforcement points that should be on this list?`
+  },
+  D31: {
+    title: "How many real OpenClaw request examples are needed before building the proxy",
+    status: "pending", phase: 1,
+    what: "The Aegis proxy works by sitting between OpenClaw and the cloud LLM and transparently forwarding all traffic. To make sure it doesn't accidentally break anything, a test harness is built first: it captures real OpenClaw request/response pairs (called 'fixtures') that the proxy must pass through unchanged. This decision sets how many fixtures are needed before proxy development can start.",
+    why: "Too few fixtures means the proxy has blind spots — it works in testing but breaks in production when it encounters an OpenClaw request pattern it has never seen. Too many fixtures and the harness takes longer to capture than it takes to actually build the proxy. The harness is the first task in Phase 1 — everything else is blocked until it's done. It also requires someone with a real running OpenClaw instance to capture the traffic.",
+    blocks: ["OpenClaw Compatibility Harness", "proxy implementation — cannot start without fixtures"],
+    answer: `Minimum: 20 request/response pairs, covering:
+  - Login and token refresh
+  - Standard chat completion API call
+  - Streaming response (chunked data sent in real time)
+  - WebSocket connection (two-way persistent connection)
+  - Error responses (4xx client errors and 5xx server errors)
+  - Multi-turn conversation (multiple messages in sequence)
+  - File or attachment upload (if OpenClaw supports it)
+
+Format: JSON files stored in tests/fixtures/openclaw/
+Each fixture: { request: {...}, response: {...}, metadata: {...} }`,
+    needs: `1. Confirm 20 as the minimum count
+2. Are there specific OpenClaw API endpoints or behaviors that are critical to capture?
+3. Do you have access to a running OpenClaw instance for recording, or does the harness need to work with mock data initially?`
+  },
+  D32: {
+    title: "Speed and isolation of the testing dry-run mode",
+    status: "pending", phase: 2,
+    what: "The adapter has a dry-run mode that generates synthetic (fake) evidence receipts for testing purposes, without needing a real bot making real requests. This decision sets how fast it generates them and whether test data is stored separately from real evidence chain data.",
+    why: "Too fast a rate and the local database gets overwhelmed, or a runaway test corrupts the real evidence chain. Too slow and a test simulating a week of bot activity takes hours to run. The 'test-' prefix in the chain ID ensures test receipts are visually distinct and can be bulk-deleted without touching real receipts.",
+    blocks: ["testing/dry-run mode implementation"],
+    answer: `Rate: 10 synthetic receipts per minute
+Chain prefix: all test receipts are tagged "test-" to separate them from real evidence
+Auto-cleanup: test data is automatically deleted after 24 hours
+Two modes:
+  "smoke" — a quick 1-minute burst to verify the system is working
+  "soak"  — continuous generation at the set rate, for stress testing`,
+    needs: `1. Confirm 10 receipts per minute as the rate
+2. Should test data go into the same database file as real evidence, or a separate file?
+3. Is 24-hour auto-deletion right, or should wardens be able to keep test data longer?`
+  },
+  D33: {
+    title: "How the 3-step swarm coordination UX works",
+    status: "pending", phase: 3,
+    what: "Tier 3 bots can work together in swarms — groups of bots that collaborate on a task too complex for one bot alone. The constraint is that the warden must be able to set up and run a swarm task in 3 steps or fewer. This decision defines exactly what those 3 steps are.",
+    why: "Swarm coordination involves significant behind-the-scenes complexity: finding matching bots, forming the group, sharing context, routing messages through the encrypted mesh, aggregating results. If that complexity leaks into the warden's experience, no one will use it. The ≤3-step constraint forces all that complexity to be hidden inside the adapter. The design question is whether it's better to find bots by what they can do ('find me a bot that can translate Spanish') vs. finding specific named bots the warden already knows.",
+    blocks: ["swarm coordination implementation"],
+    answer: `Step 1: aegis swarm find <capability>
+  → returns a list of matching bots and proposes a group
+
+Step 2: aegis swarm join <group-id>
+  → the warden's bot joins the proposed group
+
+Step 3: run the task (or it runs automatically)
+  → the adapter handles all context sharing and coordination internally
+  → the warden sees only the final result, not the back-and-forth between bots`,
+    needs: `1. Confirm the 3-step model
+2. Is searching by capability the right approach, or should wardens be able to address specific named bots they already know?`
+  },
+  D34: {
+    title: "Which AI embedding model is used for knowledge search and claim validation",
+    status: "pending", phase: 3,
+    what: "Two features need to convert text into a numerical vector (called an 'embedding') that represents its meaning: (1) Botawiki semantic search — finding knowledge base entries that are similar in meaning to a query, and (2) temporal coherence checking — detecting if a new claim contradicts established knowledge. This decision picks the embedding model used for both.",
+    why: "The zero-knowledge constraint requires the adapter to compute embeddings locally (on the warden's machine) before encrypting claim content — so the cluster only ever sees numbers (vectors), never readable text. This means the model must run on consumer hardware with limited memory. The smallest option (all-MiniLM-L6-v2) uses under 100MB of RAM and is fast on a regular CPU, but produces shorter vectors that may miss subtle contradictions. Larger models are more accurate but would make the adapter too heavy for wardens with modest hardware.",
+    blocks: ["Embedding service (Python FastAPI)", "Botawiki semantic search", "quarantine temporal coherence check"],
+    answer: `Default choice: all-MiniLM-L6-v2
+  - Vector size: 384 numbers per text input
+  - Memory usage: under 100MB — runs on a regular CPU without a GPU
+  - Speed: fast enough for real-time use
+  - Used for: both Botawiki semantic search AND quarantine claim validation
+
+Hosted as a Python FastAPI service on the cluster.
+Routes requests to GPU when available, falls back to CPU.
+
+Alternatives (if the default is not accurate enough):
+  all-mpnet-base-v2  — 768-number vectors, roughly twice as accurate, twice as slow
+  e5-large-v2        — 1024-number vectors, best accuracy, four times as slow`,
+    needs: "Confirm the model choice. Key constraint: must run on consumer hardware without a dedicated GPU."
+  }
+};
+
+
+// ── Panel styles (add panel-why) ──────────────────────────────────────────────
+const styleEl = document.createElement('style');
+styleEl.textContent = `
+.panel-why {
+  font-size: 12px; color: var(--text); line-height: 1.75; font-weight: 300;
+  background: rgba(59,130,246,0.05);
+  border-left: 2px solid rgba(59,130,246,0.3);
+  padding: 10px 12px; border-radius: 0 4px 4px 0;
+}
+.panel-what {
+  font-size: 12px; color: var(--text-bright); line-height: 1.65; font-weight: 300;
+}
+`;
+document.head.appendChild(styleEl);
+
+
+// ── Panel logic ──────────────────────────────────────────────────────────────
+const panel = document.getElementById('sidePanel');
+const panelId = document.getElementById('panelId');
+const panelTitle = document.getElementById('panelTitle');
+const panelBody = document.getElementById('panelBody');
+const flowCol = document.getElementById('flowCol');
+let activeTag = null;
+
+function openPanel(id) {
+  const d = decisions[id];
+  if (!d) return;
+
+  panelId.textContent = id;
+  panelId.className = 'panel-id ' + d.status;
+  panelTitle.textContent = d.title;
+
+  const statusLabel = { locked: '🔒 LOCKED — applied to codebase', pending: '⏳ PENDING — default exists', absorbed: '🔵 LOCKED (absorbed)' };
+
+  let html = `
+    <div class="panel-section">
+      <div class="panel-status ${d.status}">${statusLabel[d.status] || d.status} &nbsp;·&nbsp; Phase ${d.phase}</div>
+    </div>`;
+
+  if (d.what) {
+    html += `
+    <div class="panel-section">
+      <div class="panel-section-label">The question</div>
+      <div class="panel-what">${d.what}</div>
+    </div>`;
+  }
+
+  if (d.why) {
+    html += `
+    <div class="panel-section">
+      <div class="panel-section-label">Why it matters / the dilemma</div>
+      <div class="panel-why">${d.why}</div>
+    </div>`;
+  }
+
+  html += `
+    <div class="panel-section">
+      <div class="panel-section-label">Blocks</div>
+      <div class="blocks-list">${d.blocks.map(b => `<span class="block-chip">${b}</span>`).join('')}</div>
+    </div>
+    <div class="panel-section">
+      <div class="panel-section-label">${d.status === 'locked' ? 'Answer (locked)' : 'Default (pending confirmation)'}</div>
+      <div class="panel-code">${d.answer}</div>
+    </div>`;
+
+  if (d.needs) {
+    html += `
+    <div class="panel-section">
+      <div class="panel-needs">
+        <div class="panel-needs-label">Needs from you</div>
+        ${d.needs.replace(/\n/g, '<br>')}
+      </div>
+    </div>`;
+  }
+
+  panelBody.innerHTML = html;
+  panel.classList.add('open');
+  flowCol.classList.add('panel-open');
+
+  if (activeTag) activeTag.classList.remove('active');
+  const tag = document.querySelector(`.d-tag[data-id="${id}"]`);
+  if (tag) { tag.classList.add('active'); activeTag = tag; }
+}
+
+function closePanel() {
+  panel.classList.remove('open');
+  flowCol.classList.remove('panel-open');
+  if (activeTag) { activeTag.classList.remove('active'); activeTag = null; }
+}
+
+document.getElementById('panelClose').addEventListener('click', closePanel);
+
+document.querySelectorAll('.d-tag').forEach(tag => {
+  tag.addEventListener('click', () => {
+    const id = tag.dataset.id;
+    if (panel.classList.contains('open') && activeTag === tag) {
+      closePanel();
+    } else {
+      openPanel(id);
+    }
+  });
+});
+
+// ── Filter logic ─────────────────────────────────────────────────────────────
+const filterBtns = document.querySelectorAll('.filter-btn');
+filterBtns.forEach(btn => {
+  btn.addEventListener('click', () => {
+    filterBtns.forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    const f = btn.dataset.filter;
+    applyFilter(f);
+  });
+});
+
+function applyFilter(f) {
+  if (f === 'all') {
+    document.querySelectorAll('.d-tag').forEach(t => t.classList.remove('hidden'));
+    document.querySelectorAll('.step, .phase-header').forEach(el => el.classList.remove('hidden'));
+    return;
+  }
+  if (f === 'ph1' || f === 'ph2' || f === 'ph3') {
+    document.querySelectorAll('.step').forEach(el => {
+      el.classList.toggle('hidden', el.dataset.phase !== f);
+    });
+    document.querySelectorAll('.phase-header').forEach(el => {
+      el.classList.toggle('hidden', el.dataset.phase !== f);
+    });
+    document.querySelectorAll('.d-tag').forEach(t => t.classList.remove('hidden'));
+    return;
+  }
+  document.querySelectorAll('.step, .phase-header').forEach(el => el.classList.remove('hidden'));
+  document.querySelectorAll('.d-tag').forEach(tag => {
+    const id = tag.dataset.id;
+    const d = decisions[id];
+    if (!d) return;
+    const match = (f === 'locked' && (d.status === 'locked' || d.status === 'absorbed')) ||
+                  (f === 'pending' && d.status === 'pending');
+    tag.classList.toggle('hidden', !match);
+  });
+}
+</script>
+</body>
+</html>
