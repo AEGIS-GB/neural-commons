@@ -1,0 +1,12 @@
+[embedding_pool]
+health_check_interval_secs = 10
+# Node removed from rotation on health check failure.
+# Re-added automatically when healthy again.
+
+[[embedding_pool.nodes]]
+node_id = "node1"
+address = "http://10.0.0.1:8081"
+
+[[embedding_pool.nodes]]
+node_id = "node3"
+address = "http://10.0.0.3:8081"
