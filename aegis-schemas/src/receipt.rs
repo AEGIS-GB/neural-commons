@@ -61,6 +61,12 @@ pub struct ReceiptContext {
     /// Prevents low-entropy context from being brute-forced via payload_hash.
     pub blinding_nonce: String,
 
+    /// Which enforcement mode was active when this event fired.
+    /// "observe" or "enforce". Omitted for always-enforced checks (vault, memory, identity, failure).
+    /// D30: needed so TRUSTMARK can weight enforce-mode receipts differently from observe-mode.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub enforcement_mode: Option<String>,
+
     /// What happened (e.g., "write_barrier_trigger", "authorized_write", "slm_screen")
     #[serde(skip_serializing_if = "Option::is_none")]
     pub action: Option<String>,

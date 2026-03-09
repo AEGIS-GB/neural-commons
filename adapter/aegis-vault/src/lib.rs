@@ -3,6 +3,14 @@
 //! Scans for plaintext credentials in bot configuration and API traffic.
 //! Encrypts detected secrets with AES-256-GCM (key derived via HKDF-SHA256, D9).
 //! Per-tool access policy controls which tools can access which secrets.
+//!
+//! Enforcement mode (D30):
+//!   vault_block is ALWAYS enforced — not configurable. Cannot be set to observe.
+//!   Rationale: plaintext credentials must never leave the adapter. An observe-mode
+//!   vault would be a completed credential leak, not a warning.
+//!   Receipt omits enforcement_mode field (always-enforce, not switchable).
+//!   TODO(D9): vault key derivation via HKDF-SHA256 must be locked before
+//!   actual encryption can be wired.
 
 pub mod scanner;
 pub mod storage;

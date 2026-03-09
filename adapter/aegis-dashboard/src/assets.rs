@@ -29,6 +29,8 @@ body{font-family:system-ui,-apple-system,sans-serif;background:#0f1117;color:#e1
 .mode-observe{background:#1f2d1f;color:#3fb950;border:1px solid #238636}
 .mode-enforce{background:#2d1f1f;color:#f85149;border:1px solid #da3633}
 .mode-passthrough{background:#2d2a1f;color:#d29922;border:1px solid #9e6a03}
+.enforce-banner{background:rgba(245,158,11,0.12);border-bottom:1px solid rgba(245,158,11,0.3);color:#f59e0b;font-size:11px;font-family:monospace;padding:7px 20px;cursor:pointer;position:sticky;top:0;z-index:99}
+.enforce-banner:hover{background:rgba(245,158,11,0.18)}
 .tabs{display:flex;background:#161b22;border-bottom:1px solid #30363d;padding:0 24px}
 .tab{padding:10px 16px;cursor:pointer;font-size:13px;color:#8b949e;border-bottom:2px solid transparent}
 .tab:hover{color:#e1e4e8}
@@ -53,6 +55,7 @@ body{font-family:system-ui,-apple-system,sans-serif;background:#0f1117;color:#e1
 <span style="flex:1"></span>
 <span style="font-size:12px;color:#8b949e" id="version">v0.1.0</span>
 </div>
+<div id="enforce-banner" class="enforce-banner" style="display:none;" onclick="window.location='/settings#enforcement'"></div>
 <div class="tabs">
 <div class="tab active" data-tab="overview">Overview</div>
 <div class="tab" data-tab="evidence">Evidence</div>
@@ -136,6 +139,13 @@ async function poll(){
     const badge=document.getElementById('mode-badge');
     badge.textContent=s.mode.replace('_',' ');
     badge.className='mode-badge mode-'+s.mode.split('_')[0];
+    const ebanner=document.getElementById('enforce-banner');
+    if(s.observe_mode_checks&&s.observe_mode_checks.length>0){
+      const names={write_barrier:'Write Barrier',slm_reject:'SLM Screening'};
+      const labels=s.observe_mode_checks.map(k=>names[k]||k).join(', ');
+      ebanner.textContent='\u26A0 '+labels+' \u2014 warn only, not blocking. Click to enable enforcement.';
+      ebanner.style.display='block';
+    }else{ebanner.style.display='none';}
     failCount=0;
   }catch(e){
     if(++failCount>=5)document.getElementById('stat-health').textContent='Disconnected';

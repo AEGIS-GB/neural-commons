@@ -112,6 +112,7 @@ impl EvidenceRecorder {
     ) -> Result<Receipt, EvidenceError> {
         let context = ReceiptContext {
             blinding_nonce: generate_blinding_nonce(),
+            enforcement_mode: None,
             action: Some(action.to_string()),
             subject: None,
             trigger: None,
@@ -152,6 +153,7 @@ impl EvidenceRecorder {
         // Create a rollup receipt
         let rollup_context = ReceiptContext {
             blinding_nonce: generate_blinding_nonce(),
+            enforcement_mode: None,
             action: Some("merkle_rollup".to_string()),
             subject: None,
             trigger: Some("periodic".to_string()),
