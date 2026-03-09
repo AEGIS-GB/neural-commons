@@ -776,6 +776,8 @@ Periodic re-benchmark to prevent one-time faking
 
 **Blocks:** Edge Gateway rate limiter
 
+> **D35 prerequisite:** The rate limit matrix, safe bot ceilings, and the `d24_analysis.html` simulator were derived assuming the D35 node layout (Gateway on Node 2, dedicated Centaur on Nodes 4–5, embedding pool on Nodes 1 and 3). D35 must be merged before D24 is finalised.
+
 **Default:**
 ```
 Botawiki read:    200 requests/hour
@@ -796,11 +798,13 @@ Centaur:           20 requests/hour
 
 **Blocks:** Mesh dead-drop implementation
 
+> **D35 dependency:** Dead-drops now live in **MinIO** (`nc-dead-drops` bucket on Node 5), not NATS JetStream. The 72h TTL default is unchanged but the enforcement mechanism changes from NATS stream `max_age` to a MinIO object lifecycle rule. See `infra/minio/dead_drop_lifecycle.md`.
+
 **Default:**
 ```
 TTL: 72 hours
 On expiry: expiry receipt sent to sender
-Storage: encrypted at rest, deleted after TTL
+Storage: AES-256-GCM encrypted at rest in MinIO, deleted after TTL via lifecycle rule
 ```
 
 **What I need from you:** Confirm 72h TTL.
@@ -831,14 +835,16 @@ Deactivation is one-way — cannot be re-enabled without Foundation broadcast
 
 **Blocks:** GPU scheduler implementation
 
+> **D35 dependency:** Nodes 4 and 5 are now **fully dedicated to Centaur** with no embedding model competing for GPU memory. The KV cache budget is larger (up to ~80GB on Node 4). Hot-pin threshold and node count should be re-evaluated: with no GPU contention, hot-pinning at a lower query threshold becomes viable.
+
 **Default:**
 ```
-Threshold: >50 daily Centaur queries → hot-pin to 2 GPU nodes
+Threshold: >50 daily Centaur queries → hot-pin to 2 GPU nodes (Nodes 4 and 5)
 Below 50: on-demand loading, cold start <30s
 Hot-pin re-evaluated daily
 ```
 
-**What I need from you:** Confirm threshold and node count.
+**What I need from you:** Confirm threshold and node count. With D35 layout, both Centaur nodes are always available — consider whether the threshold should be lower.
 
 ---
 
@@ -906,6 +912,8 @@ Step 3 - Execute: Adapter manages context + coordination internally
 
 **Blocks:** Embedding service (Python FastAPI)
 
+> **D35 note:** The embedding service now runs on **Nodes 1 and 3** (not Node 4) as a load-balanced GPU pool. Deployment configuration must target both nodes. GPU routing is always available — CPU fallback is no longer needed. See D35 for pool routing rules.
+
 **Default:**
 ```
 Model: all-MiniLM-L6-v2
@@ -913,8 +921,10 @@ Model: all-MiniLM-L6-v2
   - Fast inference, CPU-friendly
   - Upgrade to larger model if accuracy insufficient for quarantine
 
-Deployment: Python FastAPI service
-  - GPU routing when available, CPU fallback
+Deployment: Python FastAPI service — two instances
+  - GPU A: Node 1 (direct embedding calls, round-robin)
+  - GPU B: Node 3 (RAG embedding always here; direct calls round-robin)
+  - No CPU fallback required (dedicated GPUs, no Centaur competition)
   - Shared by: quarantine checks + Botawiki semantic search
 ```
 
