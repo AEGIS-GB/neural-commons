@@ -932,158 +932,43 @@ Deployment: Python FastAPI service — two instances
 
 ---
 
-### D35: Node Service Redistribution ✅ ANSWERED
+### D35: Node Service Redistribution
+**Status: LOCKED**
 
-**Status:** ANSWERED — Applied before Phase 3 build begins
-**Phase:** 3
+Five-node final layout:
 
-**What:** Redistribute cluster services across all five nodes to activate three idle Radeon 8060S GPUs (Nodes 1, 2, 3). Move Edge Gateway from Node 5 → Node 2. Split embedding into a two-GPU pool on Nodes 1 and 3. Dedicate Nodes 4 and 5 entirely to Centaur. Migrate dead-drop storage from NATS JetStream to MinIO on Node 5.
-
-**Why it matters:** The original layout created three compounding problems: (1) Embedding and Centaur competed for the same GPU on Node 4, reducing effective Centaur throughput to ~0.20/sec. (2) RAG queries required two cross-node NATS hops adding ~17ms latency. (3) NATS `MESH` stream `max_file: 1GB` fills within hours at 1,000 mesh bots. All three resolved at zero hardware cost.
-
-**Blocks:** All Phase 3 service deployment configs, D24, D25, D27, D34, NC_System_Architecture.md, NATS_TOPOLOGY.md
-
-**Answer:**
 ```
-Node 1: NATS Primary + PG Primary + Evidence Ingestion + Embedding GPU A
-Node 2: NATS Secondary + PG Replica + TRUSTMARK Engine + Edge Gateway
-Node 3: NATS Tertiary + PG+pgvector + Botawiki + Mesh Relay + Embedding GPU B
-Node 4: Centaur Primary + GPU Scheduler
-Node 5: Centaur Failover + MinIO (dead-drop storage)
-
-Embedding pool: GPU A (Node 1) + GPU B (Node 3)
-  - Direct calls: round-robin across A and B
-  - RAG calls: always GPU B (Node 3, co-located with pgvector)
-
-Dead-drop storage: MinIO nc-dead-drops bucket (Node 5)
-  - TTL: 72h via MinIO lifecycle rule (D25 default unchanged)
-  - Max objects/recipient: 500 (enforced at Gateway)
-
-Capacity:
-  - Centaur: 720 → 1,944 queries/hr (2.7x, no new hardware)
-  - T3 bot ceiling: ~36 → ~108 active bots at 30/hr, 60% utilisation
-  - RAG latency: ~42ms → ~16ms (CPU fallback path eliminated)
+Node 1: NATS Primary + Evidence Ingestion + PostgreSQL Primary
+        + Embedding Service A (GPU A)
+Node 2: NATS Secondary + TRUSTMARK Engine + PostgreSQL Replica
+        + Edge Gateway + Centaur B (previously idle GPU)
+Node 3: NATS Tertiary + Botawiki Service + Mesh Relay
+        + PostgreSQL + pgvector + Embedding Service B (GPU B)
+        + RAG Service (co-located with pgvector — zero cross-node hop)
+Node 4: Centaur Primary + GPU Scheduler (Centaur-only, Option B)
+Node 5: Centaur Failover + MinIO (dead-drops, 10TB NVMe, 72h TTL)
 ```
 
-**Full decision document:** `docs/decisions/D35_node_redistribution.md`
+Option B (Phase 3 launch):
+  Centaur nodes: 2, 4, 5
+  Capacity: 3 × 0.27/sec = 0.81/sec = 2,916 queries/hr
+  Safe ceiling: ~162 active T3 bots at 30/hr, 60% utilisation
+  Embedding: load-balanced at Gateway across Nodes 1+3
+  Scheduler scope: Centaur only
 
----
+Option C (escalation — config change only):
+  Trigger: active T3 bots consistently exceed 150
+  Add Centaur to Nodes 1+3 (edit config.toml, send SIGHUP)
+  Capacity: 5 × 0.27/sec = 1.35/sec = ~270 active T3 bots
+  Embedding routing: Scheduler-aware (GPU-busy check added)
+  No code change. No migration. No downtime.
 
-### D36: Workspace Discovery and File Classification
+Dead-drops: MinIO on Node 5 (not NATS JetStream).
+NATS 1GB object limit eliminated. 72h TTL via MinIO lifecycle policy.
 
-**Status:** ⏳ PENDING — no default exists
-
-**Phase:** 1 (install-time onboarding)
-
-**Blocks:** `aegis-barrier` protected file list, `aegis-memory` monitored paths config, `aegis setup` CLI onboarding flow
-
----
-
-## Background
-
-### What we learned about OpenClaw's file system
-
-OpenClaw's official workspace contains two distinct categories of files. The first category is **identity and behavior files** — files that are seeded once during setup, loaded into the system prompt on every single session turn, and almost never legitimately changed during normal operation:
-
-- `AGENTS.md` — the bot's operating contract: priorities, boundaries, workflow rules
-- `SOUL.md` — behavioral core: voice, values, non-negotiable constraints
-- `IDENTITY.md` — structured identity profile: name, role, goals
-- `TOOLS.md` — environment notes: host conventions, path aliases, risky commands
-- `BOOT.md` — startup ritual, runs on every gateway restart
-
-The second category is **memory files** — files written to frequently during normal operation as the bot accumulates knowledge, preferences, and session context:
-
-- `MEMORY.md` — curated long-term memory, durable facts
-- `memory/YYYY-MM-DD.md` — daily append-only logs
-- `HEARTBEAT.md` — autonomous task checklist, runs every 30 minutes
-- `USER.md` — warden preferences, communication style, recurring context
-
-### Why these two categories need different treatment
-
-Identity and behavior files have no legitimate session-time writes. A warden sets them up once. After that they should only change when the warden explicitly decides to evolve the bot through the CLI evolution flow. Any write to these files that does not come from the CLI is unauthorized by definition — regardless of content. These belong in **D5's protected file list** (write barrier), where unauthorized writes are blocked unconditionally in enforce mode. SLM content screening (D11) is not the right tool here because the question is not "is this content malicious" but "why is this file being written to at all."
-
-Memory files are written to constantly during normal operation. The challenge is distinguishing legitimate writes from injection attacks — a task that requires SLM semantic screening because the content of a legitimate write and an attack can look structurally similar. These belong in **D11's monitored paths** (memory integrity module).
-
-### What the current repo is missing
-
-**Missing from D5 protected file list** (`aegis-barrier/src/protected_files.rs`):
-
-- `AGENTS.md` — the highest-value attack target after SOUL.md. Controls the bot's operating rules on every session. A modification silently changes the bot's constitution. Wardens have no reason to check it regularly, so a compromise can persist for weeks undetected.
-- `IDENTITY.md` — identity profile injected into every session turn.
-- `TOOLS.md` — defines what the bot considers safe/unsafe to execute. Modifying it is a behavioral attack, not a memory update.
-- `BOOT.md` — runs on every gateway restart. An attacker who controls BOOT.md controls what happens every time the bot comes back online.
-
-**Missing from D11 monitored paths** (`aegis-memory` config defaults):
-
-- `HEARTBEAT.md` — the bot's autonomous task schedule. Runs every 30 minutes without warden prompting. An attacker who modifies HEARTBEAT.md can add unauthorized autonomous actions that execute silently on a timer.
-- `USER.md` — accumulates warden preferences over time like MEMORY.md. Legitimate writes are frequent. An injection here shapes how the bot addresses and responds to the warden across all future sessions.
-
-### The gap that neither D5 nor D11 covers
-
-Beyond the official OpenClaw file set, the community has no standard for what files skills and third-party integrations write to. A skill for task management might write `tasks.json`. A skill for research might write `context.md` or `notes/session.md`. A trading bot might write `bot_state/positions.json`. The ClawHavoc campaign specifically exploited community skills as the attack vector — 900+ fake plugins that wrote arbitrary files to wardens' workspaces. These files sit in a complete blind spot. They are not in D5's protected list so the write barrier does not watch them. They are not in D11's monitored list so no SLM screening happens. An attacker who compromises a skill can write malicious content into `session_state.json` that gets read back into the bot's context on the next session with zero detection.
-
-The default list in D11 cannot cover these files with hard-coded paths because no matter how many patterns are added, a skill can always write to a path that was not anticipated. The only way to close this gap is to discover what files actually exist in each warden's workspace at install time and ask the warden to classify them.
-
----
-
-## The Decision
-
-**What:** When the adapter installs and scans the workspace, it will find files outside the known default lists — files created by skills, third-party integrations, or custom warden workflows. How does the adapter surface those files, how does the warden classify them, and what protection applies to unclassified files in the meantime?
-
-**Why it matters:** An unclassified file is an unprotected file. An attacker who knows the adapter's default lists can target any file not on those lists — writing malicious content that influences the bot's behavior with no detection, no receipt, and no alert. The larger and more customized a warden's skill set, the larger this blind spot becomes.
-
-**The dilemma:** A fully interactive onboarding classification step adds friction to the install process — which the adapter's "zero config protection" promise is designed to avoid. A fully automatic heuristic classification (`.md` → D11, `.json` → hash monitoring, everything else → ignore) will misclassify files and either over-alert (treating every JSON write as suspicious) or under-protect (ignoring files that are actually high-value targets). The warden is the only person who knows which files their specific skill set writes to and how important they are.
-
----
-
-## Options
-
-**Option A — Interactive onboarding scan**
-During `aegis setup`, the adapter scans the workspace, identifies all files outside the known default lists, and presents them to the warden grouped by extension and location. The warden classifies each group: protected (goes to D5), monitored with SLM screening (goes to D11), hash-only monitoring, or ignore. Classification is saved to `config.json`.
-Pros: accurate, warden-owned, produces a config that reflects reality.
-Cons: adds time to setup, wardens who don't understand the distinction may classify incorrectly, must be re-run when new skills are installed.
-
-**Option B — Heuristic auto-classification with dashboard review**
-The adapter applies heuristics at install time: `.md` files in the workspace root go to D11 by default, `.json` files in the workspace get hash-only monitoring, everything else is ignored. The dashboard surfaces all auto-classified files with their assigned category. The warden can override any classification without re-running setup.
-Pros: zero friction at install time, warden can review and adjust at their own pace.
-Cons: heuristics will be wrong for some files, misclassified files are vulnerable until the warden reviews them, wardens who never open the dashboard never review them.
-
-**Option C — Catch-all receipt-only mode**
-Any write to any file in the workspace that is not on the D5 or D11 lists produces a receipt automatically, with no SLM screening and no blocking. Unclassified files are not ignored — they are silently observed. The warden can promote any file to D11 or D5 via CLI or dashboard.
-Pros: nothing is invisible, no false positives from SLM screening, no setup friction.
-Cons: receipt volume may be high for bots with active skills that write frequently, warden still needs to take action to get real protection on important files.
-
----
-
-## Default (pending confirmation)
-
-Unknown workspace files get **hash-only monitoring with receipt generation** (Option C behavior), applied automatically at install time with no warden interaction required. This means:
-
-- Any write to any file in the workspace root or `memory/` that is not already on the D5 or D11 lists produces a `write_event` receipt
-- No SLM screening on unclassified files (avoids false positives)
-- No blocking on unclassified files (avoids breaking active skills)
-- The dashboard surfaces all unclassified files that have produced receipts, so the warden can see what their skills are writing to and promote files to D11 or D5 when appropriate
-
-The D5 additions (AGENTS.md, IDENTITY.md, TOOLS.md, BOOT.md) and D11 additions (HEARTBEAT.md, USER.md) are not pending — those should be implemented immediately as updates to the existing defaults based on the research into OpenClaw's file system.
-
----
-
-## Connection to T-19
-
-The first 10–20 wardens recruited during the soft launch are the primary data source for improving the default lists. During their onboarding, the adapter should log which non-standard files appear most frequently across workspaces. File patterns that appear in more than 30% of wardens' workspaces are candidates for promotion to the D11 or D5 default lists in the next release. This feedback loop — soft launch wardens → observed file patterns → updated defaults — is the only reliable way to close the blind spot systematically rather than through speculation.
-
----
-
-## What I need from you
-
-**1. Which classification approach — A, B, or C?**
-The interactive scan (A) gives the most accurate result but adds setup friction. Auto-classification with dashboard review (B) is zero-friction but leaves a window of miscoverage. Receipt-only catch-all (C) is the safest default but generates receipt volume the warden may not notice.
-
-**2. Should new skill installations trigger a re-scan?**
-When a warden installs a new OpenClaw skill via `openclaw skills install`, that skill may create new files the adapter has never seen. Should the adapter detect new skill installations and automatically apply the default classification to any new files the skill creates? Or should this be manual — the warden runs `aegis scan` after installing a new skill?
-
-**3. Should the T-19 soft launch file pattern data be anonymous or attributed?**
-If the adapter reports which non-standard files appear across multiple warden workspaces to the Foundation for the purpose of updating the default lists, does that require explicit warden consent? File names like `tasks.json` or `positions.json` may reveal what the bot is doing. This is a privacy decision as much as a product one.
+NOTE: D35 row was previously showing "Workspace discovery and file classification" —
+a numbering collision from an old decision log entry. The workspace discovery content
+has been moved to the backlog and is not part of this decision.
 
 ---
 
@@ -1125,5 +1010,4 @@ If the adapter reports which non-standard files appear across multiple warden wo
 | D29 | 3 | Source diversity minimums | ⏳ Pending |
 | D33 | 3 | Swarm composite tool | ⏳ Pending |
 | D34 | 3 | Embedding model choice | ⏳ Pending |
-| D35 | 3 | Node service redistribution — idle GPUs activated | ✅ ANSWERED |
-| D36 | 1 | Workspace discovery and file classification | ⏳ Pending |
+| D35 | 3 | Node redistribution — idle GPU activation, Option B/C capacity config | 🔒 LOCKED |

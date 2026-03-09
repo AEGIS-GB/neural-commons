@@ -1,0 +1,40 @@
+[scheduler]
+# Option B: Centaur-only routing. Embedding uses Gateway load balancer.
+# Option C: add "centaur" to node1 and node3 models lists below,
+#           then send SIGHUP. No restart needed.
+
+centaur_queue_cap = 50       # hard 503 at position 51 — D24 locked
+credit_check_at_entry = true # check before queuing, not at billing
+hot_pin_threshold = 0        # TODO(D27): confirm hot-pin query count
+
+[[nodes]]
+node_id   = "node1"
+address   = "http://10.0.0.1:9090"
+models    = ["embedding"]
+# Option C: models = ["embedding", "centaur"]
+
+[[nodes]]
+node_id   = "node2"
+address   = "http://10.0.0.2:9090"
+models    = ["centaur"]
+
+[[nodes]]
+node_id   = "node3"
+address   = "http://10.0.0.3:9090"
+models    = ["embedding"]
+# Option C: models = ["embedding", "centaur"]
+
+[[nodes]]
+node_id   = "node4"
+address   = "http://10.0.0.4:9090"
+models    = ["centaur"]
+
+[[nodes]]
+node_id   = "node5"
+address   = "http://10.0.0.5:9090"
+models    = ["centaur"]
+
+[embedding]
+# Option B: load_balancer — Gateway routes directly, no Scheduler
+# Option C: scheduler    — GPU-busy aware, Scheduler routes
+routing_mode = "load_balancer"
