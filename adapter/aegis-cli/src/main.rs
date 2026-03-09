@@ -34,7 +34,8 @@ use aegis_adapter::Mode;
                   Use --enforce to enable blocking."
 )]
 struct Cli {
-    /// Force observe-only mode — all enforcement reverts to warn-only
+    /// Set write_barrier and slm_reject to observe mode (warn only, no blocking).
+    /// Does not affect vault encryption, memory revert, identity check, or failure rollback.
     #[arg(long, global = true, conflicts_with_all = ["pass_through", "enforce"])]
     observe_only: bool,
 
@@ -172,6 +173,8 @@ fn main() {
         None
     };
 
+    // Note: --observe-only flag is wired to EnforcementConfig after config load (below).
+
     let mode_label = match mode_override {
         Some(Mode::PassThrough) => "pass-through",
         Some(Mode::Enforce) => "enforce",
@@ -195,6 +198,12 @@ fn main() {
     }
     if let Some(ref listen) = cli.listen {
         config.proxy.listen_addr = listen.clone();
+    }
+
+    // D30: --observe-only sets write_barrier + slm_reject to observe.
+    // Does NOT affect vault_block, memory_write, identity_check, failure_rollback.
+    if cli.observe_only {
+        config.enforcement.apply_observe_only_flag();
     }
 
     match cli.command {

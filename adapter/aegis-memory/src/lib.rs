@@ -11,6 +11,13 @@
 //! Default memory file patterns (D11):
 //!   MEMORY.md, *.memory.md, memory/*.md, SOUL.md
 //!   + any paths in config.json -> memory_paths[]
+//!
+//! Enforcement mode (D30):
+//!   memory_write is ALWAYS enforced — not configurable. Cannot be set to observe.
+//!   Rationale: injected content in MEMORY.md is read by the bot on the SAME turn.
+//!   An observe-mode memory check would be a completed attack, not a warning.
+//!   Unauthorized writes are reverted immediately before the next bot turn.
+//!   Receipt omits enforcement_mode field (always-enforce, not switchable).
 
 pub mod config;
 pub mod interception;

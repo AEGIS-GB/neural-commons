@@ -300,6 +300,7 @@ mod tests {
     fn make_context() -> ReceiptContext {
         ReceiptContext {
             blinding_nonce: generate_blinding_nonce(),
+            enforcement_mode: None,
             action: Some("test".to_string()),
             subject: None, trigger: None, outcome: None, detail: None, enterprise: None,
         }

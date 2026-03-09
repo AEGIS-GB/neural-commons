@@ -10,7 +10,9 @@ Trust infrastructure for 17,000+ MoltBook bot wardens. Two parallel Rust workspa
 - **Wire format**: RFC 8785 canonical JSON — bytes signed = bytes on wire. Protobuf for schema generation only.
 
 ## Key Conventions
-- All Phase 1 enforcement defaults to **observe-only** (warn, don't block).
+- Phase 1 enforcement: `write_barrier` and `slm_reject` default to observe (warn,
+  don't block). `vault_block` and `memory_write` always enforce. See D30.
+- Rate limit keyed by bot identity fingerprint (not source IP). See D30.
 - `aegis --pass-through` = dumb forwarder, zero inspection.
 - Evidence receipts use UUID v7 (time-ordered), SHA-256 hash chains, Ed25519 signatures.
 - Enterprise nullable fields on every receipt (`fleet_id`, `warden_key`, `policy_url`, etc.).

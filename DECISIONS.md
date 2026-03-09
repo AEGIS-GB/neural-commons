@@ -412,36 +412,46 @@ Size budget: guideline not hard limit. This implementation adds ~400 bytes of JS
 
 ---
 
-### D30: Observe-Only Default — Which Enforcement Points
+### D30: Observe-Only Enforcement Points 🔒
 
-**What:** Which specific enforcement points default to observe-only (warn, don't block) in Phase 1?
+**Status:** LOCKED — Applied to `aegis-schemas/src/config.rs`,
+`adapter/aegis-barrier`, `adapter/aegis-slm`, `adapter/aegis-vault`,
+`adapter/aegis-memory`, `adapter/aegis-proxy`, `adapter/aegis-cli`
 
-**Why it matters:** This is the core safety design. Observe-only means wardens can install with confidence that nothing will break their bot. But we need to be specific about which points are affected.
+**Answer:**
 
-**Blocks:** All enforcement logic in adapter crates
+Six checks in the adapter pipeline. Two are switchable. Four are always enforced.
 
-**Default:**
-```
-Observe-only affects (each independently switchable):
-  1. Write barrier   — detects + receipts, does NOT revert/block
-  2. SLM reject      — receipts, does NOT drop the request
-  3. Vault block     — detects plaintext, does NOT prevent API call
-  4. Memory write block — detects unauthorized change, does NOT revert
+**Switchable (can be set to "observe" or "enforce" per check):**
+- `write_barrier` — default: `"observe"` (detect + receipt, no revert)
+- `slm_reject` — default: `"observe"` (score + receipt, no drop)
 
-NOT affected by observe-only (always active):
-  - Request size limits (10MB body)
-  - Per-source-IP rate limiting (1000 req/min)
-  - Receipt generation (always on)
-  - Hash chain maintenance (always on)
+**Always enforced (not configurable — cannot be set to observe):**
+- `vault_block` — always encrypts detected plaintext before forwarding
+- `memory_write` — always reverts unauthorized writes to monitored files
+- `identity_check` — authentication gate, cannot be bypassed
+- `failure_rollback` — adapter self-recovery, cannot be bypassed
 
-`aegis --observe-only` sets ALL four to warn mode
-Individual points can be switched via config
-```
+**Environment split:**
+- Test cluster: all switchable checks default to `"enforce"`
+- External wardens (T-19+): switchable checks default to `"observe"`
 
-**What I need from you:**
-1. Confirm the four observe-only enforcement points
-2. Confirm that rate limiting + size limits are always active (not affected by observe-only)
-3. Any other enforcement points I'm missing?
+**CLI:**
+- `aegis --observe-only` sets write_barrier + slm_reject to `"observe"`
+- Does NOT affect vault_block, memory_write, identity_check, failure_rollback
+
+**Rate limit:** keyed by bot Ed25519 fingerprint (not source IP). 1000 req/min.
+
+**SLM warn-mode receipt:** summary only — aggregate score (0–10000) + action
+(admit/quarantine/reject). No per-pattern breakdown in Phase 1.
+
+**Body size cap:** 10MB per request.
+
+**Dashboard:** amber warning banner on all tabs when any switchable check is
+in `"observe"` mode. Per-check toggle links in banner.
+
+**Receipt schema (D1 addendum):** `enforcement_mode` field added to
+`ReceiptContext` — records `"observe"` or `"enforce"` at time of event.
 
 ---
 
@@ -1056,7 +1066,7 @@ If the adapter reports which non-standard files appear across multiple warden wo
 | D9  | 1 | Vault key derivation | ⏳ Pending |
 | D11 | 1 | Memory file patterns | ✅ CONFIRMED |
 | D12 | 1 | Dashboard refresh | ✅ CONFIRMED |
-| D30 | 1 | Observe-only enforcement points | ⏳ Pending |
+| D30 | 1 | Observe-only enforcement points | 🔒 LOCKED |
 | D31 | 1 | OpenClaw fixture requirements | ⏳ Pending |
 | D13 | 2 | TRUSTMARK weights | ⏳ Pending |
 | D14 | 2 | Tier thresholds | ⏳ Pending |

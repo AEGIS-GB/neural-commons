@@ -1,8 +1,8 @@
 //! Tower middleware layers for the proxy pipeline.
 //!
 //! Layers (in order):
-//!   1. Rate limiting (per-source-IP, always active)
-//!   2. Body size limiting (always active)
+//!   1. Rate limiting (keyed by bot Ed25519 fingerprint, not source IP — D30)
+//!   2. Body size limiting (always active, 10MB cap — D30)
 //!   3. Evidence recording hooks
 //!   4. Write barrier hooks
 //!   5. SLM analysis hooks
@@ -10,6 +10,11 @@
 //!
 //! In pass-through mode, only rate limiting and size limiting are active.
 //! Evidence/barrier/SLM/vault are pluggable trait objects injected by aegis-adapter.
+//!
+//! Rate limit key (D30): The bot's Ed25519 fingerprint is extracted from the
+//! NC-Auth header (D3). Source IP is meaningless on a local proxy — all requests
+//! are 127.0.0.1. If no auth header is present, the identity_check middleware
+//! rejects the request before it reaches the rate limiter.
 
 use std::collections::HashMap;
 use std::future::Future;

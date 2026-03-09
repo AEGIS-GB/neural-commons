@@ -6,6 +6,7 @@
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
+use aegis_schemas::config::{EnforcementConfig, RateLimitConfig};
 use crate::Mode;
 
 /// Top-level adapter configuration.
@@ -26,6 +27,14 @@ pub struct AdapterConfig {
     /// Memory monitoring configuration
     #[serde(default)]
     pub memory: MemorySection,
+
+    /// Per-check enforcement posture. See D30.
+    #[serde(default = "default_enforcement")]
+    pub enforcement: EnforcementConfig,
+
+    /// Rate limiting config. Keyed by bot identity fingerprint. See D30.
+    #[serde(default)]
+    pub rate_limit: RateLimitConfig,
 
     /// Data directory for SQLite databases and state
     #[serde(default = "default_data_dir")]
@@ -124,6 +133,7 @@ fn default_max_body_size() -> usize { 10 * 1024 * 1024 } // 10MB
 fn default_rate_limit() -> u32 { 1000 }
 fn default_true() -> bool { true }
 fn default_hash_interval() -> u64 { 60 }
+fn default_enforcement() -> EnforcementConfig { EnforcementConfig::observe_default() }
 
 impl Default for AdapterConfig {
     fn default() -> Self {
@@ -132,6 +142,8 @@ impl Default for AdapterConfig {
             proxy: ProxySection::default(),
             vault: VaultSection::default(),
             memory: MemorySection::default(),
+            enforcement: EnforcementConfig::observe_default(),
+            rate_limit: RateLimitConfig::default(),
             data_dir: default_data_dir(),
         }
     }

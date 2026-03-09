@@ -120,6 +120,19 @@ pub async fn start(
                 crate::Mode::PassThrough => "pass_through",
             }
         }),
+        observe_mode_checks_fn: Arc::new({
+            let enforcement = config.enforcement.clone();
+            move || {
+                let mut checks = vec![];
+                if enforcement.write_barrier.is_observe() {
+                    checks.push("write_barrier".to_string());
+                }
+                if enforcement.slm_reject.is_observe() {
+                    checks.push("slm_reject".to_string());
+                }
+                checks
+            }
+        }),
         start_time,
     });
     let _dashboard_router = aegis_dashboard::routes::routes(dashboard_state);

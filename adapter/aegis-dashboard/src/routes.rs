@@ -60,6 +60,9 @@ pub struct DashboardSharedState {
     /// Callback returning the current mode string.
     /// Stored as a closure so aegis-dashboard does not depend on aegis-adapter.
     pub mode_fn: Arc<dyn Fn() -> &'static str + Send + Sync>,
+    /// Callback returning which switchable checks are currently in observe mode (D30).
+    /// Empty vec = all checks enforced = no banner needed.
+    pub observe_mode_checks_fn: Arc<dyn Fn() -> Vec<String> + Send + Sync>,
     /// Adapter start time for uptime calculation.
     pub start_time: Instant,
 }
@@ -90,6 +93,9 @@ struct DashboardStatus {
     memory_files_tracked: u64,
     health: String,
     version: String,
+    /// Which switchable checks are currently in observe mode (D30).
+    /// Empty vec = all checks enforced = no amber banner needed.
+    observe_mode_checks: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -127,6 +133,7 @@ async fn api_status(
         memory_files_tracked: 0,
         health: "healthy".to_string(),
         version: env!("CARGO_PKG_VERSION").to_string(),
+        observe_mode_checks: (state.observe_mode_checks_fn)(),
     })
 }
 

@@ -31,6 +31,7 @@ mod receipt_tests {
     fn sample_receipt_context() -> ReceiptContext {
         ReceiptContext {
             blinding_nonce: generate_blinding_nonce(),
+            enforcement_mode: None,
             action: Some("api_call".to_string()),
             subject: Some("openai-chat".to_string()),
             trigger: None,
@@ -105,6 +106,7 @@ mod receipt_tests {
         // D2: Optional fields must be omitted, never null
         let context = ReceiptContext {
             blinding_nonce: generate_blinding_nonce(),
+            enforcement_mode: None,
             action: None,
             subject: None,
             trigger: None,
@@ -128,6 +130,7 @@ mod receipt_tests {
     fn enterprise_context_nested_not_flattened() {
         let context = ReceiptContext {
             blinding_nonce: generate_blinding_nonce(),
+            enforcement_mode: None,
             action: Some("test".to_string()),
             subject: None,
             trigger: None,
