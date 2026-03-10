@@ -1,0 +1,38 @@
+{
+  "name": "unknown-provider-rejection",
+  "format": "single",
+  "request": {
+    "method": "POST",
+    "path": "/v1/chat/completions",
+    "headers": {
+      "content-type": "application/json",
+      "authorization": "Bearer sk-openai-fake-key"
+    },
+    "body": {
+      "model": "gpt-4",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Hello"
+        }
+      ]
+    }
+  },
+  "response": {
+    "status": 422,
+    "headers": {
+      "content-type": "application/json"
+    },
+    "body": {
+      "error": "provider_not_supported",
+      "message": "aegis-proxy Phase 1 supports Anthropic only",
+      "supported": ["anthropic"],
+      "docs": "https://docs.anthropic.com/en/api/messages"
+    }
+  },
+  "metadata": {
+    "category": "unknown-provider-rejection",
+    "source": "mock",
+    "notes": "Proxy-generated 422 — request lacks anthropic-version header. No upstream call made. Per D31-A."
+  }
+}

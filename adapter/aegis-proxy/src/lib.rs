@@ -9,6 +9,7 @@
 //!   observe-only: full inspection + receipts, no blocking (default)
 //!   enforce: full inspection + receipts + blocking
 
+pub mod anthropic;
 pub mod proxy;
 pub mod middleware;
 pub mod cognitive_bridge;
