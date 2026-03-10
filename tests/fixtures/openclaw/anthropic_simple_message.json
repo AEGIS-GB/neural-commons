@@ -1,0 +1,53 @@
+{
+  "name": "anthropic-simple-message",
+  "format": "single",
+  "request": {
+    "method": "POST",
+    "path": "/v1/messages",
+    "headers": {
+      "anthropic-version": "2023-06-01",
+      "content-type": "application/json",
+      "x-api-key": "{{OPENCLAW_TOKEN}}"
+    },
+    "body": {
+      "model": "claude-sonnet-4-20250514",
+      "max_tokens": 1024,
+      "messages": [
+        {
+          "role": "user",
+          "content": "What is the capital of France?"
+        }
+      ]
+    }
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json",
+      "x-request-id": "req_mock_001"
+    },
+    "body": {
+      "id": "msg_mock_001",
+      "type": "message",
+      "role": "assistant",
+      "content": [
+        {
+          "type": "text",
+          "text": "The capital of France is Paris."
+        }
+      ],
+      "model": "claude-sonnet-4-20250514",
+      "stop_reason": "end_turn",
+      "stop_sequence": null,
+      "usage": {
+        "input_tokens": 14,
+        "output_tokens": 10
+      }
+    }
+  },
+  "metadata": {
+    "category": "anthropic-non-streaming",
+    "source": "mock",
+    "notes": "Basic single-turn non-streaming request/response"
+  }
+}

@@ -1,0 +1,58 @@
+%% Protection Bundle Data Flow — Phase 1
+%%
+%% Architecture corrected per D31: OpenClaw IS the bot.
+%% It makes outbound HTTPS calls to LLM providers.
+%% The proxy intercepts on the outbound path.
+%%
+%% Phase 1 vault role: scan only, no key injection.
+%% Vault injection is Phase 2.
+
+sequenceDiagram
+    participant OC as OpenClaw (bot)
+    participant AP as aegis-proxy<br/>127.0.0.1:AEGIS_PORT
+    participant SLM as SLM Hook
+    participant EV as Evidence Recorder
+    participant CV as Credential Vault
+    participant WB as Write Barrier
+    participant API as api.anthropic.com
+
+    Note over OC,AP: OpenClaw config:<br/>baseUrl = http://127.0.0.1:AEGIS_PORT
+
+    OC->>AP: POST /v1/messages
+    Note over AP: Check anthropic-version header (D31-A)
+    alt Missing anthropic-version
+        AP-->>OC: 422 provider_not_supported
+    end
+
+    AP->>AP: Parse Anthropic request body
+    AP->>AP: Rate limit check (Ed25519 fingerprint, D30)
+
+    rect rgb(240, 248, 255)
+        Note over AP,CV: Pre-request middleware (skip in pass-through mode)
+        AP->>EV: Record request receipt<br/>(method, path, body_hash, timestamp)
+        AP->>WB: Check write barrier
+        WB-->>AP: Allow / Warn / Block
+        AP->>SLM: Screen messages[] + system<br/>(parsed content, not raw JSON)
+        SLM-->>AP: Admit / Quarantine / Reject
+        AP->>CV: Scan request for exposed credentials
+        CV-->>AP: Clean / Detected(secrets)
+    end
+
+    AP->>API: Forward request<br/>(x-api-key passthrough, no vault injection in Phase 1)
+
+    alt Content-Type: text/event-stream (SSE)
+        API-->>AP: Streaming SSE chunks
+        AP-->>OC: Forward each chunk immediately (no buffer)
+        Note over AP: Evidence receipt for SSE:<br/>deferred until stream completes
+    else Content-Type: application/json
+        API-->>AP: Buffered JSON response
+
+        rect rgb(255, 248, 240)
+            Note over AP,CV: Post-response middleware
+            AP->>EV: Record response receipt<br/>(status, body_hash, duration_ms)
+            AP->>CV: Scan response for credential leakage
+            CV-->>AP: Clean / Detected(secrets)
+        end
+
+        AP-->>OC: JSON response
+    end

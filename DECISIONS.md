@@ -480,33 +480,76 @@ in `"observe"` mode. Per-check toggle links in banner.
 
 ---
 
-### D31: OpenClaw Compatibility Harness — Fixture Requirements
+### D31: OpenClaw Compatibility Harness — Fixture Requirements 🔒
 
-**What:** How many golden request/response fixtures do we need before starting proxy implementation?
+**Status:** LOCKED — Architecture-corrected version. Supersedes original D31 draft.
 
-**Why it matters:** Too few fixtures = blind spots in compatibility. Too many = delays proxy work. The harness is the FIRST Phase 1 work item.
+**Background:** The original D31 was built on a wrong mental model. The assumption was
+that the adapter sits between an external client and OpenClaw as a server. The reality
+is the opposite: **OpenClaw IS the bot.** It makes outbound HTTPS calls to LLM providers.
+The proxy sits between OpenClaw and the Anthropic API. There is no "inbound" interception —
+only one config change is needed:
 
-**Blocks:** OpenClaw Harness completeness, proxy implementation start gate
-
-**Default:**
-```
-Minimum 20 request/response pairs covering:
-  - Auth flow (login, token refresh)
-  - Standard API call (chat completion or equivalent)
-  - Streaming response (SSE or chunked)
-  - WebSocket upgrade + message exchange
-  - Error responses (4xx, 5xx)
-  - Multi-turn conversation
-  - File/attachment upload (if applicable)
-
-Format: JSON files in tests/fixtures/openclaw/
-Each fixture: { request: {...}, response: {...}, metadata: {...} }
+```json
+// ~/.openclaw/openclaw.json
+{ "models": { "providers": { "anthropic": { "baseUrl": "http://127.0.0.1:AEGIS_PORT" } } } }
 ```
 
-**What I need from you:**
-1. Confirm 20 as the minimum count
-2. Are there specific OpenClaw endpoints that are critical to capture?
-3. Do you have access to a running OpenClaw instance for recording, or do I need to design the harness to work with mock data initially?
+This invalidates the original fixture categories: "Auth flow (login, token refresh)" does
+not exist (OpenClaw authenticates via API key in config, no login flow); "WebSocket upgrade"
+does not exist (OpenClaw→Anthropic communication is HTTPS only); "File/attachment upload"
+is a client→OpenClaw concern, not proxy territory.
+
+**Answer (three sub-decisions):**
+
+**D31-A: Provider scope — Anthropic-only in Phase 1.**
+If the proxy receives a request without an `anthropic-version` header, it returns:
+```json
+{
+  "error": "provider_not_supported",
+  "message": "aegis-proxy Phase 1 supports Anthropic only",
+  "supported": ["anthropic"]
+}
+```
+HTTP 422. No silent passthrough. No upstream call made.
+
+**D31-B: Fixture format — three distinct formats.**
+```
+// Single-turn (non-streaming)
+{ "name": "...", "format": "single", "request": {...}, "response": {...}, "metadata": {...} }
+
+// Streaming SSE
+{ "name": "...", "format": "streaming", "request": {...}, "chunks": ["data: {...}\n\n", ...], "metadata": {...} }
+
+// Multi-round tool call (3-5 exchanges)
+{
+  "name": "...",
+  "format": "sequence",
+  "sequence": [
+    { "request": {...}, "response": {...} },
+    { "request": {...}, "response": {...} },   // tool_result round
+    { "request": {...}, "response": {...} }    // final response
+  ],
+  "metadata": {...}
+}
+
+// All fixtures: "source": "real" | "mock" in metadata
+// Token placeholder: {{OPENCLAW_TOKEN}} for any x-api-key values
+```
+
+**D31-C: Coverage gate replaces count gate.**
+The gate is "every distinct protocol behaviour covered" — not "≥20 files exist."
+Count falls out of coverage automatically. Correct fixture categories:
+
+| Category | Format | Key requirement |
+|---|---|---|
+| Anthropic non-streaming | `single` | Standard `/v1/messages`, `max_tokens` present |
+| Anthropic streaming SSE | `streaming` | `stream: true`, chunks with `event:` prefix |
+| Anthropic tool call sequence | `sequence` | 3–5 rounds, `tool_use` + `tool_result` blocks |
+| Error responses (4xx/5xx from Anthropic) | `single` | 400, 401, 429, 500 |
+| Unknown provider rejection | `single` | Proxy returns 422, no upstream call made |
+
+Minimum count from coverage: approximately 12–15 fixtures covers all branches.
 
 ---
 
@@ -1040,7 +1083,7 @@ has been moved to the backlog and is not part of this decision.
 | D11 | 1 | Memory file patterns | ✅ CONFIRMED |
 | D12 | 1 | Dashboard refresh | ✅ CONFIRMED |
 | D30 | 1 | Observe-only enforcement points | 🔒 LOCKED |
-| D31 | 1 | OpenClaw fixture requirements | ⏳ Pending |
+| D31 | 1 | OpenClaw fixture requirements — Anthropic-only, 3 formats, coverage gate | 🔒 LOCKED |
 | D13 | 2 | TRUSTMARK weights | ⏳ Pending |
 | D14 | 2 | Tier thresholds | ⏳ Pending |
 | D15 | 2 | Temporal decay half-life | ⏳ Pending |

@@ -80,6 +80,48 @@ Option C: when Centaur is added to Nodes 1+3 (escalation config),
 the GPU Scheduler is also used for embedding routing. Config change,
 not code change.
 
+## Adapter Protection Bundle — Data Flow (D31 corrected)
+
+OpenClaw IS the bot. It makes outbound HTTPS calls to LLM providers.
+The adapter's aegis-proxy intercepts these calls on the outbound path.
+
+```mermaid
+sequenceDiagram
+    participant OC as OpenClaw (bot)
+    participant AP as aegis-proxy
+    participant SLM as SLM Hook
+    participant EV as Evidence
+    participant CV as Credential Vault
+    participant API as api.anthropic.com
+
+    Note over OC,AP: baseUrl redirect: 127.0.0.1:AEGIS_PORT
+    OC->>AP: POST /v1/messages (anthropic-version header)
+    AP->>AP: Provider check (D31-A: anthropic-version required)
+    AP->>AP: Parse Anthropic request body
+    AP->>SLM: Screen parsed messages[] + system (not raw body)
+    SLM-->>AP: Admit / Quarantine / Reject
+    AP->>EV: Record request receipt (body_hash)
+    AP->>CV: Scan request for exposed credentials
+    AP->>API: Forward request (x-api-key passthrough)
+    Note over AP,API: Phase 1: vault scans only, no key injection.<br/>Vault injection is Phase 2.
+    alt Non-streaming response
+        API-->>AP: JSON response (buffered)
+        AP->>EV: Record response receipt (body_hash, duration)
+        AP->>CV: Scan response for credential leakage
+        AP-->>OC: JSON response
+    else Streaming SSE response
+        API-->>AP: text/event-stream (chunked)
+        AP-->>OC: Forward SSE chunks as they arrive (no buffer)
+        Note over AP: Evidence receipt deferred until stream completes
+    end
+```
+
+**Key corrections from original architecture:**
+- Vault does NOT inject API keys in Phase 1 — it only scans for credential leakage
+- SSE responses are streamed through chunk-by-chunk, not buffered
+- SLM receives parsed message content, not raw API payload
+- Rate limit is keyed by Ed25519 fingerprint, not source IP (D30)
+
 ## Tech Stack Summary
 
 | Component | Technology | Notes |
