@@ -151,6 +151,7 @@ pub async fn start(
             Mode::ObserveOnly => ProxyMode::ObserveOnly,
             Mode::Enforce => ProxyMode::Enforce,
         },
+        provider: aegis_proxy::config::Provider::Anthropic,
     };
 
     // 8. Print startup banner

@@ -64,7 +64,7 @@ axum = { version = "0.8", features = ["ws"] }
 tower = { version = "0.5", features = ["full"] }
 tower-http = { version = "0.6", features = ["cors", "trace", "limit"] }
 hyper = { version = "1", features = ["full"] }
-reqwest = { version = "0.12", features = ["json"] }
+reqwest = { version = "0.12", features = ["json", "stream"] }
 
 # NATS
 async-nats = "0.38"
