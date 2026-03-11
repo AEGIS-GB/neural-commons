@@ -77,6 +77,8 @@ pub fn routes(state: Arc<DashboardSharedState>) -> Router {
         .route("/api/status", get(api_status))
         .route("/api/evidence", get(api_evidence))
         .route("/api/memory", get(api_memory))
+        .route("/api/vault", get(api_vault))
+        .route("/api/access", get(api_access))
         .route("/api/alerts", get(api_alerts))
         .route("/api/alerts/stream", get(api_alerts_stream))
         .with_state(state)
@@ -111,6 +113,36 @@ struct MemoryHealth {
     changes_detected: u64,
     last_scan_ms: Option<i64>,
     unacknowledged_changes: u64,
+}
+
+#[derive(Debug, Serialize)]
+struct VaultSummary {
+    total_secrets: u64,
+    by_type: std::collections::HashMap<String, u64>,
+    recent_findings: Vec<VaultFinding>,
+}
+
+#[derive(Debug, Serialize)]
+struct VaultFinding {
+    credential_type: String,
+    masked_preview: String,
+    detected_at_ms: i64,
+}
+
+#[derive(Debug, Serialize)]
+struct AccessLog {
+    total_requests: u64,
+    entries: Vec<AccessEntry>,
+}
+
+#[derive(Debug, Serialize)]
+struct AccessEntry {
+    seq: u64,
+    ts_ms: i64,
+    method: String,
+    path: String,
+    status: Option<u16>,
+    duration_ms: Option<u64>,
 }
 
 // ── Handlers ─────────────────────────────────────────────────────────────────
@@ -159,6 +191,36 @@ async fn api_memory(
         changes_detected: 0,
         last_scan_ms: None,
         unacknowledged_changes: 0,
+    })
+}
+
+/// GET /dashboard/api/vault — vault credential summary.
+///
+/// Returns detected secrets (masked) from evidence chain receipts
+/// of type VaultDetection. Phase 1 returns stub data since
+/// vault detection receipts are not yet stored separately.
+async fn api_vault(
+    State(state): State<Arc<DashboardSharedState>>,
+) -> Json<VaultSummary> {
+    // Phase 1: Query evidence chain for VaultDetection receipts
+    let _ = &state.evidence; // Will be used to query receipts in Phase 2
+    Json(VaultSummary {
+        total_secrets: 0,
+        by_type: std::collections::HashMap::new(),
+        recent_findings: vec![],
+    })
+}
+
+/// GET /dashboard/api/access — recent API call log.
+///
+/// Returns the last 50 API call entries from the evidence chain.
+async fn api_access(
+    State(state): State<Arc<DashboardSharedState>>,
+) -> Json<AccessLog> {
+    let chain_head = state.evidence.chain_head();
+    Json(AccessLog {
+        total_requests: chain_head.receipt_count,
+        entries: vec![], // Phase 2: query evidence store for ApiCall receipts
     })
 }
 

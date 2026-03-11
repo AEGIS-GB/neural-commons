@@ -42,6 +42,9 @@ pub struct AdapterState {
     /// Upstream URL.
     pub upstream_url: String,
 
+    /// Dashboard path prefix (e.g., "/dashboard").
+    pub dashboard_path: String,
+
     /// Broadcast channel for pushing critical alerts to SSE clients.
     /// Sender is cloned into each subsystem that can generate alerts.
     /// SSE handler calls `.subscribe()` to get a per-connection receiver.
@@ -95,7 +98,7 @@ impl AdapterState {
 
     /// Dashboard URL.
     pub fn dashboard_url(&self) -> String {
-        format!("http://{}/dashboard", self.listen_addr)
+        format!("http://{}{}", self.listen_addr, self.dashboard_path)
     }
 }
 
@@ -116,8 +119,9 @@ mod tests {
             nonce_registry: std::sync::Mutex::new(NonceRegistry::new()),
             start_time: Instant::now(),
             data_dir: PathBuf::from(".aegis"),
-            listen_addr: "127.0.0.1:8080".into(),
-            upstream_url: "http://localhost:11434".into(),
+            listen_addr: "127.0.0.1:3141".into(),
+            upstream_url: "https://api.anthropic.com".into(),
+            dashboard_path: "/dashboard".into(),
             alert_tx,
         }
     }
@@ -160,6 +164,6 @@ mod tests {
     #[test]
     fn state_dashboard_url() {
         let state = make_state();
-        assert_eq!(state.dashboard_url(), "http://127.0.0.1:8080/dashboard");
+        assert_eq!(state.dashboard_url(), "http://127.0.0.1:3141/dashboard");
     }
 }

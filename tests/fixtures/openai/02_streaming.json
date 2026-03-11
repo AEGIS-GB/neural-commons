@@ -1,0 +1,19 @@
+{
+  "_comment": "OpenAI streaming request — should be rejected with 422 in Phase 1",
+  "expected_status": 422,
+  "headers": {
+    "authorization": "Bearer sk-test123456789",
+    "content-type": "application/json"
+  },
+  "request": {
+    "model": "gpt-4",
+    "messages": [
+      {
+        "role": "user",
+        "content": "Tell me a story"
+      }
+    ],
+    "max_tokens": 1024,
+    "stream": true
+  }
+}

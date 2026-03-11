@@ -1,0 +1,27 @@
+{
+  "model": "claude-sonnet-4-20250514",
+  "max_tokens": 4096,
+  "system": "You are a helpful programming assistant with deep knowledge of systems.",
+  "messages": [
+    {
+      "role": "user",
+      "content": "Explain the entire Linux kernel boot process in detail, from BIOS POST to init system startup."
+    },
+    {
+      "role": "assistant",
+      "content": "The Linux kernel boot process involves several stages: BIOS POST, bootloader (GRUB), kernel decompression, kernel initialization, and init system startup. Let me walk through each stage in detail."
+    },
+    {
+      "role": "user",
+      "content": "Now explain how the scheduler works, including CFS, real-time scheduling classes, and how context switching is implemented on x86_64."
+    },
+    {
+      "role": "assistant",
+      "content": "The Linux scheduler uses the Completely Fair Scheduler (CFS) as its default scheduling class. CFS uses a red-black tree of virtual runtimes to ensure fair CPU time distribution."
+    },
+    {
+      "role": "user",
+      "content": "Can you compare this with the Windows NT scheduler and explain the key architectural differences?"
+    }
+  ]
+}

@@ -1,0 +1,17 @@
+{
+  "_comment": "Expected response when rate limit is exceeded",
+  "expected_status": 429,
+  "expected_headers": {
+    "retry-after": "1"
+  },
+  "request": {
+    "model": "claude-sonnet-4-20250514",
+    "max_tokens": 1024,
+    "messages": [
+      {
+        "role": "user",
+        "content": "Hello"
+      }
+    ]
+  }
+}
