@@ -1,0 +1,62 @@
+{
+  "name": "multi-turn-conversation",
+  "format": "single",
+  "request": {
+    "method": "POST",
+    "path": "/v1/messages",
+    "headers": {
+      "anthropic-version": "2023-06-01",
+      "content-type": "application/json",
+      "x-api-key": "{{OPENCLAW_TOKEN}}"
+    },
+    "body": {
+      "model": "claude-sonnet-4-20250514",
+      "max_tokens": 1024,
+      "system": "You are a helpful programming assistant.",
+      "messages": [
+        {
+          "role": "user",
+          "content": "What is a mutex?"
+        },
+        {
+          "role": "assistant",
+          "content": "A mutex (mutual exclusion) is a synchronization primitive that prevents multiple threads from accessing a shared resource simultaneously. Only one thread can hold the lock at a time."
+        },
+        {
+          "role": "user",
+          "content": "How does Rust handle mutexes differently from C?"
+        }
+      ]
+    }
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json",
+      "x-request-id": "req_mock_chat_002"
+    },
+    "body": {
+      "id": "msg_mock_chat_002",
+      "type": "message",
+      "role": "assistant",
+      "content": [
+        {
+          "type": "text",
+          "text": "Rust handles mutexes differently from C in a key way: the data is owned by the Mutex itself. In Rust, `Mutex<T>` wraps the data it protects, so you cannot access the inner value without first acquiring the lock. The compiler enforces this at compile time through the type system, eliminating data races by construction."
+        }
+      ],
+      "model": "claude-sonnet-4-20250514",
+      "stop_reason": "end_turn",
+      "stop_sequence": null,
+      "usage": {
+        "input_tokens": 68,
+        "output_tokens": 72
+      }
+    }
+  },
+  "metadata": {
+    "category": "chat",
+    "source": "mock",
+    "notes": "Multi-turn conversation with system prompt and 3 messages (2 user + 1 assistant)"
+  }
+}

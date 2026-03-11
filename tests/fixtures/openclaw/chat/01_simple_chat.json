@@ -1,0 +1,53 @@
+{
+  "name": "simple-chat-single-turn",
+  "format": "single",
+  "request": {
+    "method": "POST",
+    "path": "/v1/messages",
+    "headers": {
+      "anthropic-version": "2023-06-01",
+      "content-type": "application/json",
+      "x-api-key": "{{OPENCLAW_TOKEN}}"
+    },
+    "body": {
+      "model": "claude-sonnet-4-20250514",
+      "max_tokens": 512,
+      "messages": [
+        {
+          "role": "user",
+          "content": "Write a haiku about Rust programming."
+        }
+      ]
+    }
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json",
+      "x-request-id": "req_mock_chat_001"
+    },
+    "body": {
+      "id": "msg_mock_chat_001",
+      "type": "message",
+      "role": "assistant",
+      "content": [
+        {
+          "type": "text",
+          "text": "Memory safe and fast,\nOwnership guards every byte,\nBorrow checker wins."
+        }
+      ],
+      "model": "claude-sonnet-4-20250514",
+      "stop_reason": "end_turn",
+      "stop_sequence": null,
+      "usage": {
+        "input_tokens": 12,
+        "output_tokens": 18
+      }
+    }
+  },
+  "metadata": {
+    "category": "chat",
+    "source": "mock",
+    "notes": "Basic single-turn chat with short response"
+  }
+}

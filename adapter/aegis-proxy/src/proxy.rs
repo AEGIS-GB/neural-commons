@@ -109,6 +109,10 @@ pub async fn start(
         .await
         .map_err(|e| ProxyError::Internal(format!("failed to bind {}: {e}", config.listen_addr)))?;
 
+    if config.upstream_url == "https://api.anthropic.com" {
+        warn!("Using default upstream (Anthropic). Set 'upstream_url' in config.toml for other providers.");
+    }
+
     info!(
         listen = %config.listen_addr,
         upstream = %config.upstream_url,
@@ -140,9 +144,11 @@ async fn forward_request(
     // --- Provider detection (D31-A) ---
     // Detect provider from request headers. Phase 1 supports Anthropic only.
     // OpenAI requests get a clear error message instead of a confusing 400.
-    let detected_provider = anthropic::detect_provider(&headers);
-    if detected_provider != anthropic::DetectedProvider::Anthropic {
-        return Ok(anthropic::unsupported_provider_response(detected_provider));
+    if !state.config.allow_any_provider {
+        let detected_provider = anthropic::detect_provider(&headers);
+        if detected_provider != anthropic::DetectedProvider::Anthropic {
+            return Ok(anthropic::unsupported_provider_response(detected_provider));
+        }
     }
 
     // --- Rate limiting (C13) ---

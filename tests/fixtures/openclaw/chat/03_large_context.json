@@ -1,27 +1,70 @@
 {
-  "model": "claude-sonnet-4-20250514",
-  "max_tokens": 4096,
-  "system": "You are a helpful programming assistant with deep knowledge of systems.",
-  "messages": [
-    {
-      "role": "user",
-      "content": "Explain the entire Linux kernel boot process in detail, from BIOS POST to init system startup."
+  "name": "large-context-multi-turn",
+  "format": "single",
+  "request": {
+    "method": "POST",
+    "path": "/v1/messages",
+    "headers": {
+      "anthropic-version": "2023-06-01",
+      "content-type": "application/json",
+      "x-api-key": "{{OPENCLAW_TOKEN}}"
     },
-    {
-      "role": "assistant",
-      "content": "The Linux kernel boot process involves several stages: BIOS POST, bootloader (GRUB), kernel decompression, kernel initialization, and init system startup. Let me walk through each stage in detail."
-    },
-    {
-      "role": "user",
-      "content": "Now explain how the scheduler works, including CFS, real-time scheduling classes, and how context switching is implemented on x86_64."
-    },
-    {
-      "role": "assistant",
-      "content": "The Linux scheduler uses the Completely Fair Scheduler (CFS) as its default scheduling class. CFS uses a red-black tree of virtual runtimes to ensure fair CPU time distribution."
-    },
-    {
-      "role": "user",
-      "content": "Can you compare this with the Windows NT scheduler and explain the key architectural differences?"
+    "body": {
+      "model": "claude-sonnet-4-20250514",
+      "max_tokens": 4096,
+      "system": "You are a helpful programming assistant with deep knowledge of systems.",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Explain the entire Linux kernel boot process in detail, from BIOS POST to init system startup."
+        },
+        {
+          "role": "assistant",
+          "content": "The Linux kernel boot process involves several stages: BIOS POST, bootloader (GRUB), kernel decompression, kernel initialization, and init system startup. Let me walk through each stage in detail."
+        },
+        {
+          "role": "user",
+          "content": "Now explain how the scheduler works, including CFS, real-time scheduling classes, and how context switching is implemented on x86_64."
+        },
+        {
+          "role": "assistant",
+          "content": "The Linux scheduler uses the Completely Fair Scheduler (CFS) as its default scheduling class. CFS uses a red-black tree of virtual runtimes to ensure fair CPU time distribution."
+        },
+        {
+          "role": "user",
+          "content": "Can you compare this with the Windows NT scheduler and explain the key architectural differences?"
+        }
+      ]
     }
-  ]
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "content-type": "application/json",
+      "x-request-id": "req_mock_chat_003"
+    },
+    "body": {
+      "id": "msg_mock_chat_003",
+      "type": "message",
+      "role": "assistant",
+      "content": [
+        {
+          "type": "text",
+          "text": "The Windows NT scheduler and Linux CFS differ fundamentally in their approach. NT uses a priority-based preemptive scheduler with 32 priority levels, while Linux CFS aims for proportional fairness using virtual runtime. NT's dispatcher database uses per-priority FIFO queues, while CFS uses a single red-black tree ordered by vruntime."
+        }
+      ],
+      "model": "claude-sonnet-4-20250514",
+      "stop_reason": "end_turn",
+      "stop_sequence": null,
+      "usage": {
+        "input_tokens": 245,
+        "output_tokens": 89
+      }
+    }
+  },
+  "metadata": {
+    "category": "chat",
+    "source": "mock",
+    "notes": "Large context multi-turn conversation (5 messages) with system prompt, testing payload size"
+  }
 }

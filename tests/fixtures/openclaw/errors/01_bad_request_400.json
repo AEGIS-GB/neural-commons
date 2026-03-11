@@ -1,5 +1,5 @@
 {
-  "name": "upstream-server-error",
+  "name": "bad-request-malformed-body",
   "format": "single",
   "request": {
     "method": "POST",
@@ -11,31 +11,26 @@
     },
     "body": {
       "model": "claude-sonnet-4-20250514",
-      "max_tokens": 1024,
-      "messages": [
-        {
-          "role": "user",
-          "content": "This should trigger a server error from the upstream."
-        }
-      ]
+      "max_tokens": -1,
+      "messages": []
     }
   },
   "response": {
-    "status": 500,
+    "status": 400,
     "headers": {
       "content-type": "application/json"
     },
     "body": {
       "type": "error",
       "error": {
-        "type": "api_error",
-        "message": "An internal server error has occurred"
+        "type": "invalid_request_error",
+        "message": "messages: array must have at least 1 item; max_tokens: must be a positive integer"
       }
     }
   },
   "metadata": {
     "category": "error",
     "source": "mock",
-    "notes": "500 internal server error from upstream provider"
+    "notes": "Malformed request body with empty messages and negative max_tokens"
   }
 }

@@ -414,31 +414,113 @@ fn main() {
 
         Some(Commands::Vault { action }) => match action {
             VaultCommands::List { decrypt } => {
-                let db_path = config.data_dir.join("vault.db");
-                if !db_path.exists() {
-                    eprintln!("vault: no secrets stored (vault.db not found)");
-                    return;
+                let storage = open_vault_storage(&config);
+                match storage.list_entries() {
+                    Ok(entries) => {
+                        if entries.is_empty() {
+                            eprintln!("vault: no secrets stored");
+                            return;
+                        }
+                        eprintln!("vault: {} secret(s) stored", entries.len());
+                        for entry in &entries {
+                            if decrypt {
+                                match storage.get_secret(&entry.id) {
+                                    Ok(secret) => {
+                                        let value = String::from_utf8_lossy(&secret.plaintext);
+                                        eprintln!(
+                                            "  {} [{}] {} = {}",
+                                            entry.id, entry.credential_type, entry.label, value
+                                        );
+                                    }
+                                    Err(e) => {
+                                        eprintln!(
+                                            "  {} [{}] {} (decrypt error: {e})",
+                                            entry.id, entry.credential_type, entry.label
+                                        );
+                                    }
+                                }
+                            } else {
+                                eprintln!(
+                                    "  {} [{}] {} -- {}",
+                                    entry.id,
+                                    entry.credential_type,
+                                    entry.label,
+                                    entry.masked_preview
+                                );
+                                if let Some(ref src) = entry.source_file {
+                                    eprintln!("    source: {src}");
+                                }
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("vault: failed to list secrets: {e}");
+                        std::process::exit(1);
+                    }
                 }
-                if decrypt {
-                    eprintln!("vault: decrypted listing requires vault key (not yet implemented)");
-                } else {
-                    eprintln!("vault: listing stored secrets (masked)");
-                }
-                eprintln!(
-                    "  (vault storage listing requires vault key -- use 'aegis scan' for now)"
-                );
             }
             VaultCommands::Get { id } => {
-                eprintln!("vault: retrieving secret {id}");
-                eprintln!("  (vault storage not yet implemented -- use 'aegis scan' for detection)");
+                let storage = open_vault_storage(&config);
+                match storage.get_secret(&id) {
+                    Ok(secret) => {
+                        let value = String::from_utf8_lossy(&secret.plaintext);
+                        eprintln!("vault secret: {}", secret.entry.id);
+                        eprintln!("  label:  {}", secret.entry.label);
+                        eprintln!("  type:   {}", secret.entry.credential_type);
+                        eprintln!("  value:  {}", value);
+                        if let Some(ref src) = secret.entry.source_file {
+                            eprintln!("  source: {src}");
+                        }
+                        eprintln!("  created: {} ms", secret.entry.created_ms);
+                        eprintln!("  updated: {} ms", secret.entry.updated_ms);
+                    }
+                    Err(aegis_vault::VaultError::NotFound(_)) => {
+                        eprintln!("vault: secret '{id}' not found");
+                        std::process::exit(1);
+                    }
+                    Err(e) => {
+                        eprintln!("vault: failed to retrieve secret: {e}");
+                        std::process::exit(1);
+                    }
+                }
             }
             VaultCommands::Delete { id, force } => {
+                let storage = open_vault_storage(&config);
+                // Show what we're about to delete
                 if !force {
-                    eprintln!("vault: deleting secret {id} (use --force to skip confirmation)");
-                    eprintln!("  (vault storage not yet implemented)");
-                } else {
-                    eprintln!("vault: force-deleting secret {id}");
-                    eprintln!("  (vault storage not yet implemented)");
+                    match storage.get_entry(&id) {
+                        Ok(entry) => {
+                            eprintln!(
+                                "vault: delete {} [{}] {} ?",
+                                entry.id, entry.credential_type, entry.label
+                            );
+                            eprint!("  confirm (y/N): ");
+                            let mut input = String::new();
+                            if std::io::stdin().read_line(&mut input).is_err() || !input.trim().eq_ignore_ascii_case("y") {
+                                eprintln!("  cancelled");
+                                return;
+                            }
+                        }
+                        Err(aegis_vault::VaultError::NotFound(_)) => {
+                            eprintln!("vault: secret '{id}' not found");
+                            std::process::exit(1);
+                        }
+                        Err(e) => {
+                            eprintln!("vault: {e}");
+                            std::process::exit(1);
+                        }
+                    }
+                }
+                match storage.delete_secret(&id) {
+                    Ok(true) => eprintln!("vault: deleted secret '{id}'"),
+                    Ok(false) => {
+                        eprintln!("vault: secret '{id}' not found");
+                        std::process::exit(1);
+                    }
+                    Err(e) => {
+                        eprintln!("vault: failed to delete: {e}");
+                        std::process::exit(1);
+                    }
                 }
             }
             VaultCommands::Scan { path, extensions } => {
@@ -478,10 +560,29 @@ fn main() {
                 }
             }
             VaultCommands::Summary => {
-                eprintln!("vault summary:");
-                eprintln!("  total secrets: 0 (vault storage not yet initialized)");
-                eprintln!("  use 'aegis scan' to detect plaintext credentials");
-                eprintln!("  use 'aegis vault scan <path>' to scan a specific directory");
+                let storage = open_vault_storage(&config);
+                match storage.summary() {
+                    Ok(summary) => {
+                        eprintln!("vault summary:");
+                        eprintln!("  total secrets: {}", summary.total_secrets);
+                        if !summary.by_type.is_empty() {
+                            eprintln!("  by type:");
+                            for (cred_type, count) in &summary.by_type {
+                                eprintln!("    {}: {}", cred_type, count);
+                            }
+                        }
+                        if let Some(oldest) = summary.oldest_ms {
+                            eprintln!("  oldest: {} ms", oldest);
+                        }
+                        if let Some(newest) = summary.newest_ms {
+                            eprintln!("  newest: {} ms", newest);
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("vault: failed to get summary: {e}");
+                        std::process::exit(1);
+                    }
+                }
             }
         },
 
@@ -556,6 +657,43 @@ fn main() {
             println!("mode: {}", mode_label);
         }
     }
+}
+
+/// Open the vault storage, deriving the vault key from the identity key.
+///
+/// Exits the process if the identity key is missing or vault cannot be opened.
+fn open_vault_storage(config: &AdapterConfig) -> aegis_vault::storage::VaultStorage {
+    let key_path = config.data_dir.join("identity.key");
+    if !key_path.exists() {
+        eprintln!("error: no identity key found at {}", key_path.display());
+        eprintln!("hint: start the adapter first to generate an identity key");
+        std::process::exit(1);
+    }
+
+    let key_bytes = std::fs::read(&key_path).unwrap_or_else(|e| {
+        eprintln!("error: failed to read identity key: {e}");
+        std::process::exit(1);
+    });
+    let mut key_arr = [0u8; 32];
+    if key_bytes.len() < 32 {
+        eprintln!("error: identity key too short ({} bytes, need 32)", key_bytes.len());
+        std::process::exit(1);
+    }
+    key_arr.copy_from_slice(&key_bytes[..32]);
+
+    let signing_key = aegis_crypto::ed25519::SigningKey::from_bytes(&key_arr);
+    let fingerprint = aegis_crypto::ed25519::fingerprint_hex(&signing_key.verifying_key());
+
+    let vault_key = aegis_vault::kdf::derive_vault_key(&key_arr, &fingerprint).unwrap_or_else(|e| {
+        eprintln!("error: vault key derivation failed: {e}");
+        std::process::exit(1);
+    });
+
+    let db_path = config.data_dir.join("vault.db");
+    aegis_vault::storage::VaultStorage::open(&db_path, vault_key).unwrap_or_else(|e| {
+        eprintln!("error: failed to open vault storage: {e}");
+        std::process::exit(1);
+    })
 }
 
 /// Configure OpenClaw (Claude Code) to route through the aegis proxy.

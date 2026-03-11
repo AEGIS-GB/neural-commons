@@ -203,6 +203,105 @@ pub async fn start(
         info!("memory monitor started (interval={}s)", config.memory.hash_interval_secs);
     }
 
+    // 6b. Start barrier filesystem watcher (Layer 1 detection)
+    if mode != Mode::PassThrough {
+        let barrier_protected = Arc::new(std::sync::Mutex::new(
+            aegis_barrier::protected_files::ProtectedFileManager::new(),
+        ));
+        let barrier_recorder = recorder.clone();
+        let barrier_alert_tx = alert_tx.clone();
+        let watcher_workspace = std::env::current_dir().unwrap_or_default();
+
+        tokio::spawn(async move {
+            use notify::{Watcher, RecursiveMode, Config};
+            use aegis_barrier::watcher::{FileWatcher, map_notify_event, is_excluded};
+            use aegis_barrier::types::DebounceConfig;
+
+            let (tx, mut rx) = tokio::sync::mpsc::channel(256);
+
+            let mut watcher = match notify::RecommendedWatcher::new(
+                move |res: Result<notify::Event, notify::Error>| {
+                    if let Ok(event) = res {
+                        let _ = tx.blocking_send(event);
+                    }
+                },
+                Config::default(),
+            ) {
+                Ok(w) => w,
+                Err(e) => {
+                    tracing::error!("barrier watcher failed to start: {e}");
+                    return;
+                }
+            };
+
+            if let Err(e) = watcher.watch(&watcher_workspace, RecursiveMode::Recursive) {
+                tracing::error!("barrier watcher failed to watch {}: {e}", watcher_workspace.display());
+                return;
+            }
+
+            tracing::info!(path = %watcher_workspace.display(), "barrier filesystem watcher started");
+
+            let mut file_watcher = FileWatcher::new(DebounceConfig::default());
+
+            while let Some(event) = rx.recv().await {
+                let watch_events = map_notify_event(&event);
+                for we in watch_events {
+                    if is_excluded(&we.path) {
+                        continue;
+                    }
+                    if !file_watcher.should_process(&we.path, we.timestamp_ms) {
+                        continue;
+                    }
+
+                    // Check if this is a protected file
+                    let relative = we.path.strip_prefix(&watcher_workspace)
+                        .unwrap_or(&we.path);
+                    let is_protected = barrier_protected.lock()
+                        .map(|mgr| mgr.is_protected(relative))
+                        .unwrap_or(false);
+                    let is_critical = barrier_protected.lock()
+                        .map(|mgr| mgr.is_critical(relative))
+                        .unwrap_or(false);
+
+                    if is_protected {
+                        let action = format!("filesystem_change {} {:?}", relative.display(), we.kind);
+                        let outcome = if is_critical {
+                            "critical_protected_file_modified"
+                        } else {
+                            "protected_file_modified"
+                        };
+
+                        if let Err(e) = barrier_recorder.record_simple(
+                            aegis_schemas::ReceiptType::WriteBarrier,
+                            &action,
+                            outcome,
+                        ) {
+                            tracing::warn!("failed to record barrier event: {e}");
+                        }
+
+                        if is_critical {
+                            let alert = aegis_dashboard::DashboardAlert {
+                                ts_ms: we.timestamp_ms,
+                                kind: "structural_write".to_string(),
+                                message: format!("Critical file modified: {}", relative.display()),
+                                receipt_seq: barrier_recorder.chain_head().head_seq,
+                            };
+                            let _ = barrier_alert_tx.send(alert);
+                        }
+
+                        tracing::warn!(
+                            path = %relative.display(),
+                            critical = is_critical,
+                            kind = ?we.kind,
+                            "barrier: protected file change detected"
+                        );
+                    }
+                }
+            }
+        });
+        info!("barrier filesystem watcher started");
+    }
+
     // 7. Create middleware hooks
     let slm_config = aegis_slm::loopback::LoopbackConfig {
         ollama_url: config.slm.ollama_url.clone(),
@@ -223,6 +322,7 @@ pub async fn start(
             Mode::Enforce => ProxyMode::Enforce,
         },
         provider: aegis_proxy::config::Provider::Anthropic,
+        allow_any_provider: config.proxy.allow_any_provider,
     };
 
     // 8. Warn if upstream is still the default (common misconfiguration)
