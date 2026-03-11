@@ -215,6 +215,38 @@ main() {
     generate_identity
     add_to_path
 
+    # Create default config if none exists
+    local config_dir="$HOME/.aegis/config"
+    if [ ! -f "${config_dir}/config.toml" ]; then
+        mkdir -p "$config_dir"
+        cat > "${config_dir}/config.toml" << 'CONFIGEOF'
+# Aegis Shield Configuration
+
+[proxy]
+listen_addr = "127.0.0.1:3141"
+upstream_url = "https://api.anthropic.com"
+# allow_any_provider = false
+
+[slm]
+enabled = true
+model = "llama3.2:1b"
+# For better accuracy: model = "llama3.2:3b"
+
+[mode]
+default = "observe_only"
+# Set to "enforce" to enable blocking
+CONFIGEOF
+        info "Default config: ${config_dir}/config.toml"
+    fi
+
+    # Run first vulnerability scan if binary is available
+    export PATH="${INSTALL_DIR}:${PATH}"
+    if command -v aegis >/dev/null 2>&1; then
+        info "Running first vulnerability scan..."
+        aegis scan . 2>&1 || true
+        echo ""
+    fi
+
     # Interactive prompts (skip in CI)
     if [ -t 0 ]; then
         prompt_slm_model
@@ -222,16 +254,30 @@ main() {
     fi
 
     echo ""
-    info "Installation complete!"
+    echo "================================================================"
+    echo "            Aegis Shield — Installed                            "
+    echo "================================================================"
     echo ""
-    echo "  Quick start:"
-    echo "    aegis                  # start in observe-only mode"
-    echo "    aegis status           # check adapter state"
-    echo "    aegis scan             # scan for credentials"
-    echo "    aegis setup openclaw   # configure OpenClaw integration"
+    echo "  Next steps:"
+    echo ""
+    echo "  1. Connect to OpenClaw:"
+    echo "     aegis setup openclaw"
+    echo ""
+    echo "  2. Start protection:"
+    echo "     aegis"
+    echo ""
+    echo "  3. View dashboard:"
+    echo "     http://localhost:3141/dashboard"
+    echo ""
+    echo "  Other commands:"
+    echo "     aegis scan           — vulnerability scan"
+    echo "     aegis status         — adapter status"
+    echo "     aegis --enforce      — enable blocking mode"
+    echo "     aegis --help         — all options"
     echo ""
 
-    warn "Note: Binary checksums are not yet verified (code signing planned for v1.1)."
+    warn "Binary signature verification not yet implemented."
+    warn "Verify checksums manually: https://github.com/${REPO}/releases"
     echo ""
 }
 

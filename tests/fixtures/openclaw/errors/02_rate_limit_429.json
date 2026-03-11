@@ -1,17 +1,42 @@
 {
-  "_comment": "Expected response when rate limit is exceeded",
-  "expected_status": 429,
-  "expected_headers": {
-    "retry-after": "1"
-  },
+  "name": "rate-limit-exceeded",
+  "format": "single",
   "request": {
-    "model": "claude-sonnet-4-20250514",
-    "max_tokens": 1024,
-    "messages": [
-      {
-        "role": "user",
-        "content": "Hello"
+    "method": "POST",
+    "path": "/v1/messages",
+    "headers": {
+      "anthropic-version": "2023-06-01",
+      "content-type": "application/json",
+      "x-api-key": "{{OPENCLAW_TOKEN}}"
+    },
+    "body": {
+      "model": "claude-sonnet-4-20250514",
+      "max_tokens": 1024,
+      "messages": [
+        {
+          "role": "user",
+          "content": "Hello"
+        }
+      ]
+    }
+  },
+  "response": {
+    "status": 429,
+    "headers": {
+      "content-type": "application/json",
+      "retry-after": "1"
+    },
+    "body": {
+      "type": "error",
+      "error": {
+        "type": "rate_limit_error",
+        "message": "Number of request tokens has exceeded your per-minute rate limit"
       }
-    ]
+    }
+  },
+  "metadata": {
+    "category": "error",
+    "source": "mock",
+    "notes": "429 rate limit with retry-after header"
   }
 }

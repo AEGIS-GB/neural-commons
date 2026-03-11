@@ -36,6 +36,11 @@ pub struct ProxyConfig {
 
     /// Upstream provider (D31-A: Anthropic-only in Phase 1)
     pub provider: Provider,
+
+    /// Allow any provider through without detection (default: false).
+    /// Set to true in config.toml to bypass the provider check.
+    #[serde(default)]
+    pub allow_any_provider: bool,
 }
 
 /// Proxy operating mode.
@@ -55,11 +60,12 @@ impl Default for ProxyConfig {
     fn default() -> Self {
         Self {
             upstream_url: "https://api.anthropic.com".to_string(),
-            listen_addr: "127.0.0.1:3000".to_string(),
+            listen_addr: "127.0.0.1:3141".to_string(),
             max_body_size: 10 * 1024 * 1024, // 10MB
             rate_limit_per_minute: 1000,
             mode: ProxyMode::ObserveOnly,
             provider: Provider::Anthropic,
+            allow_any_provider: false,
         }
     }
 }
@@ -94,7 +100,7 @@ mod tests {
     fn default_config() {
         let cfg = ProxyConfig::default();
         assert_eq!(cfg.upstream_url, "https://api.anthropic.com");
-        assert_eq!(cfg.listen_addr, "127.0.0.1:3000");
+        assert_eq!(cfg.listen_addr, "127.0.0.1:3141");
         assert_eq!(cfg.max_body_size, 10 * 1024 * 1024);
         assert_eq!(cfg.rate_limit_per_minute, 1000);
         assert_eq!(cfg.mode, ProxyMode::ObserveOnly);

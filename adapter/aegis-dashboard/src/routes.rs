@@ -174,10 +174,20 @@ async fn api_evidence(
     State(state): State<Arc<DashboardSharedState>>,
 ) -> Json<EvidenceSummary> {
     let chain_head = state.evidence.chain_head();
+
+    // Get the timestamp of the most recent receipt
+    let last_receipt_ms = if chain_head.head_seq > 0 {
+        state.evidence.export(Some(chain_head.head_seq), Some(chain_head.head_seq))
+            .ok()
+            .and_then(|receipts| receipts.first().map(|r| r.core.ts_ms))
+    } else {
+        None
+    };
+
     Json(EvidenceSummary {
         total_receipts: chain_head.receipt_count,
         chain_head_seq: chain_head.head_seq,
-        last_receipt_ms: None,
+        last_receipt_ms,
     })
 }
 
@@ -196,18 +206,65 @@ async fn api_memory(
 
 /// GET /dashboard/api/vault — vault credential summary.
 ///
-/// Returns detected secrets (masked) from evidence chain receipts
-/// of type VaultDetection. Phase 1 returns stub data since
-/// vault detection receipts are not yet stored separately.
+/// Returns detected secrets (masked) from evidence chain receipts.
+/// Queries the evidence chain for ApiCall receipts whose outcome
+/// mentions vault credential detections.
 async fn api_vault(
     State(state): State<Arc<DashboardSharedState>>,
 ) -> Json<VaultSummary> {
-    // Phase 1: Query evidence chain for VaultDetection receipts
-    let _ = &state.evidence; // Will be used to query receipts in Phase 2
+    let chain_head = state.evidence.chain_head();
+    let mut by_type = std::collections::HashMap::new();
+    let mut recent_findings = Vec::new();
+
+    // Query recent receipts for vault-related entries
+    let start_seq = chain_head.head_seq.saturating_sub(200).max(1);
+    if let Ok(receipts) = state.evidence.export(Some(start_seq), None) {
+        for receipt in &receipts {
+            // Look for ApiCall receipts that contain vault detection info in outcome
+            let outcome = receipt.context.outcome.as_deref().unwrap_or("");
+            if outcome.contains("vault") || outcome.contains("credential") {
+                if let Some(action) = &receipt.context.action {
+                    // Parse credential type from action/outcome
+                    let cred_type = if outcome.contains("bearer_token") {
+                        "bearer_token"
+                    } else if outcome.contains("api_key") {
+                        "api_key"
+                    } else {
+                        "unknown"
+                    };
+                    *by_type.entry(cred_type.to_string()).or_insert(0u64) += 1;
+                    if recent_findings.len() < 20 {
+                        recent_findings.push(VaultFinding {
+                            credential_type: cred_type.to_string(),
+                            masked_preview: action.chars().take(40).collect(),
+                            detected_at_ms: receipt.core.ts_ms,
+                        });
+                    }
+                }
+            }
+
+            // Also match VaultDetection receipt type
+            if receipt.core.receipt_type == aegis_schemas::ReceiptType::VaultDetection {
+                let cred_type = receipt.context.action.as_deref().unwrap_or("unknown");
+                *by_type.entry(cred_type.to_string()).or_insert(0u64) += 1;
+                if recent_findings.len() < 20 {
+                    recent_findings.push(VaultFinding {
+                        credential_type: cred_type.to_string(),
+                        masked_preview: receipt.context.outcome.as_deref()
+                            .unwrap_or("detected").to_string(),
+                        detected_at_ms: receipt.core.ts_ms,
+                    });
+                }
+            }
+        }
+    }
+
+    let total_secrets: u64 = by_type.values().sum();
+
     Json(VaultSummary {
-        total_secrets: 0,
-        by_type: std::collections::HashMap::new(),
-        recent_findings: vec![],
+        total_secrets,
+        by_type,
+        recent_findings,
     })
 }
 
@@ -218,9 +275,58 @@ async fn api_access(
     State(state): State<Arc<DashboardSharedState>>,
 ) -> Json<AccessLog> {
     let chain_head = state.evidence.chain_head();
+    let mut entries = Vec::new();
+
+    // Query recent receipts for ApiCall entries
+    let start_seq = chain_head.head_seq.saturating_sub(100).max(1);
+    if let Ok(receipts) = state.evidence.export(Some(start_seq), None) {
+        for receipt in &receipts {
+            if receipt.core.receipt_type != aegis_schemas::ReceiptType::ApiCall {
+                continue;
+            }
+
+            let action = receipt.context.action.as_deref().unwrap_or("");
+            let outcome = receipt.context.outcome.as_deref().unwrap_or("");
+
+            // Parse method and path from action string (e.g. "POST /v1/messages")
+            let mut parts = action.splitn(2, ' ');
+            let method = parts.next().unwrap_or("").to_string();
+            let path = parts.next().unwrap_or("").to_string();
+
+            // Parse status and duration from outcome string
+            // (e.g. "status=200 body=1024B duration=150ms")
+            let status = outcome.split_whitespace()
+                .find(|s| s.starts_with("status="))
+                .and_then(|s| s.strip_prefix("status="))
+                .and_then(|s| s.parse::<u16>().ok());
+
+            let duration_ms = outcome.split_whitespace()
+                .find(|s| s.starts_with("duration="))
+                .and_then(|s| s.strip_prefix("duration="))
+                .and_then(|s| s.strip_suffix("ms"))
+                .and_then(|s| s.parse::<u64>().ok());
+
+            entries.push(AccessEntry {
+                seq: receipt.core.seq,
+                ts_ms: receipt.core.ts_ms,
+                method,
+                path,
+                status,
+                duration_ms,
+            });
+
+            if entries.len() >= 50 {
+                break;
+            }
+        }
+    }
+
+    // Count total ApiCall receipts
+    let total_requests = entries.len() as u64;
+
     Json(AccessLog {
-        total_requests: chain_head.receipt_count,
-        entries: vec![], // Phase 2: query evidence store for ApiCall receipts
+        total_requests,
+        entries,
     })
 }
 

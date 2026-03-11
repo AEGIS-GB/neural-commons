@@ -25,6 +25,7 @@ toml.workspace = true
 anyhow.workspace = true
 rand.workspace = true
 hex.workspace = true
+notify.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
