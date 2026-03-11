@@ -194,9 +194,9 @@ enabled = false
 fallback_to_heuristics = false
 EOF
 
-# Start aegis (SLM disabled via config, no Ollama needed)
+# Start aegis with --no-slm (no Ollama needed for smoke test)
 cd "$WORKSPACE"
-aegis -c "$AEGIS_CONFIG" &
+aegis --no-slm -c "$AEGIS_CONFIG" &
 AEGIS_PID=$!
 sleep 2
 

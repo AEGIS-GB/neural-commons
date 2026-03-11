@@ -76,13 +76,14 @@ ollama pull llama3.2:1b
 aegis
 ```
 
-Without Ollama, Aegis uses heuristic regex patterns (less accurate but zero dependencies). You can also disable SLM entirely by setting `enabled = false` in the `[slm]` section of your config.
+Without Ollama, Aegis uses heuristic regex patterns (less accurate but zero dependencies). You can also disable SLM entirely with `aegis --no-slm`.
 
 ## Common Commands
 
 ```bash
 aegis                        # start adapter (observe-only)
 aegis --enforce              # start with blocking enabled
+aegis --no-slm               # start without SLM screening
 aegis --pass-through         # dumb forwarder, zero inspection
 
 aegis setup openclaw         # configure OpenClaw integration
