@@ -76,14 +76,14 @@ ollama pull llama3.2:1b
 aegis
 ```
 
-Without Ollama, Aegis uses heuristic regex patterns (less accurate but zero dependencies). You can also disable SLM entirely with `aegis --no-slm`.
+Without Ollama, Aegis uses heuristic regex patterns (less accurate but zero dependencies). You can also disable SLM entirely by setting `enabled = false` in the `[slm]` section of your config.
 
 ## Common Commands
 
 ```bash
 aegis                        # start adapter (observe-only)
 aegis --enforce              # start with blocking enabled
-aegis --no-slm               # start without SLM screening
+aegis --pass-through         # dumb forwarder, zero inspection
 
 aegis setup openclaw         # configure OpenClaw integration
 aegis setup openclaw --revert  # undo configuration
@@ -104,6 +104,8 @@ aegis dashboard              # open dashboard in browser
 Default config lives at `~/.aegis/config/config.toml`:
 
 ```toml
+mode = "observe_only"    # or "enforce" to enable blocking
+
 [proxy]
 listen_addr = "127.0.0.1:3141"
 upstream_url = "https://api.anthropic.com"  # change for OpenAI or other providers
@@ -111,9 +113,6 @@ upstream_url = "https://api.anthropic.com"  # change for OpenAI or other provide
 [slm]
 enabled = true
 model = "llama3.2:1b"      # or "llama3.2:3b" for better accuracy
-
-[mode]
-default = "observe_only"    # or "enforce" to enable blocking
 ```
 
 For OpenAI bots, change `upstream_url` to `https://api.openai.com` and set `allow_any_provider = true` in the `[proxy]` section.
