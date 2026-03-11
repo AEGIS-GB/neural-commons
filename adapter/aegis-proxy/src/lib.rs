@@ -15,3 +15,4 @@ pub mod middleware;
 pub mod cognitive_bridge;
 pub mod config;
 pub mod error;
+pub mod rate_limit;

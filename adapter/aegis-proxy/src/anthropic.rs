@@ -156,11 +156,48 @@ pub fn has_anthropic_version_header(headers: &HashMap<String, String>) -> bool {
     headers.contains_key("anthropic-version")
 }
 
+/// Detected LLM provider from request headers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DetectedProvider {
+    Anthropic,
+    OpenAI,
+    Unknown,
+}
+
+/// Detect the upstream provider from request headers.
+///
+/// - Anthropic: has `anthropic-version` header
+/// - OpenAI: has `Authorization: Bearer sk-*` pattern
+/// - Unknown: neither detected
+pub fn detect_provider(headers: &HashMap<String, String>) -> DetectedProvider {
+    if headers.contains_key("anthropic-version") {
+        return DetectedProvider::Anthropic;
+    }
+
+    if let Some(auth) = headers.get("authorization") {
+        if auth.starts_with("Bearer sk-") {
+            return DetectedProvider::OpenAI;
+        }
+    }
+
+    DetectedProvider::Unknown
+}
+
 /// Build the 422 error response for unsupported providers (D31-A).
-pub fn unsupported_provider_response() -> Response {
+pub fn unsupported_provider_response(detected: DetectedProvider) -> Response {
+    let message = match detected {
+        DetectedProvider::OpenAI => {
+            "OpenAI provider detected but not yet supported. Phase 2 will add OpenAI support."
+        }
+        _ => {
+            "Unknown provider. Missing anthropic-version header."
+        }
+    };
+
     (StatusCode::UNPROCESSABLE_ENTITY, Json(json!({
         "error": "provider_not_supported",
-        "message": "aegis-proxy Phase 1 supports Anthropic only",
+        "message": message,
+        "detected": format!("{:?}", detected),
         "supported": ["anthropic"],
         "docs": "https://docs.anthropic.com/en/api/messages"
     }))).into_response()
@@ -287,5 +324,33 @@ mod tests {
 
         headers.insert("anthropic-version".to_string(), "2023-06-01".to_string());
         assert!(has_anthropic_version_header(&headers));
+    }
+
+    #[test]
+    fn detect_provider_anthropic() {
+        let mut headers = HashMap::new();
+        headers.insert("anthropic-version".to_string(), "2023-06-01".to_string());
+        assert_eq!(detect_provider(&headers), DetectedProvider::Anthropic);
+    }
+
+    #[test]
+    fn detect_provider_openai() {
+        let mut headers = HashMap::new();
+        headers.insert("authorization".to_string(), "Bearer sk-abc123".to_string());
+        assert_eq!(detect_provider(&headers), DetectedProvider::OpenAI);
+    }
+
+    #[test]
+    fn detect_provider_unknown() {
+        let headers = HashMap::new();
+        assert_eq!(detect_provider(&headers), DetectedProvider::Unknown);
+    }
+
+    #[test]
+    fn detect_provider_anthropic_takes_priority() {
+        let mut headers = HashMap::new();
+        headers.insert("anthropic-version".to_string(), "2023-06-01".to_string());
+        headers.insert("authorization".to_string(), "Bearer sk-abc123".to_string());
+        assert_eq!(detect_provider(&headers), DetectedProvider::Anthropic);
     }
 }

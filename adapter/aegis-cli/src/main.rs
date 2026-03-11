@@ -110,6 +110,12 @@ enum Commands {
         action: MemoryCommands,
     },
 
+    /// Configure a bot framework to use aegis
+    Setup {
+        #[command(subcommand)]
+        target: SetupTarget,
+    },
+
     /// Open the dashboard in a browser
     Dashboard,
 
@@ -118,9 +124,42 @@ enum Commands {
 }
 
 #[derive(Subcommand)]
+enum SetupTarget {
+    /// Configure OpenClaw (Claude Code) to route through aegis
+    Openclaw {
+        /// Show what would change without applying
+        #[arg(long)]
+        dry_run: bool,
+        /// Revert to original configuration
+        #[arg(long)]
+        revert: bool,
+        /// Proxy URL to configure (default: http://127.0.0.1:3141)
+        #[arg(long, default_value = "http://127.0.0.1:3141")]
+        proxy_url: String,
+    },
+}
+
+#[derive(Subcommand)]
 enum VaultCommands {
     /// List stored secrets (masked values)
-    List,
+    List {
+        /// Show decrypted values (requires vault key)
+        #[arg(long)]
+        decrypt: bool,
+    },
+    /// Get a specific secret by ID
+    Get {
+        /// Secret ID
+        id: String,
+    },
+    /// Delete a stored secret
+    Delete {
+        /// Secret ID
+        id: String,
+        /// Skip confirmation prompt
+        #[arg(long)]
+        force: bool,
+    },
     /// Scan for plaintext credentials in files
     Scan {
         /// Directory to scan
@@ -367,17 +406,40 @@ fn main() {
             }
         }
 
+        Some(Commands::Setup { target }) => match target {
+            SetupTarget::Openclaw { dry_run, revert, proxy_url } => {
+                setup_openclaw(dry_run, revert, &proxy_url);
+            }
+        },
+
         Some(Commands::Vault { action }) => match action {
-            VaultCommands::List => {
+            VaultCommands::List { decrypt } => {
                 let db_path = config.data_dir.join("vault.db");
                 if !db_path.exists() {
                     eprintln!("vault: no secrets stored (vault.db not found)");
                     return;
                 }
-                eprintln!("vault: listing stored secrets");
+                if decrypt {
+                    eprintln!("vault: decrypted listing requires vault key (not yet implemented)");
+                } else {
+                    eprintln!("vault: listing stored secrets (masked)");
+                }
                 eprintln!(
                     "  (vault storage listing requires vault key -- use 'aegis scan' for now)"
                 );
+            }
+            VaultCommands::Get { id } => {
+                eprintln!("vault: retrieving secret {id}");
+                eprintln!("  (vault storage not yet implemented -- use 'aegis scan' for detection)");
+            }
+            VaultCommands::Delete { id, force } => {
+                if !force {
+                    eprintln!("vault: deleting secret {id} (use --force to skip confirmation)");
+                    eprintln!("  (vault storage not yet implemented)");
+                } else {
+                    eprintln!("vault: force-deleting secret {id}");
+                    eprintln!("  (vault storage not yet implemented)");
+                }
             }
             VaultCommands::Scan { path, extensions } => {
                 let exts_str =
@@ -494,4 +556,104 @@ fn main() {
             println!("mode: {}", mode_label);
         }
     }
+}
+
+/// Configure OpenClaw (Claude Code) to route through the aegis proxy.
+fn setup_openclaw(dry_run: bool, revert: bool, proxy_url: &str) {
+    let home = dirs::home_dir().unwrap_or_else(|| {
+        eprintln!("error: cannot determine home directory");
+        std::process::exit(1);
+    });
+
+    let config_path = home.join(".openclaw").join("openclaw.json");
+
+    if revert {
+        let backup_path = config_path.with_extension("json.aegis-backup");
+        if !backup_path.exists() {
+            eprintln!("error: no backup found at {}", backup_path.display());
+            eprintln!("hint: aegis setup openclaw creates a backup before modifying");
+            std::process::exit(1);
+        }
+
+        if dry_run {
+            eprintln!("[dry-run] would restore {} from backup", config_path.display());
+            return;
+        }
+
+        std::fs::copy(&backup_path, &config_path).unwrap_or_else(|e| {
+            eprintln!("error: failed to restore backup: {e}");
+            std::process::exit(1);
+        });
+        eprintln!("reverted openclaw config from backup");
+        return;
+    }
+
+    if !config_path.exists() {
+        // Create default config
+        let parent = config_path.parent().unwrap();
+        std::fs::create_dir_all(parent).unwrap_or_else(|e| {
+            eprintln!("error: cannot create {}: {e}", parent.display());
+            std::process::exit(1);
+        });
+
+        let default_config = serde_json::json!({
+            "baseUrl": proxy_url
+        });
+
+        if dry_run {
+            eprintln!("[dry-run] would create {} with:", config_path.display());
+            eprintln!("  baseUrl: {}", proxy_url);
+            return;
+        }
+
+        let json = serde_json::to_string_pretty(&default_config).unwrap();
+        std::fs::write(&config_path, &json).unwrap_or_else(|e| {
+            eprintln!("error: failed to write {}: {e}", config_path.display());
+            std::process::exit(1);
+        });
+        eprintln!("created {} with baseUrl={}", config_path.display(), proxy_url);
+        return;
+    }
+
+    // Read existing config
+    let content = std::fs::read_to_string(&config_path).unwrap_or_else(|e| {
+        eprintln!("error: failed to read {}: {e}", config_path.display());
+        std::process::exit(1);
+    });
+
+    let mut config_json: serde_json::Value = serde_json::from_str(&content).unwrap_or_else(|e| {
+        eprintln!("error: invalid JSON in {}: {e}", config_path.display());
+        std::process::exit(1);
+    });
+
+    let old_url = config_json.get("baseUrl")
+        .and_then(|v| v.as_str())
+        .unwrap_or("(not set)")
+        .to_string();
+
+    if dry_run {
+        eprintln!("[dry-run] would modify {}:", config_path.display());
+        eprintln!("  baseUrl: {} -> {}", old_url, proxy_url);
+        return;
+    }
+
+    // Backup
+    let backup_path = config_path.with_extension("json.aegis-backup");
+    std::fs::copy(&config_path, &backup_path).unwrap_or_else(|e| {
+        eprintln!("error: failed to create backup: {e}");
+        std::process::exit(1);
+    });
+    eprintln!("backup: {}", backup_path.display());
+
+    // Update
+    config_json["baseUrl"] = serde_json::Value::String(proxy_url.to_string());
+    let json = serde_json::to_string_pretty(&config_json).unwrap();
+    std::fs::write(&config_path, &json).unwrap_or_else(|e| {
+        eprintln!("error: failed to write {}: {e}", config_path.display());
+        std::process::exit(1);
+    });
+
+    eprintln!("updated {}", config_path.display());
+    eprintln!("  baseUrl: {} -> {}", old_url, proxy_url);
+    eprintln!("  revert with: aegis setup openclaw --revert");
 }

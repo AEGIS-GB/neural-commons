@@ -20,6 +20,14 @@ pub struct AdapterConfig {
     #[serde(default)]
     pub proxy: ProxySection,
 
+    /// Dashboard configuration
+    #[serde(default)]
+    pub dashboard: DashboardSection,
+
+    /// SLM (Small Language Model) configuration
+    #[serde(default)]
+    pub slm: SlmSection,
+
     /// Vault configuration
     #[serde(default)]
     pub vault: VaultSection,
@@ -75,6 +83,56 @@ pub struct ProxySection {
     pub max_body_size: usize,
     #[serde(default = "default_rate_limit")]
     pub rate_limit_per_minute: u32,
+    /// Allow any provider through without detection (default: false)
+    #[serde(default)]
+    pub allow_any_provider: bool,
+    /// Burst size for rate limiting (default: 50)
+    #[serde(default = "default_burst_size")]
+    pub burst_size: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DashboardSection {
+    /// Path prefix where the dashboard is served (default: "/dashboard")
+    #[serde(default = "default_dashboard_path")]
+    pub path: String,
+}
+
+impl Default for DashboardSection {
+    fn default() -> Self {
+        Self { path: default_dashboard_path() }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SlmSection {
+    /// Enable SLM screening (default: true)
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    /// SLM engine: "ollama" (default)
+    #[serde(default = "default_slm_engine")]
+    pub engine: String,
+    /// Ollama API URL
+    #[serde(default = "default_ollama_url")]
+    pub ollama_url: String,
+    /// Model name (default: "llama3.2:1b")
+    #[serde(default = "default_slm_model")]
+    pub model: String,
+    /// Fall back to heuristic patterns if model unavailable
+    #[serde(default = "default_true")]
+    pub fallback_to_heuristics: bool,
+}
+
+impl Default for SlmSection {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            engine: default_slm_engine(),
+            ollama_url: default_ollama_url(),
+            model: default_slm_model(),
+            fallback_to_heuristics: true,
+        }
+    }
 }
 
 impl Default for ProxySection {
@@ -84,6 +142,8 @@ impl Default for ProxySection {
             upstream_url: default_upstream_url(),
             max_body_size: default_max_body_size(),
             rate_limit_per_minute: default_rate_limit(),
+            allow_any_provider: false,
+            burst_size: default_burst_size(),
         }
     }
 }
@@ -127,19 +187,26 @@ impl Default for MemorySection {
 }
 
 fn default_data_dir() -> PathBuf { PathBuf::from(".aegis") }
-fn default_listen_addr() -> String { "127.0.0.1:8080".to_string() }
-fn default_upstream_url() -> String { "http://localhost:11434".to_string() }
+fn default_listen_addr() -> String { "127.0.0.1:3141".to_string() }
+fn default_upstream_url() -> String { "https://api.anthropic.com".to_string() }
 fn default_max_body_size() -> usize { 10 * 1024 * 1024 } // 10MB
 fn default_rate_limit() -> u32 { 1000 }
+fn default_burst_size() -> u32 { 50 }
 fn default_true() -> bool { true }
 fn default_hash_interval() -> u64 { 60 }
 fn default_enforcement() -> EnforcementConfig { EnforcementConfig::observe_default() }
+fn default_dashboard_path() -> String { "/dashboard".to_string() }
+fn default_slm_engine() -> String { "ollama".to_string() }
+fn default_ollama_url() -> String { "http://localhost:11434".to_string() }
+fn default_slm_model() -> String { "llama3.2:1b".to_string() }
 
 impl Default for AdapterConfig {
     fn default() -> Self {
         Self {
             mode: AdapterMode::default(),
             proxy: ProxySection::default(),
+            dashboard: DashboardSection::default(),
+            slm: SlmSection::default(),
             vault: VaultSection::default(),
             memory: MemorySection::default(),
             enforcement: EnforcementConfig::observe_default(),
@@ -182,7 +249,7 @@ mod tests {
     #[test]
     fn default_listen_addr_is_localhost() {
         let config = AdapterConfig::default();
-        assert_eq!(config.proxy.listen_addr, "127.0.0.1:8080");
+        assert_eq!(config.proxy.listen_addr, "127.0.0.1:3141");
     }
 
     #[test]

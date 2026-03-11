@@ -1,0 +1,14 @@
+{
+  "_comment": "Expected behavior when upstream returns 500",
+  "expected_status": 500,
+  "request": {
+    "model": "claude-sonnet-4-20250514",
+    "max_tokens": 1024,
+    "messages": [
+      {
+        "role": "user",
+        "content": "This should trigger a server error from the upstream."
+      }
+    ]
+  }
+}

@@ -105,6 +105,7 @@ pub async fn start(
         data_dir: data_dir.clone(),
         listen_addr: config.proxy.listen_addr.clone(),
         upstream_url: config.proxy.upstream_url.clone(),
+        dashboard_path: config.dashboard.path.clone(),
         alert_tx: alert_tx.clone(),
     });
 
@@ -135,10 +136,80 @@ pub async fn start(
         }),
         start_time,
     });
-    let _dashboard_router = aegis_dashboard::routes::routes(dashboard_state);
+    let dashboard_router = aegis_dashboard::routes::routes(dashboard_state);
+    let dashboard_path = config.dashboard.path.clone();
 
-    // 6. Create middleware hooks
-    let hooks = create_middleware_hooks(recorder.clone(), mode, alert_tx.clone());
+    // 6. Start memory monitor background task
+    if mode != Mode::PassThrough {
+        let mem_config = aegis_memory::config::MemoryConfig {
+            memory_paths: config.memory.memory_paths.clone(),
+            include_defaults: true,
+            hash_interval_secs: config.memory.hash_interval_secs,
+        };
+        let screener: Arc<dyn aegis_memory::screen::MemoryScreener> =
+            Arc::new(aegis_memory::screen::HeuristicScreener);
+        let workspace_root = std::env::current_dir().unwrap_or_default();
+        let monitor = aegis_memory::monitor::MemoryMonitor::new(
+            mem_config,
+            screener,
+            workspace_root,
+        );
+        let monitor_recorder = recorder.clone();
+        let monitor_alert_tx = alert_tx.clone();
+
+        tokio::spawn(async move {
+            monitor.run(move |events| {
+                for event in &events {
+                    match event {
+                        aegis_memory::monitor::MemoryEvent::FileChanged { path, screen_verdict, .. } => {
+                            let action = format!("memory_change {}", path.display());
+                            let outcome = format!("verdict={screen_verdict:?}");
+                            if let Err(e) = monitor_recorder.record_simple(
+                                aegis_schemas::ReceiptType::MemoryIntegrity,
+                                &action,
+                                &outcome,
+                            ) {
+                                tracing::warn!("failed to record memory event: {e}");
+                            }
+
+                            if matches!(screen_verdict, aegis_memory::screen::ScreenVerdict::Blocked) {
+                                let alert = aegis_dashboard::DashboardAlert {
+                                    ts_ms: std::time::SystemTime::now()
+                                        .duration_since(std::time::UNIX_EPOCH)
+                                        .unwrap_or_default()
+                                        .as_millis() as u64,
+                                    kind: "memory_injection".to_string(),
+                                    message: format!("Suspicious memory change: {}", path.display()),
+                                    receipt_seq: monitor_recorder.chain_head().head_seq,
+                                };
+                                let _ = monitor_alert_tx.send(alert);
+                            }
+                        }
+                        aegis_memory::monitor::MemoryEvent::FileDeleted { path, .. } => {
+                            let action = format!("memory_deleted {}", path.display());
+                            if let Err(e) = monitor_recorder.record_simple(
+                                aegis_schemas::ReceiptType::MemoryIntegrity,
+                                &action,
+                                "file deleted",
+                            ) {
+                                tracing::warn!("failed to record memory deletion: {e}");
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }).await;
+        });
+        info!("memory monitor started (interval={}s)", config.memory.hash_interval_secs);
+    }
+
+    // 7. Create middleware hooks
+    let slm_config = aegis_slm::loopback::LoopbackConfig {
+        ollama_url: config.slm.ollama_url.clone(),
+        model: config.slm.model.clone(),
+        fallback_to_heuristics: config.slm.fallback_to_heuristics,
+    };
+    let hooks = create_middleware_hooks(recorder.clone(), mode, alert_tx.clone(), slm_config);
 
     // 7. Build proxy config
     let proxy_config = ProxyConfig {
@@ -154,10 +225,15 @@ pub async fn start(
         provider: aegis_proxy::config::Provider::Anthropic,
     };
 
-    // 8. Print startup banner
+    // 8. Warn if upstream is still the default (common misconfiguration)
+    if config.proxy.upstream_url == "https://api.anthropic.com" {
+        info!("upstream_url is the default (https://api.anthropic.com) — set [proxy] upstream_url in config.toml if needed");
+    }
+
+    // 9. Print startup banner
     print_banner(&config, mode, &bot_id, &adapter_state);
 
-    // 9. Record startup receipt
+    // 10. Record startup receipt
     if let Err(e) = adapter_state.evidence.record_simple(
         aegis_schemas::ReceiptType::ModeChange,
         "adapter_startup",
@@ -166,18 +242,23 @@ pub async fn start(
         warn!("failed to record startup receipt: {e}");
     }
 
-    // 10. Start proxy server (blocks until shutdown)
+    // 11. Start proxy server (blocks until shutdown)
     info!(
         listen = %proxy_config.listen_addr,
         upstream = %proxy_config.upstream_url,
+        dashboard = %dashboard_path,
         "proxy server starting"
     );
 
-    aegis_proxy::proxy::start(proxy_config, hooks)
+    aegis_proxy::proxy::start(
+        proxy_config,
+        hooks,
+        Some((dashboard_path, dashboard_router)),
+    )
         .await
         .map_err(|e| StartupError::Proxy(format!("{e}")))?;
 
-    // 11. Record shutdown receipt
+    // 12. Record shutdown receipt
     if let Err(e) = adapter_state.evidence.record_simple(
         aegis_schemas::ReceiptType::ModeChange,
         "adapter_shutdown",
@@ -195,6 +276,7 @@ fn create_middleware_hooks(
     recorder: Arc<EvidenceRecorder>,
     mode: Mode,
     alert_tx: tokio::sync::broadcast::Sender<aegis_dashboard::DashboardAlert>,
+    slm_config: aegis_slm::loopback::LoopbackConfig,
 ) -> MiddlewareHooks {
     match mode {
         Mode::PassThrough => {
@@ -204,11 +286,23 @@ fn create_middleware_hooks(
             MiddlewareHooks::default()
         }
         _ => {
-            info!("middleware hooks: evidence=yes vault=yes barrier=stub slm=stub");
+            let protected_files = Arc::new(std::sync::Mutex::new(
+                aegis_barrier::protected_files::ProtectedFileManager::new(),
+            ));
+            info!(
+                ollama_url = %slm_config.ollama_url,
+                model = %slm_config.model,
+                fallback = slm_config.fallback_to_heuristics,
+                "middleware hooks: evidence=yes vault=yes barrier=real slm=real"
+            );
             MiddlewareHooks {
-                evidence: Some(Arc::new(EvidenceHookImpl { recorder, alert_tx })),
-                barrier: Some(Arc::new(BarrierHookImpl)),
-                slm: Some(Arc::new(SlmHookImpl)),
+                evidence: Some(Arc::new(EvidenceHookImpl { recorder: recorder.clone(), alert_tx: alert_tx.clone() })),
+                barrier: Some(Arc::new(BarrierHookImpl {
+                    protected_files,
+                    recorder,
+                    alert_tx,
+                })),
+                slm: Some(Arc::new(SlmHookImpl { config: slm_config })),
                 vault: Some(Arc::new(VaultHookImpl)),
             }
         }
@@ -301,12 +395,20 @@ mod tests {
         assert_eq!(pubkey1, pubkey2, "loaded key should match generated key");
     }
 
+    fn test_slm_config() -> aegis_slm::loopback::LoopbackConfig {
+        aegis_slm::loopback::LoopbackConfig {
+            ollama_url: "http://127.0.0.1:11434".to_string(),
+            model: "test-model".to_string(),
+            fallback_to_heuristics: true,
+        }
+    }
+
     #[test]
     fn create_hooks_observe_only() {
         let key = ed25519::generate_keypair();
         let recorder = Arc::new(EvidenceRecorder::new_in_memory(key).unwrap());
         let (alert_tx, _) = tokio::sync::broadcast::channel(32);
-        let hooks = create_middleware_hooks(recorder, Mode::ObserveOnly, alert_tx);
+        let hooks = create_middleware_hooks(recorder, Mode::ObserveOnly, alert_tx, test_slm_config());
         assert!(hooks.evidence.is_some());
         assert!(hooks.barrier.is_some());
         assert!(hooks.slm.is_some());
@@ -318,7 +420,7 @@ mod tests {
         let key = ed25519::generate_keypair();
         let recorder = Arc::new(EvidenceRecorder::new_in_memory(key).unwrap());
         let (alert_tx, _) = tokio::sync::broadcast::channel(32);
-        let hooks = create_middleware_hooks(recorder, Mode::PassThrough, alert_tx);
+        let hooks = create_middleware_hooks(recorder, Mode::PassThrough, alert_tx, test_slm_config());
         assert!(hooks.evidence.is_none());
         assert!(hooks.barrier.is_none());
         assert!(hooks.slm.is_none());

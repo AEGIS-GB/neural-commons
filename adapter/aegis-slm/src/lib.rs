@@ -14,8 +14,10 @@
 //!   Warn-mode receipt is summary only: aggregate score + action. No per-pattern
 //!   breakdown in Phase 1 (SlmReceiptDetail::Summary).
 
-pub mod loopback;
+pub mod engine;
 pub mod holster;
+pub mod loopback;
 pub mod parser;
+pub mod prompt;
 pub mod scoring;
 pub mod types;
