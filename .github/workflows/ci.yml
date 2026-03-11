@@ -101,6 +101,21 @@ jobs:
           name: aegis-${{ matrix.target }}
           path: target/${{ matrix.target }}/release/${{ matrix.binary }}
 
+  # ── E2E Smoke Test ───────────────────────────────────────────
+  smoke-test:
+    name: E2E Smoke Test
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Run smoke test
+        run: ./tests/e2e/smoke_test.sh
+
   # ── Security Audit ────────────────────────────────────────────
   audit:
     name: Security Audit

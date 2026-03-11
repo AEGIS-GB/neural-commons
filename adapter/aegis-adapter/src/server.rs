@@ -308,7 +308,8 @@ pub async fn start(
         model: config.slm.model.clone(),
         fallback_to_heuristics: config.slm.fallback_to_heuristics,
     };
-    let hooks = create_middleware_hooks(recorder.clone(), mode, alert_tx.clone(), slm_config);
+    let slm_enabled = config.slm.enabled;
+    let hooks = create_middleware_hooks(recorder.clone(), mode, alert_tx.clone(), slm_config, slm_enabled);
 
     // 7. Build proxy config
     let proxy_config = ProxyConfig {
@@ -377,6 +378,7 @@ fn create_middleware_hooks(
     mode: Mode,
     alert_tx: tokio::sync::broadcast::Sender<aegis_dashboard::DashboardAlert>,
     slm_config: aegis_slm::loopback::LoopbackConfig,
+    slm_enabled: bool,
 ) -> MiddlewareHooks {
     match mode {
         Mode::PassThrough => {
@@ -389,12 +391,18 @@ fn create_middleware_hooks(
             let protected_files = Arc::new(std::sync::Mutex::new(
                 aegis_barrier::protected_files::ProtectedFileManager::new(),
             ));
-            info!(
-                ollama_url = %slm_config.ollama_url,
-                model = %slm_config.model,
-                fallback = slm_config.fallback_to_heuristics,
-                "middleware hooks: evidence=yes vault=yes barrier=real slm=real"
-            );
+            let slm_hook: Option<Arc<dyn aegis_proxy::middleware::SlmHook>> = if slm_enabled {
+                info!(
+                    ollama_url = %slm_config.ollama_url,
+                    model = %slm_config.model,
+                    fallback = slm_config.fallback_to_heuristics,
+                    "middleware hooks: evidence=yes vault=yes barrier=real slm=real"
+                );
+                Some(Arc::new(SlmHookImpl { config: slm_config }))
+            } else {
+                info!("middleware hooks: evidence=yes vault=yes barrier=real slm=disabled");
+                None
+            };
             MiddlewareHooks {
                 evidence: Some(Arc::new(EvidenceHookImpl { recorder: recorder.clone(), alert_tx: alert_tx.clone() })),
                 barrier: Some(Arc::new(BarrierHookImpl {
@@ -402,7 +410,7 @@ fn create_middleware_hooks(
                     recorder,
                     alert_tx,
                 })),
-                slm: Some(Arc::new(SlmHookImpl { config: slm_config })),
+                slm: slm_hook,
                 vault: Some(Arc::new(VaultHookImpl)),
             }
         }
@@ -508,10 +516,22 @@ mod tests {
         let key = ed25519::generate_keypair();
         let recorder = Arc::new(EvidenceRecorder::new_in_memory(key).unwrap());
         let (alert_tx, _) = tokio::sync::broadcast::channel(32);
-        let hooks = create_middleware_hooks(recorder, Mode::ObserveOnly, alert_tx, test_slm_config());
+        let hooks = create_middleware_hooks(recorder, Mode::ObserveOnly, alert_tx, test_slm_config(), true);
         assert!(hooks.evidence.is_some());
         assert!(hooks.barrier.is_some());
         assert!(hooks.slm.is_some());
+        assert!(hooks.vault.is_some());
+    }
+
+    #[test]
+    fn create_hooks_observe_only_no_slm() {
+        let key = ed25519::generate_keypair();
+        let recorder = Arc::new(EvidenceRecorder::new_in_memory(key).unwrap());
+        let (alert_tx, _) = tokio::sync::broadcast::channel(32);
+        let hooks = create_middleware_hooks(recorder, Mode::ObserveOnly, alert_tx, test_slm_config(), false);
+        assert!(hooks.evidence.is_some());
+        assert!(hooks.barrier.is_some());
+        assert!(hooks.slm.is_none());
         assert!(hooks.vault.is_some());
     }
 
@@ -520,7 +540,7 @@ mod tests {
         let key = ed25519::generate_keypair();
         let recorder = Arc::new(EvidenceRecorder::new_in_memory(key).unwrap());
         let (alert_tx, _) = tokio::sync::broadcast::channel(32);
-        let hooks = create_middleware_hooks(recorder, Mode::PassThrough, alert_tx, test_slm_config());
+        let hooks = create_middleware_hooks(recorder, Mode::PassThrough, alert_tx, test_slm_config(), true);
         assert!(hooks.evidence.is_none());
         assert!(hooks.barrier.is_none());
         assert!(hooks.slm.is_none());

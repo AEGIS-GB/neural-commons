@@ -5,6 +5,7 @@
 //!   aegis --observe-only         — force observe-only mode (panic switch)
 //!   aegis --pass-through         — dumb forwarder, zero inspection
 //!   aegis --enforce              — enable enforcement mode
+//!   aegis --no-slm              — disable SLM screening entirely
 //!   aegis status                 — show current adapter state
 //!   aegis scan                   — run credential + vulnerability scan
 //!   aegis export                 — export evidence chain as JSON
@@ -58,6 +59,10 @@ struct Cli {
     /// Listen address (overrides config)
     #[arg(short, long)]
     listen: Option<String>,
+
+    /// Disable SLM screening entirely (no Ollama, no heuristic fallback)
+    #[arg(long)]
+    no_slm: bool,
 
     /// Enable verbose logging
     #[arg(short, long)]
@@ -243,6 +248,12 @@ fn main() {
     // Does NOT affect vault_block, memory_write, identity_check, failure_rollback.
     if cli.observe_only {
         config.enforcement.apply_observe_only_flag();
+    }
+
+    // --no-slm disables SLM screening entirely (no Ollama, no heuristic fallback)
+    if cli.no_slm {
+        config.slm.enabled = false;
+        config.slm.fallback_to_heuristics = false;
     }
 
     match cli.command {

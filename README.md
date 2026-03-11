@@ -2,6 +2,25 @@
 
 Trust infrastructure for 17,000+ MoltBook bot wardens. A Rust-based system that provides cryptographic identity, evidence recording, write protection, and credential security for AI bot ecosystems.
 
+## Quick Start — Protect Your OpenClaw Agent
+
+```bash
+# 1. Install
+curl -fsSL https://github.com/LCatGA12/neural-commons/releases/latest/download/install.sh | bash
+
+# 2. Connect to OpenClaw
+aegis setup openclaw
+
+# 3. Start protection
+aegis
+```
+
+Dashboard: http://localhost:3141/dashboard
+
+Your agent now has evidence recording, write barriers, credential scanning, and injection screening — all running locally. Default mode is observe-only (warns but never blocks). See [QUICKSTART.md](docs/QUICKSTART.md) for details.
+
+---
+
 ## What It Does
 
 Neural Commons sits between a bot and its upstream API as a transparent proxy. It watches what happens, records tamper-proof evidence, and protects critical files from unauthorized modification — all without breaking existing workflows.
@@ -132,11 +151,11 @@ Four-layer test architecture:
 
 **Phase 0** — Crypto foundations, schema design, wire format: **Complete**
 
-**Phase 1** — Adapter core implementation: **In progress**
+**Phase 1** — Adapter core implementation: **Complete**
 - All adapter crates implemented with 406 passing tests
 - Barrier module fully operational (198 tests)
 - Evidence chain, SLM, vault, memory, proxy all functional
-- Remaining: SLM loopback wiring, dashboard UI, CLI commands, end-to-end integration
+- Install script, CLI, OpenClaw setup, dashboard, release workflow all shipped
 
 **Phase 2** — Trust engine, tier system, Botawiki: Planned
 
