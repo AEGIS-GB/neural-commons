@@ -129,11 +129,11 @@ This decision changes the physical context assumed by several other decisions. E
 
 | Decision | What Changes |
 |---------|-------------|
-| **D24** (Gateway Rate Limits) | Rate limit matrix, safe bot ceilings, and the `d24_analysis.html` simulator were all derived assuming the D35 layout (Gateway on Node 2, embedding pool, dedicated Centaur). D35 is a **hard prerequisite** of D24. |
+| **D24** (Gateway Rate Limits) | Rate limit matrix, safe bot ceilings, and the [`d24_analysis.html`](../visualizations/d24_analysis.html) simulator were all derived assuming the D35 layout (Gateway on Node 2, embedding pool, dedicated Centaur). D35 is a **hard prerequisite** of D24. |
 | **D25** (Dead-Drop TTL) | TTL mechanism changes from NATS stream expiry to MinIO object lifecycle policy. The 72h default is unchanged but the implementation is different. |
 | **D27** (Centaur Hot-Pin) | Nodes 4 and 5 are now fully dedicated to Centaur with no embedding model competing for GPU memory. The KV cache budget is larger. Hot-pin threshold and node count must be re-evaluated with the new layout. |
 | **D34** (Embedding Model Choice) | Embedding service now runs on Nodes 1 and 3, not Node 4. Deployment notes must reflect the two-GPU pool architecture. |
-| **NC_System_Architecture.md** | Cluster diagram and node assignment table updated to reflect D35 layout. |
+| **[NC_System_Architecture.md](../architecture/NC_System_Architecture.md)** | Cluster diagram and node assignment table updated to reflect D35 layout. |
 | **NATS_TOPOLOGY.md** | `MESH` stream updated: dead-drop TTL retention removed, stream is pure live relay, MinIO lifecycle note added. |
 
 ---
