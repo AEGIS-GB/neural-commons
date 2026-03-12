@@ -160,6 +160,45 @@ Your OpenClaw Agent
 
 Aegis is a transparent proxy. It intercepts traffic, inspects it, records evidence, and forwards it unchanged. In observe mode, it never modifies or blocks anything. In enforce mode, it can block requests that fail SLM screening or violate write barriers.
 
+## Dogfooding: Route Claude Code Through Aegis
+
+Anthropic officially supports routing Claude Code through LLM gateways using the `ANTHROPIC_BASE_URL` environment variable. See the [Anthropic LLM Gateway documentation](https://docs.anthropic.com/en/docs/claude-code/llm-gateway) for details.
+
+This means you can run Claude Code through Aegis to monitor and record every API call Claude makes — with full evidence receipts, credential scanning, and (optionally) injection screening.
+
+**Terminal 1 — Start Aegis:**
+
+```bash
+aegis --no-slm
+# Proxy listening on 127.0.0.1:3141
+# Dashboard at http://localhost:3141/dashboard
+```
+
+**Terminal 2 — Run Claude Code through the proxy:**
+
+```bash
+export ANTHROPIC_BASE_URL=http://127.0.0.1:3141
+claude
+```
+
+**What to expect:**
+- Streaming works — Aegis detects SSE and chunked responses, forwarding them transparently
+- Evidence receipts appear on the dashboard as Claude sends API calls
+- `aegis export --verify` confirms the evidence chain integrity
+
+**Safety notes:**
+- `ANTHROPIC_BASE_URL` is a per-shell env var — it only affects the terminal where you set it
+- To stop routing through Aegis: close the terminal or run `unset ANTHROPIC_BASE_URL`
+- Use `--no-slm` to skip SLM screening overhead on Claude's traffic (recommended for dogfooding)
+- Aegis runs in observe-only mode by default — it never modifies or blocks requests
+
+**Troubleshooting dogfooding:**
+- Claude Code hangs → check Aegis is running and the env var is set: `echo $ANTHROPIC_BASE_URL`
+- No receipts on dashboard → send a test message in Claude and refresh the dashboard
+- Streaming feels slow → make sure `--no-slm` is set
+
+---
+
 ## Troubleshooting
 
 **Install script says "Download failed"**
