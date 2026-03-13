@@ -1,6 +1,10 @@
-# Auto-release — bumps patch version and tags after CI passes on main
+# Auto-release — bumps version, builds cross-platform binaries, publishes GitHub Release
 #
-# Flow: PR merged → ci.yml passes → this workflow bumps version → pushes v* tag → release.yml builds & publishes
+# Flow: PR merged → ci.yml passes → this workflow does everything:
+#   1. Bump version in Cargo.toml (patch by default)
+#   2. Commit + tag
+#   3. Cross-compile 4 platforms
+#   4. Publish GitHub Release with binaries + checksums
 #
 # To control bump type, add a label to the PR:
 #   "release:minor" → 0.2.0 → 0.3.0
@@ -23,12 +27,17 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  auto-release:
+  # ── Bump Version ──────────────────────────────────────────
+  bump:
     name: Bump Version & Tag
     runs-on: ubuntu-latest
     if: >
       github.event.workflow_run.conclusion == 'success' &&
       github.event.workflow_run.event == 'push'
+    outputs:
+      skip: ${{ steps.skip_check.outputs.skip }}
+      tag: ${{ steps.version.outputs.tag }}
+      next: ${{ steps.version.outputs.next }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -38,7 +47,6 @@ jobs:
       - name: Check for release:skip label on merged PR
         id: skip_check
         run: |
-          # Find the PR that was merged in this push
           COMMIT_SHA="${{ github.event.workflow_run.head_sha }}"
           PR_NUMBER=$(gh pr list --state merged --search "$COMMIT_SHA" --json number --jq '.[0].number // empty')
 
@@ -78,8 +86,6 @@ jobs:
         id: version
         run: |
           CURRENT=$(grep '^version = ' Cargo.toml | head -1 | sed 's/version = "\(.*\)"/\1/')
-          echo "current=$CURRENT"
-
           IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT"
           BUMP="${{ steps.bump.outputs.type }}"
 
@@ -109,7 +115,6 @@ jobs:
         run: |
           CURRENT="${{ steps.version.outputs.current }}"
           NEXT="${{ steps.version.outputs.next }}"
-          # Update workspace version in root Cargo.toml
           sed -i "s/^version = \"$CURRENT\"/version = \"$NEXT\"/" Cargo.toml
           echo "Updated Cargo.toml:"
           grep '^version = ' Cargo.toml
@@ -117,12 +122,151 @@ jobs:
       - name: Commit and tag
         if: steps.skip_check.outputs.skip != 'true'
         run: |
-          NEXT="${{ steps.version.outputs.next }}"
           TAG="${{ steps.version.outputs.tag }}"
-
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add Cargo.toml
           git commit -m "release: $TAG"
           git tag -a "$TAG" -m "Release $TAG"
           git push origin main --follow-tags
+
+  # ── Build Cross-Platform Binaries ─────────────────────────
+  build-release:
+    name: Build (${{ matrix.target }})
+    needs: bump
+    if: needs.bump.outputs.skip != 'true'
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            artifact_name: aegis-linux-x86_64
+            binary: aegis
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            artifact_name: aegis-darwin-x86_64
+            binary: aegis
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            artifact_name: aegis-darwin-aarch64
+            binary: aegis
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            artifact_name: aegis-windows-x86_64.exe
+            binary: aegis.exe
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.bump.outputs.tag }}
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build release binary
+        run: cargo build --release --target ${{ matrix.target }} --bin aegis
+
+      - name: Rename binary for release
+        shell: bash
+        run: cp target/${{ matrix.target }}/release/${{ matrix.binary }} ${{ matrix.artifact_name }}
+
+      - name: Generate SHA-256 checksum
+        shell: bash
+        run: |
+          if [[ "${{ matrix.os }}" == "macos-latest" ]]; then
+            shasum -a 256 ${{ matrix.artifact_name }} > ${{ matrix.artifact_name }}.sha256
+          else
+            sha256sum ${{ matrix.artifact_name }} > ${{ matrix.artifact_name }}.sha256
+          fi
+
+      - name: Upload binary artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: |
+            ${{ matrix.artifact_name }}
+            ${{ matrix.artifact_name }}.sha256
+
+  # ── Publish GitHub Release ────────────────────────────────
+  publish-release:
+    name: Publish GitHub Release
+    needs: [bump, build-release]
+    if: needs.bump.outputs.skip != 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts/
+
+      - name: Flatten artifact directories
+        run: |
+          mkdir -p release-files
+          find artifacts/ -type f -exec cp {} release-files/ \;
+          ls -la release-files/
+
+      - name: Copy install script
+        run: cp install/install.sh release-files/install.sh
+
+      - name: Generate release notes
+        run: |
+          cat > release-notes.md << 'EOF'
+          ## Install
+
+          ```bash
+          curl -fsSL https://github.com/LCatGA12/neural-commons/releases/latest/download/install.sh | bash
+          ```
+
+          Or download the binary for your platform below and place it in your PATH.
+
+          ## Quick Start
+
+          ```bash
+          aegis setup openclaw    # connect to your OpenClaw agent
+          aegis                   # start protection (observe-only mode)
+          ```
+
+          Dashboard: http://localhost:3141/dashboard
+
+          ## Checksums
+
+          Verify your download:
+          ```bash
+          sha256sum -c aegis-linux-x86_64.sha256
+          ```
+
+          ## What's Included
+
+          - Evidence recorder — tamper-evident receipt chain for every API call
+          - Write barrier — protects SOUL.md, AGENTS.md, IDENTITY.md, TOOLS.md, BOOT.md
+          - Credential vault — encrypted storage, plaintext scanner
+          - SLM injection screening — via Ollama (heuristic fallback if unavailable)
+          - Memory monitor — watches MEMORY.md, HEARTBEAT.md, USER.md
+          - Dashboard — localhost web UI showing security posture
+          - CLI — scan, export, vault, memory, setup commands
+          EOF
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.bump.outputs.tag }}
+          name: "Aegis ${{ needs.bump.outputs.tag }}"
+          body_path: release-notes.md
+          files: |
+            release-files/aegis-linux-x86_64
+            release-files/aegis-linux-x86_64.sha256
+            release-files/aegis-darwin-x86_64
+            release-files/aegis-darwin-x86_64.sha256
+            release-files/aegis-darwin-aarch64
+            release-files/aegis-darwin-aarch64.sha256
+            release-files/aegis-windows-x86_64.exe
+            release-files/aegis-windows-x86_64.exe.sha256
+            release-files/install.sh
+          draft: false
+          prerelease: false
