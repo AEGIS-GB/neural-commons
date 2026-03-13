@@ -229,7 +229,7 @@ pub async fn start(
         info!("memory monitor started (interval={}s)", config.memory.hash_interval_secs);
     }
 
-    // 6b. Start barrier filesystem watcher (Layer 1 detection)
+    // 6b. Start barrier filesystem watcher (Layer 1 detection + enforce revert)
     if mode != Mode::PassThrough {
         let barrier_protected = Arc::new(std::sync::Mutex::new(
             aegis_barrier::protected_files::ProtectedFileManager::new(),
@@ -237,6 +237,23 @@ pub async fn start(
         let barrier_recorder = recorder.clone();
         let barrier_alert_tx = alert_tx.clone();
         let watcher_workspace = std::env::current_dir().unwrap_or_default();
+        let barrier_mode = mode;
+
+        // Snapshot critical files at startup for enforce-mode restore.
+        // No git dependency — restores from in-memory copy.
+        let critical_paths: Vec<std::path::PathBuf> = barrier_protected.lock()
+            .map(|mgr| {
+                mgr.list_all()
+                    .iter()
+                    .filter(|e| e.critical)
+                    .filter(|e| e.scope == aegis_barrier::types::FileScope::WorkspaceRoot)
+                    .map(|e| std::path::PathBuf::from(&e.pattern))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let snapshot_store = Arc::new(
+            aegis_barrier::snapshot::SnapshotStore::load(&watcher_workspace, &critical_paths)
+        );
 
         tokio::spawn(async move {
             use notify::{Watcher, RecursiveMode, Config};
@@ -291,7 +308,40 @@ pub async fn start(
 
                     if is_protected {
                         let action = format!("filesystem_change {} {:?}", relative.display(), we.kind);
-                        let outcome = if is_critical {
+
+                        // In enforce mode, restore critical files from startup snapshot
+                        let reverted = if barrier_mode == Mode::Enforce && is_critical {
+                            match snapshot_store.restore(&watcher_workspace, relative) {
+                                Ok(true) => {
+                                    tracing::warn!(
+                                        path = %relative.display(),
+                                        "barrier: RESTORED critical file from startup snapshot (enforce mode)"
+                                    );
+                                    true
+                                }
+                                Ok(false) => {
+                                    tracing::warn!(
+                                        path = %relative.display(),
+                                        "barrier: no snapshot available for restore (file did not exist at startup)"
+                                    );
+                                    false
+                                }
+                                Err(e) => {
+                                    tracing::error!(
+                                        path = %relative.display(),
+                                        error = %e,
+                                        "barrier: failed to restore file from snapshot"
+                                    );
+                                    false
+                                }
+                            }
+                        } else {
+                            false
+                        };
+
+                        let outcome = if reverted {
+                            "critical_protected_file_reverted"
+                        } else if is_critical {
                             "critical_protected_file_modified"
                         } else {
                             "protected_file_modified"
@@ -306,10 +356,15 @@ pub async fn start(
                         }
 
                         if is_critical {
+                            let msg = if reverted {
+                                format!("Critical file modified and REVERTED: {}", relative.display())
+                            } else {
+                                format!("Critical file modified: {}", relative.display())
+                            };
                             let alert = aegis_dashboard::DashboardAlert {
                                 ts_ms: we.timestamp_ms,
                                 kind: "structural_write".to_string(),
-                                message: format!("Critical file modified: {}", relative.display()),
+                                message: msg,
                                 receipt_seq: barrier_recorder.chain_head().head_seq,
                             };
                             let _ = barrier_alert_tx.send(alert);
@@ -318,6 +373,7 @@ pub async fn start(
                         tracing::warn!(
                             path = %relative.display(),
                             critical = is_critical,
+                            reverted = reverted,
                             kind = ?we.kind,
                             "barrier: protected file change detected"
                         );

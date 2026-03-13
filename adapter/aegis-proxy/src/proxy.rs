@@ -205,6 +205,12 @@ async fn forward_request(
         .clone()
         .unwrap_or_else(|| "unknown".to_string());
 
+    let body_text = if !body_bytes.is_empty() {
+        std::str::from_utf8(&body_bytes).ok().map(|s| s.to_string())
+    } else {
+        None
+    };
+
     let req_info = RequestInfo {
         method: method.to_string(),
         path: path.clone(),
@@ -213,6 +219,7 @@ async fn forward_request(
         body_hash,
         source_ip: rate_limit_key,
         timestamp_ms: middleware::now_ms(),
+        body_text,
     };
 
     // --- Parse Anthropic request for SLM screening (BUG 5 fix) ---
@@ -423,6 +430,9 @@ async fn forward_request(
 
     let duration_ms = start_time.elapsed().as_millis() as u64;
 
+    // Mutable response body — vault redaction may modify it
+    let mut final_body = resp_body.to_vec();
+
     // Run post-response middleware (skip in pass-through mode)
     if state.config.mode != ProxyMode::PassThrough {
         let resp_info = ResponseInfo {
@@ -439,20 +449,25 @@ async fn forward_request(
             }
         }
 
-        // Vault hook: scan response
+        // Vault hook: scan and redact response
         if let Some(ref vault) = state.hooks.vault {
             if let Ok(body_str) = std::str::from_utf8(&resp_body) {
                 let vault_decision = vault.scan(body_str).await;
                 if let middleware::VaultDecision::Detected(secrets) = vault_decision {
                     info!(count = secrets.len(), "vault detected credentials in response");
+                    // Redact credentials from the response body
+                    if let Some(redacted) = vault.redact(body_str).await {
+                        warn!(count = secrets.len(), "vault redacted credentials from response");
+                        final_body = redacted.into_bytes();
+                    }
                 }
             }
         }
     }
 
-    // Record traffic for dashboard inspector
+    // Record traffic for dashboard inspector (with redacted body)
     if let Some(ref recorder) = state.traffic_recorder {
-        recorder(&method.to_string(), &path, resp_status, &body_bytes, &resp_body, duration_ms, false);
+        recorder(&method.to_string(), &path, resp_status, &body_bytes, &final_body, duration_ms, false);
     }
 
     // Build response
@@ -467,7 +482,7 @@ async fn forward_request(
         }
     }
 
-    response.body(Body::from(resp_body.to_vec()))
+    response.body(Body::from(final_body))
         .map_err(|e| ProxyError::Internal(format!("response build error: {e}")))
 }
 

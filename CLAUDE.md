@@ -19,9 +19,10 @@ neural-commons/
 │   │       ├── mode.rs             # ModeController (observe/enforce/passthrough)
 │   │       ├── state.rs            # AdapterState (shared across subsystems)
 │   │       └── replay.rs           # MonotonicCounter, NonceRegistry
-│   ├── aegis-barrier/              # Write barrier — filesystem watcher       (198 tests)
+│   ├── aegis-barrier/              # Write barrier — filesystem watcher       (204 tests)
 │   │   └── src/
 │   │       ├── protected_files.rs  # ProtectedFileManager, pattern matching
+│   │       ├── snapshot.rs         # SnapshotStore — in-memory file snapshots for enforce restore
 │   │       ├── watcher.rs          # FileWatcher, notify event mapping
 │   │       └── types.rs            # FileScope, SensitivityClass, EXCLUDED_DIRS
 │   ├── aegis-evidence/             # Evidence chain — hash chain + SQLite     (26 tests)
@@ -31,7 +32,7 @@ neural-commons/
 │   │       └── lib.rs              # EvidenceRecorder (top-level API)
 │   ├── aegis-vault/                # Credential scanner                       (38 tests)
 │   │   └── src/
-│   │       └── scanner.rs          # scan_text() — regex-based secret detection
+│   │       └── scanner.rs          # scan_text(), redact_text() — regex-based secret detection + redaction
 │   ├── aegis-memory/               # Memory file monitor                      (23 tests)
 │   │   └── src/
 │   │       ├── monitor.rs          # MemoryMonitor, MemoryEvent
@@ -50,8 +51,9 @@ neural-commons/
 │   │       └── cognitive_bridge.rs # /aegis/* tool endpoints
 │   ├── aegis-dashboard/            # Embedded web dashboard                   (4 tests)
 │   │   └── src/
-│   │       ├── routes.rs           # 8 API endpoints + SSE stream
-│   │       └── assets.rs           # Embedded HTML/JS
+│   │       ├── routes.rs           # 10 API endpoints + SSE stream
+│   │       ├── traffic.rs          # TrafficStore — in-memory ring buffer for traffic inspector
+│   │       └── assets.rs           # Embedded HTML/JS (7 tabs)
 │   ├── aegis-cli/                  # CLI binary entry point
 │   │   └── src/main.rs            # clap commands, flags
 │   ├── aegis-failure/              # Error types                              (8 tests)
@@ -61,6 +63,7 @@ neural-commons/
 │   └── aegis-schemas/              # Receipt, ReceiptCore, ReceiptType        (27 contract tests)
 ├── tests/
 │   ├── contract/                   # Layer 1: schema round-trip tests
+│   ├── proxy_test.sh              # 35 end-to-end proxy tests (9 groups)
 │   └── e2e/smoke_test.sh          # 10-step, 17-check end-to-end test
 ├── docs/
 │   ├── QUICKSTART.md               # Warden onboarding guide
@@ -74,7 +77,7 @@ neural-commons/
 └── DECISIONS.md                    # Full decision register (D0–D34)
 ```
 
-**Total: 406 unit tests** (aegis-barrier 198, aegis-evidence 26, aegis-vault 38, aegis-memory 23, aegis-slm 18, aegis-proxy 21, aegis-adapter 33, aegis-crypto 10, contract-tests 27, aegis-failure 8, aegis-gateway 4)
+**Total: 412+ unit tests** (aegis-barrier 204, aegis-evidence 26, aegis-vault 38, aegis-memory 23, aegis-slm 18, aegis-proxy 21, aegis-adapter 33, aegis-crypto 10, contract-tests 27, aegis-failure 8, aegis-gateway 4) + 35 e2e proxy tests
 
 ## Request Lifecycle
 
@@ -91,8 +94,10 @@ OpenClaw POST /v1/messages
         → oneshot channel delivers final hash+size for evidence recording
     → Non-streaming: buffer full response
     → Vault hook scans response body (hooks.rs VaultHookImpl → scanner::scan_text)
+    → Vault redaction if credentials detected (scanner::redact_text → masked response)
     → Evidence hook records receipt (hooks.rs EvidenceHookImpl → EvidenceRecorder)
-    → Response returned unchanged (observe mode) or blocked (enforce mode)
+    → Traffic recorder captures request/response for dashboard inspector
+    → Response returned (redacted if vault detected credentials)
 ```
 
 ## Debugging Map
@@ -106,7 +111,7 @@ OpenClaw POST /v1/messages
 | Barrier doesn't alert | `aegis-adapter/src/server.rs` L206–303 | Barrier watcher spawn: `notify::RecommendedWatcher`, `barrier_alert_tx.send()` |
 | Rate limiting not working | `aegis-proxy/src/proxy.rs` L155–167 | `state.rate_limiter`, identity fingerprint key |
 | Provider detection wrong | `aegis-proxy/src/proxy.rs` L147–152 | `anthropic::detect_provider(&headers)`, `allow_any_provider` config |
-| Vault misses secrets | `aegis-adapter/src/hooks.rs` L120–148 | `VaultHookImpl::scan()` → `scanner::scan_text()` |
+| Vault misses secrets | `aegis-adapter/src/hooks.rs` L120–162 | `VaultHookImpl::scan()` → `scanner::scan_text()`, `redact()` → `scanner::redact_text()` |
 | Memory monitor silent | `aegis-adapter/src/server.rs` L142–204 | Memory monitor spawn, `mode != PassThrough` guard |
 | Config not loading | `aegis-adapter/src/config.rs` | `AdapterConfig` TOML deserialization, default values |
 
@@ -231,6 +236,8 @@ All mounted under the dashboard path (default `/dashboard`):
 | `GET /api/access` | Last 50 API call entries |
 | `GET /api/alerts` | Recent critical alerts (REST fallback) |
 | `GET /api/alerts/stream` | SSE stream for real-time critical alerts |
+| `GET /api/traffic` | Traffic inspector summary (no bodies) |
+| `GET /api/traffic/{id}` | Traffic entry detail with bodies + chat view |
 
 ## Dogfooding: Route Claude Code Through Aegis
 

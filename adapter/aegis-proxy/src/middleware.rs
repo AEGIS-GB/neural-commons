@@ -44,6 +44,9 @@ pub struct RequestInfo {
     pub source_ip: String,
     /// Unix epoch milliseconds
     pub timestamp_ms: i64,
+    /// Request body as UTF-8 text (for barrier body inspection).
+    /// None if body is empty or not valid UTF-8.
+    pub body_text: Option<String>,
 }
 
 /// Information captured from the upstream response.
@@ -149,15 +152,23 @@ pub enum VaultDecision {
     Detected(Vec<String>),
 }
 
-/// Hook for vault credential scanning.
+/// Hook for vault credential scanning and redaction.
 ///
 /// Scans request/response bodies for API keys, tokens, passwords, etc.
+/// When credentials are detected, `redact` replaces them with masked versions.
 pub trait VaultHook: Send + Sync {
     /// Scan the given content for secrets.
     fn scan<'a>(
         &'a self,
         content: &'a str,
     ) -> Pin<Box<dyn Future<Output = VaultDecision> + Send + 'a>>;
+
+    /// Redact detected credentials in the content, returning masked text.
+    /// Returns None if no credentials found or redaction not supported.
+    fn redact<'a>(
+        &'a self,
+        content: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Option<String>> + Send + 'a>>;
 }
 
 // ---------------------------------------------------------------------------
@@ -255,6 +266,13 @@ impl VaultHook for NoopVaultHook {
         _content: &'a str,
     ) -> Pin<Box<dyn Future<Output = VaultDecision> + Send + 'a>> {
         Box::pin(async { VaultDecision::Clean })
+    }
+
+    fn redact<'a>(
+        &'a self,
+        _content: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Option<String>> + Send + 'a>> {
+        Box::pin(async { None })
     }
 }
 
@@ -363,6 +381,7 @@ mod tests {
             body_hash: body_hash(b""),
             source_ip: "127.0.0.1".into(),
             timestamp_ms: now_ms(),
+            body_text: None,
         };
         assert!(hook.on_request(&info).await.is_ok());
         let resp = ResponseInfo {
@@ -385,6 +404,7 @@ mod tests {
             body_hash: body_hash(b"data"),
             source_ip: "10.0.0.1".into(),
             timestamp_ms: now_ms(),
+            body_text: None,
         };
         assert_eq!(hook.check_write(&info).await, BarrierDecision::Allow);
     }
