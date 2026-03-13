@@ -23,22 +23,25 @@
 
 ## Decision Summary
 
-| # | Component | Key Decisions |
-|---|-----------|---------------|
-| 1 | Dashboard Router | No auth, configurable path (default `/dashboard`) |
-| 2 | upstream_url | Default Anthropic, log warning if using default |
-| 3 | SSE Streaming | Incremental SHA-256, skip vault scan, defer WebSocket |
-| 4 | Barrier Hook | Filesystem-only, protect all identity files + .env |
-| 5 | Memory Monitor | All changes → SSE, separate state, shared evidence |
-| 6 | SLM Hook | Ollama, download on first run, fallback heuristics, 1B default, auto-GPU |
-| 7 | Install Script | GitHub Releases, prompt for SLM, `aegis update`, defer signing |
-| 8 | Setup Command | `aegis setup <framework>`, just baseUrl |
-| 9 | Provider Detection | Support Anthropic + OpenAI, 422 others, allow_any_provider config |
-| 10 | /api/vault | All fields, partial masking, no auth |
-| 11 | /api/access | All API calls, last 50 entries |
-| 12 | CLI vault | Metadata default + --decrypt, add get/delete commands |
-| 13 | Rate Limiting | Per-bot fingerprint, 1000/min burst 50, no persistence |
-| 14 | Test Fixtures | Synthetic from docs, injection attacks included |
+| # | Component | Key Decisions | Status |
+|---|-----------|---------------|--------|
+| 1 | Dashboard Router | No auth, configurable path (default `/dashboard`) | Done |
+| 2 | upstream_url | Default Anthropic, log warning if using default | Done |
+| 3 | SSE Streaming | Incremental SHA-256, skip vault scan, defer WebSocket | Done |
+| 3b | Vault Redaction | `redact_text()` for non-streaming responses | Done (2026-03-12) |
+| 3c | Traffic Inspector | In-memory ring buffer, 200 entries, 32KB body cap, dashboard tab | Done (2026-03-12) |
+| 4 | Barrier Hook | Filesystem watcher + proxy body inspection + snapshot restore | Done (2026-03-12) |
+| 5 | Memory Monitor | All changes → SSE, separate state, shared evidence | Done |
+| 6 | SLM Hook | Ollama, download on first run, fallback heuristics, 1B default, auto-GPU | Done |
+| 7 | Install Script | GitHub Releases, prompt for SLM, `aegis update`, defer signing | Done |
+| 8 | Setup Command | `aegis setup <framework>`, just baseUrl | Done |
+| 9 | Provider Detection | Support Anthropic + OpenAI, 422 others, allow_any_provider config | Done |
+| 10 | /api/vault | All fields, partial masking, no auth | Done |
+| 11 | /api/access | All API calls, last 50 entries | Done |
+| 12 | CLI vault | Metadata default + --decrypt, add get/delete commands | Done |
+| 13 | Rate Limiting | Per-bot fingerprint, 1000/min burst 50, no persistence | Done |
+| 14 | Test Fixtures | Synthetic from docs, injection attacks included | Done |
+| 15 | E2E Test Suite | 35 end-to-end tests via proxy_test.sh (9 groups) | Done (2026-03-12) |
 
 ---
 

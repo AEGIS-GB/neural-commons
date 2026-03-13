@@ -93,6 +93,8 @@ These items were explicitly discussed and deferred to Phase 2.
 
 **Impact:** Credentials in streamed responses may not be detected until post-hoc analysis.
 
+**Note (2026-03-12):** Vault redaction is now implemented for non-streaming responses (`scanner::redact_text()`). Streaming vault scanning remains deferred.
+
 **Estimated Effort:** 1 day
 
 ---
@@ -247,7 +249,7 @@ Shortcuts taken for Tier 1 that should be cleaned up.
 
 **Should Be:** Separate files, bundled at build time.
 
-**Impact:** Hard to edit dashboard, no syntax highlighting, no minification.
+**Impact:** Hard to edit dashboard, no syntax highlighting, no minification. Growing larger with traffic inspector tab.
 
 **Effort:** 4 hours
 
@@ -271,7 +273,7 @@ Shortcuts taken for Tier 1 that should be cleaned up.
 
 **Should Be:** Record mode in proxy to capture real traffic as fixtures.
 
-**Impact:** Fixtures may drift from real API behavior.
+**Impact:** Fixtures may drift from real API behavior. Traffic inspector now captures live traffic (in-memory ring buffer, 200 entries) — this could be extended to export fixtures.
 
 **Effort:** 1 day
 
@@ -286,6 +288,30 @@ Shortcuts taken for Tier 1 that should be cleaned up.
 **Impact:** Hard to parse errors in automation.
 
 **Effort:** 4 hours
+
+---
+
+### TD-006: Snapshot Store Only Captures WorkspaceRoot Files
+
+**What:** `SnapshotStore::load()` only snapshots critical files with `FileScope::WorkspaceRoot` (SOUL.md, AGENTS.md, etc.). Glob-pattern files (`.env*`, `*.memory.md`) and depth-limited files are not snapshotted.
+
+**Should Be:** Enumerate and snapshot all files matching all critical patterns at startup, including glob expansions.
+
+**Impact:** In enforce mode, tampered `.env` or `*.memory.md` files cannot be auto-restored. They still generate alerts and receipts.
+
+**Effort:** 2 hours
+
+---
+
+### TD-007: Snapshot Store is Immutable After Startup
+
+**What:** Snapshots are captured once at startup and never updated. If a warden legitimately evolves a protected file (via `aegis evolve`), the snapshot still holds the original content.
+
+**Should Be:** Evolution flow should update the snapshot to the new known-good state.
+
+**Impact:** After a legitimate evolution, the next tamper detection would restore to the pre-evolution state instead of the evolved state.
+
+**Effort:** 1 hour
 
 ---
 
@@ -330,6 +356,10 @@ Track any changes to these deferrals.
 | Date | Item | Change | Reason |
 |------|------|--------|--------|
 | 2026-03-10 | Initial | Document created | All Tier 1 decisions locked |
+| 2026-03-12 | D-005 | Updated: vault redaction implemented for non-streaming | `scanner::redact_text()` replaces detected credentials before forwarding |
+| 2026-03-12 | TD-002 | Updated: dashboard growing with traffic inspector tab | 7 tabs now, `assets.rs` increasingly large |
+| 2026-03-12 | TD-004 | Updated: traffic inspector captures live traffic | Ring buffer could be extended to fixture export |
+| 2026-03-12 | TD-006 | Added: snapshot store for barrier enforce-mode restore | Replaces git-based revert with in-memory snapshots |
 
 ---
 

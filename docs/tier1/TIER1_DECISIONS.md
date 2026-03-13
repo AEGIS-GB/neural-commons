@@ -23,10 +23,13 @@
 | Dashboard path | Configurable, default `/dashboard` |
 | Upstream default | `https://api.anthropic.com` + warning |
 | Streaming | Incremental SHA-256, passthrough SSE+chunked |
+| Vault redaction | Active for non-streaming responses |
 | Vault scan streams | Skip in Tier 1 |
+| Traffic inspector | In-memory ring buffer, 200 entries, 32KB body cap |
 | WebSocket | Defer to Phase 2 |
-| Barrier detection | Filesystem watcher only |
-| Protected files | SOUL, AGENTS, IDENTITY, TOOLS, BOOT, .env* |
+| Barrier detection | Filesystem watcher + proxy body inspection |
+| Barrier enforce restore | In-memory snapshot (no git dependency) |
+| Protected files | SOUL, AGENTS, IDENTITY, TOOLS, BOOT, MEMORY, .env* |
 | Memory → SSE | All change events |
 | Memory/Barrier state | Separate, shared evidence recorder |
 | SLM engine | Ollama (HTTP) |
@@ -95,15 +98,42 @@ upstream_url = "https://api.anthropic.com"  # default if not set
 - Stream response to client immediately
 - Compute SHA-256 incrementally as chunks pass through
 - Record evidence receipt when stream completes
+- Vault redaction for non-streaming responses (see 3b)
 - Skip vault scanning for streamed responses
+- Traffic capture: streaming chunks accumulated up to 32KB for traffic inspector
 - WebSocket deferred to Phase 2
+
+---
+
+### 3b. Vault Redaction (Non-Streaming)
+
+- After vault scan detects credentials in upstream response body, `scanner::redact_text()` replaces them with masked versions before forwarding to client
+- Redaction replaces from end-to-start to preserve byte offsets
+- Masking format: first 4 chars + `****` + last 4 chars (or `****` if ≤ 8 chars)
+- Only active for non-streaming responses (streaming vault scan deferred, see D-005)
+- Response JSON structure preserved — only credential values inside content are masked
+
+---
+
+### 3c. Traffic Inspector
+
+- In-memory ring buffer (`VecDeque`) with 200-entry cap
+- Captures: method, path, status, request body, response body, duration, streaming flag
+- Bodies truncated to 32KB per entry
+- Dashboard tab with summary list (no bodies) and detail view (full bodies + parsed chat messages)
+- Chat view parses OpenAI-compatible request/response into message list
+- Polls every 2s, no persistence across restarts
 
 ---
 
 ### 4. Write Barrier
 
-- Detection: Filesystem watcher only (inotify/FSEvents/ReadDirectoryChangesW)
-- No HTTP-level interception
+- Detection: Filesystem watcher (inotify/FSEvents/ReadDirectoryChangesW) + proxy body inspection
+- Proxy body inspection: scans request body text for references to protected filenames (case-insensitive)
+- Enforce mode restore: in-memory snapshot store (no git dependency)
+  - Critical files snapshotted at startup
+  - On tamper detection: atomic restore (write .tmp → rename)
+  - Files missing at startup cannot be restored (warning logged)
 
 **Default protected files:**
 ```
@@ -112,7 +142,10 @@ AGENTS.md        (critical: true, sensitivity: standard)
 IDENTITY.md      (critical: true, sensitivity: standard)
 TOOLS.md         (critical: true, sensitivity: standard)
 BOOT.md          (critical: true, sensitivity: standard)
-.env*            (critical: true, sensitivity: credential)
+MEMORY.md        (critical: true, sensitivity: standard)
+*.memory.md      (critical: true, sensitivity: standard, depth ≤ 3)
+.env*            (critical: true, sensitivity: credential, depth ≤ 2)
+config.toml      (critical: false, sensitivity: standard)
 ```
 
 ---

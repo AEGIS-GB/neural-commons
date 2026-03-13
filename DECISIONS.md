@@ -246,6 +246,18 @@ hard-coded protected file list. These files are loaded into the system prompt on
 session turn and have no legitimate session-time writes — the write itself is the attack
 signal. See D35 for the full reasoning and workspace file classification research.
 
+**Update (2026-03-12):** Three enforcement additions implemented:
+1. **Proxy body inspection (Layer 3b):** Request body text scanned for case-insensitive
+   references to protected filenames (SOUL.md, AGENTS.md, IDENTITY.md, TOOLS.md, BOOT.md,
+   MEMORY.md, .env). Catches prompts like "write to SOUL.md" before they reach the LLM.
+   Blocks in enforce mode, warns in observe-only. Implemented in `hooks.rs::BarrierHookImpl`.
+2. **Snapshot-based restore:** In enforce mode, critical files are snapshotted into memory
+   at startup (`aegis-barrier::snapshot::SnapshotStore`). On tamper detection, the file is
+   atomically restored from the in-memory copy (write .tmp → rename). No git dependency.
+   Replaces the earlier `git checkout HEAD` approach.
+3. **Vault redaction:** `scanner::redact_text()` replaces detected credentials in non-streaming
+   response bodies before forwarding to client. Offset-preserving, end-to-start replacement.
+
 ---
 
 ## Block Phase 1 — Answer Before Day 5
@@ -448,11 +460,11 @@ Size budget: guideline not hard limit. This implementation adds ~400 bytes of JS
 Six checks in the adapter pipeline. Two are switchable. Four are always enforced.
 
 **Switchable (can be set to "observe" or "enforce" per check):**
-- `write_barrier` — default: `"observe"` (detect + receipt, no revert)
+- `write_barrier` — default: `"observe"` (detect + receipt, no revert). In enforce mode: filesystem changes to critical files are auto-restored from in-memory snapshot; proxy body inspection blocks requests referencing protected files.
 - `slm_reject` — default: `"observe"` (score + receipt, no drop)
 
 **Always enforced (not configurable — cannot be set to observe):**
-- `vault_block` — always encrypts detected plaintext before forwarding
+- `vault_block` — always redacts detected credentials in non-streaming response bodies before forwarding (`scanner::redact_text()`)
 - `memory_write` — always reverts unauthorized writes to monitored files
 - `identity_check` — authentication gate, cannot be bypassed
 - `failure_rollback` — adapter self-recovery, cannot be bypassed
