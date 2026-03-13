@@ -358,7 +358,7 @@ async fn forward_request(
             let mut total: usize = 0;
             let mut stream = std::pin::pin!(byte_stream);
             let mut accumulated = Vec::new();
-            let capture_limit = 32 * 1024usize; // 32KB capture limit for traffic
+            let capture_limit = 256 * 1024usize; // 256KB capture limit for traffic
 
             while let Some(chunk_result) = stream.next().await {
                 match chunk_result {

@@ -64,8 +64,10 @@ neural-commons/
 ├── tests/
 │   ├── contract/                   # Layer 1: schema round-trip tests
 │   ├── proxy_test.sh              # 35 end-to-end proxy tests (9 groups)
+│   ├── openclaw_integration_test.sh # 31 OpenClaw integration tests (7 groups)
 │   └── e2e/smoke_test.sh          # 10-step, 17-check end-to-end test
 ├── docs/
+│   ├── OPENCLAW_INTEGRATION.md     # OpenClaw + Aegis integration guide
 │   ├── QUICKSTART.md               # Warden onboarding guide
 │   └── tier1/
 │       ├── TIER1_DECISIONS.md      # Decision register
@@ -279,3 +281,4 @@ claude
 - [docs/tier1/TIER1_DECISIONS.md](docs/tier1/TIER1_DECISIONS.md) — Decision register with rationale
 - [docs/tier1/TIER1_DEFERRALS_AND_ROADMAP.md](docs/tier1/TIER1_DEFERRALS_AND_ROADMAP.md) — Deferred items and roadmap
 - [docs/QUICKSTART.md](docs/QUICKSTART.md) — Warden onboarding guide
+- [docs/OPENCLAW_INTEGRATION.md](docs/OPENCLAW_INTEGRATION.md) — OpenClaw + Aegis integration guide
