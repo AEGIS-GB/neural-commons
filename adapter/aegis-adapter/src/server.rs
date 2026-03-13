@@ -195,6 +195,28 @@ pub async fn start(
                                 tracing::warn!("failed to record memory deletion: {e}");
                             }
                         }
+                        aegis_memory::monitor::MemoryEvent::FileAppeared { path, screen_verdict, .. } => {
+                            let action = format!("memory_appeared {}", path.display());
+                            let outcome = format!("verdict={screen_verdict:?}");
+                            if let Err(e) = monitor_recorder.record_simple(
+                                aegis_schemas::ReceiptType::MemoryIntegrity,
+                                &action,
+                                &outcome,
+                            ) {
+                                tracing::warn!("failed to record memory appeared: {e}");
+                            }
+                        }
+                        aegis_memory::monitor::MemoryEvent::FileTracked { path, content_hash, .. } => {
+                            let action = format!("memory_tracked {}", path.display());
+                            let outcome = format!("hash={}", &content_hash[..16.min(content_hash.len())]);
+                            if let Err(e) = monitor_recorder.record_simple(
+                                aegis_schemas::ReceiptType::MemoryIntegrity,
+                                &action,
+                                &outcome,
+                            ) {
+                                tracing::warn!("failed to record memory tracked: {e}");
+                            }
+                        }
                         _ => {}
                     }
                 }

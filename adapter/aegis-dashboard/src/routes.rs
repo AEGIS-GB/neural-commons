@@ -111,10 +111,16 @@ struct EvidenceSummary {
 #[derive(Debug, Serialize)]
 struct ReceiptEntry {
     seq: u64,
+    id: String,
     ts_ms: i64,
     receipt_type: String,
+    prev_hash: String,
+    payload_hash: String,
     action: Option<String>,
+    subject: Option<String>,
+    trigger: Option<String>,
     outcome: Option<String>,
+    enforcement_mode: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -123,6 +129,15 @@ struct MemoryHealth {
     changes_detected: u64,
     last_scan_ms: Option<i64>,
     unacknowledged_changes: u64,
+    files: Vec<MemoryFileEntry>,
+}
+
+#[derive(Debug, Serialize)]
+struct MemoryFileEntry {
+    path: String,
+    last_event: String,
+    last_event_ms: i64,
+    verdict: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -196,10 +211,16 @@ async fn api_evidence(
         for receipt in receipts.iter().rev() {
             recent_receipts.push(ReceiptEntry {
                 seq: receipt.core.seq,
+                id: receipt.core.id.to_string(),
                 ts_ms: receipt.core.ts_ms,
                 receipt_type: format!("{:?}", receipt.core.receipt_type),
+                prev_hash: receipt.core.prev_hash.clone(),
+                payload_hash: receipt.core.payload_hash.clone(),
                 action: receipt.context.action.clone(),
+                subject: receipt.context.subject.clone(),
+                trigger: receipt.context.trigger.clone(),
                 outcome: receipt.context.outcome.clone(),
+                enforcement_mode: receipt.context.enforcement_mode.clone(),
             });
         }
     }
@@ -218,30 +239,64 @@ async fn api_memory(
     State(state): State<Arc<DashboardSharedState>>,
 ) -> Json<MemoryHealth> {
     let chain_head = state.evidence.chain_head();
-    let mut tracked: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut file_map: std::collections::HashMap<String, MemoryFileEntry> = std::collections::HashMap::new();
     let mut changes_detected: u64 = 0;
     let mut last_scan_ms: Option<i64> = None;
 
-    let start_seq = chain_head.head_seq.saturating_sub(200).max(1);
+    let start_seq = chain_head.head_seq.saturating_sub(500).max(1);
     if let Ok(receipts) = state.evidence.export(Some(start_seq), None) {
         for receipt in &receipts {
             if receipt.core.receipt_type != aegis_schemas::ReceiptType::MemoryIntegrity {
                 continue;
             }
-            if let Some(action) = &receipt.context.action {
-                let path = action.replace("memory_change ", "").replace("memory_deleted ", "");
-                tracked.insert(path);
-            }
+            let action = receipt.context.action.as_deref().unwrap_or("");
+            let outcome = receipt.context.outcome.as_deref().unwrap_or("");
+
+            let (event_type, path) = if action.starts_with("memory_change ") {
+                ("changed", action.strip_prefix("memory_change ").unwrap_or(action))
+            } else if action.starts_with("memory_deleted ") {
+                ("deleted", action.strip_prefix("memory_deleted ").unwrap_or(action))
+            } else if action.starts_with("memory_appeared ") {
+                ("appeared", action.strip_prefix("memory_appeared ").unwrap_or(action))
+            } else if action.starts_with("memory_tracked ") {
+                ("tracked", action.strip_prefix("memory_tracked ").unwrap_or(action))
+            } else {
+                ("unknown", action)
+            };
+
+            let verdict = if outcome.contains("Blocked") {
+                "Blocked"
+            } else if outcome.contains("Clean") {
+                "Clean"
+            } else if outcome.contains("deleted") {
+                "Deleted"
+            } else if outcome.starts_with("hash=") {
+                "Tracked"
+            } else {
+                outcome
+            };
+
+            file_map.insert(path.to_string(), MemoryFileEntry {
+                path: path.to_string(),
+                last_event: event_type.to_string(),
+                last_event_ms: receipt.core.ts_ms,
+                verdict: verdict.to_string(),
+            });
+
             changes_detected += 1;
             last_scan_ms = Some(receipt.core.ts_ms);
         }
     }
 
+    let files: Vec<MemoryFileEntry> = file_map.into_values().collect();
+    let tracked_files = files.len() as u64;
+
     Json(MemoryHealth {
-        tracked_files: tracked.len() as u64,
+        tracked_files,
         changes_detected,
         last_scan_ms,
         unacknowledged_changes: changes_detected,
+        files,
     })
 }
 
