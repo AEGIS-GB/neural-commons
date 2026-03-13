@@ -105,6 +105,22 @@ struct EvidenceSummary {
     total_receipts: u64,
     chain_head_seq: u64,
     last_receipt_ms: Option<i64>,
+    recent_receipts: Vec<ReceiptEntry>,
+}
+
+#[derive(Debug, Serialize)]
+struct ReceiptEntry {
+    seq: u64,
+    id: String,
+    ts_ms: i64,
+    receipt_type: String,
+    prev_hash: String,
+    payload_hash: String,
+    action: Option<String>,
+    subject: Option<String>,
+    trigger: Option<String>,
+    outcome: Option<String>,
+    enforcement_mode: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -113,6 +129,15 @@ struct MemoryHealth {
     changes_detected: u64,
     last_scan_ms: Option<i64>,
     unacknowledged_changes: u64,
+    files: Vec<MemoryFileEntry>,
+}
+
+#[derive(Debug, Serialize)]
+struct MemoryFileEntry {
+    path: String,
+    last_event: String,
+    last_event_ms: i64,
+    verdict: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -169,38 +194,109 @@ async fn api_status(
     })
 }
 
-/// GET /dashboard/api/evidence — recent evidence summary.
+/// GET /dashboard/api/evidence — recent evidence summary with individual receipts.
 async fn api_evidence(
     State(state): State<Arc<DashboardSharedState>>,
 ) -> Json<EvidenceSummary> {
     let chain_head = state.evidence.chain_head();
 
-    // Get the timestamp of the most recent receipt
-    let last_receipt_ms = if chain_head.head_seq > 0 {
-        state.evidence.export(Some(chain_head.head_seq), Some(chain_head.head_seq))
-            .ok()
-            .and_then(|receipts| receipts.first().map(|r| r.core.ts_ms))
-    } else {
-        None
-    };
+    let mut last_receipt_ms = None;
+    let mut recent_receipts = Vec::new();
+
+    let start_seq = chain_head.head_seq.saturating_sub(50).max(1);
+    if let Ok(receipts) = state.evidence.export(Some(start_seq), None) {
+        if let Some(last) = receipts.last() {
+            last_receipt_ms = Some(last.core.ts_ms);
+        }
+        for receipt in receipts.iter().rev() {
+            recent_receipts.push(ReceiptEntry {
+                seq: receipt.core.seq,
+                id: receipt.core.id.to_string(),
+                ts_ms: receipt.core.ts_ms,
+                receipt_type: format!("{:?}", receipt.core.receipt_type),
+                prev_hash: receipt.core.prev_hash.clone(),
+                payload_hash: receipt.core.payload_hash.clone(),
+                action: receipt.context.action.clone(),
+                subject: receipt.context.subject.clone(),
+                trigger: receipt.context.trigger.clone(),
+                outcome: receipt.context.outcome.clone(),
+                enforcement_mode: receipt.context.enforcement_mode.clone(),
+            });
+        }
+    }
 
     Json(EvidenceSummary {
         total_receipts: chain_head.receipt_count,
         chain_head_seq: chain_head.head_seq,
         last_receipt_ms,
+        recent_receipts,
     })
 }
 
 /// GET /dashboard/api/memory — memory health status.
-/// Stub — real values wired in Phase 1b when aegis-memory is connected.
+/// Queries MemoryIntegrity receipts from the evidence chain.
 async fn api_memory(
-    State(_state): State<Arc<DashboardSharedState>>,
+    State(state): State<Arc<DashboardSharedState>>,
 ) -> Json<MemoryHealth> {
+    let chain_head = state.evidence.chain_head();
+    let mut file_map: std::collections::HashMap<String, MemoryFileEntry> = std::collections::HashMap::new();
+    let mut changes_detected: u64 = 0;
+    let mut last_scan_ms: Option<i64> = None;
+
+    let start_seq = chain_head.head_seq.saturating_sub(500).max(1);
+    if let Ok(receipts) = state.evidence.export(Some(start_seq), None) {
+        for receipt in &receipts {
+            if receipt.core.receipt_type != aegis_schemas::ReceiptType::MemoryIntegrity {
+                continue;
+            }
+            let action = receipt.context.action.as_deref().unwrap_or("");
+            let outcome = receipt.context.outcome.as_deref().unwrap_or("");
+
+            let (event_type, path) = if action.starts_with("memory_change ") {
+                ("changed", action.strip_prefix("memory_change ").unwrap_or(action))
+            } else if action.starts_with("memory_deleted ") {
+                ("deleted", action.strip_prefix("memory_deleted ").unwrap_or(action))
+            } else if action.starts_with("memory_appeared ") {
+                ("appeared", action.strip_prefix("memory_appeared ").unwrap_or(action))
+            } else if action.starts_with("memory_tracked ") {
+                ("tracked", action.strip_prefix("memory_tracked ").unwrap_or(action))
+            } else {
+                ("unknown", action)
+            };
+
+            let verdict = if outcome.contains("Blocked") {
+                "Blocked"
+            } else if outcome.contains("Clean") {
+                "Clean"
+            } else if outcome.contains("deleted") {
+                "Deleted"
+            } else if outcome.starts_with("hash=") {
+                "Tracked"
+            } else {
+                outcome
+            };
+
+            file_map.insert(path.to_string(), MemoryFileEntry {
+                path: path.to_string(),
+                last_event: event_type.to_string(),
+                last_event_ms: receipt.core.ts_ms,
+                verdict: verdict.to_string(),
+            });
+
+            changes_detected += 1;
+            last_scan_ms = Some(receipt.core.ts_ms);
+        }
+    }
+
+    let files: Vec<MemoryFileEntry> = file_map.into_values().collect();
+    let tracked_files = files.len() as u64;
+
     Json(MemoryHealth {
-        tracked_files: 0,
-        changes_detected: 0,
-        last_scan_ms: None,
-        unacknowledged_changes: 0,
+        tracked_files,
+        changes_detected,
+        last_scan_ms,
+        unacknowledged_changes: changes_detected,
+        files,
     })
 }
 
@@ -334,11 +430,44 @@ async fn api_access(
 ///
 /// Returns the last batch of alerts as a JSON list. This is the 5s fallback
 /// poll used by the JS client to catch anything missed during SSE reconnect gaps.
-/// Stub — real implementation queries SQLite for last 10 critical receipts.
+/// Queries the evidence chain for WriteBarrier, MemoryIntegrity, and SlmParseFailure receipts.
 async fn api_alerts(
-    State(_state): State<Arc<DashboardSharedState>>,
+    State(state): State<Arc<DashboardSharedState>>,
 ) -> Json<serde_json::Value> {
-    Json(serde_json::json!({ "alerts": [], "total": 0 }))
+    let chain_head = state.evidence.chain_head();
+    let mut alerts: Vec<DashboardAlert> = Vec::new();
+
+    let start_seq = chain_head.head_seq.saturating_sub(200).max(1);
+    if let Ok(receipts) = state.evidence.export(Some(start_seq), None) {
+        for receipt in receipts.iter().rev() {
+            let kind = match receipt.core.receipt_type {
+                aegis_schemas::ReceiptType::WriteBarrier => "structural_write",
+                aegis_schemas::ReceiptType::MemoryIntegrity => "memory_injection",
+                _ => continue,
+            };
+
+            let message = match (&receipt.context.action, &receipt.context.outcome) {
+                (Some(action), Some(outcome)) => format!("{action} — {outcome}"),
+                (Some(action), None) => action.clone(),
+                (None, Some(outcome)) => outcome.clone(),
+                (None, None) => "alert".to_string(),
+            };
+
+            alerts.push(DashboardAlert {
+                ts_ms: receipt.core.ts_ms as u64,
+                kind: kind.to_string(),
+                message,
+                receipt_seq: receipt.core.seq,
+            });
+
+            if alerts.len() >= 20 {
+                break;
+            }
+        }
+    }
+
+    let total = alerts.len() as u64;
+    Json(serde_json::json!({ "alerts": alerts, "total": total }))
 }
 
 /// GET /dashboard/api/alerts/stream — SSE stream for critical alert push.

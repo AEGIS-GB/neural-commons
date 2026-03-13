@@ -86,7 +86,7 @@ pub async fn start(
         .map_err(|e| StartupError::Evidence(format!("{e}")))?;
     let recorder = Arc::new(recorder);
 
-    let (alert_tx, _) = tokio::sync::broadcast::channel::<aegis_dashboard::DashboardAlert>(32);
+    let (alert_tx, _alert_rx) = tokio::sync::broadcast::channel::<aegis_dashboard::DashboardAlert>(32);
 
     let chain_head = recorder.chain_head();
     info!(
@@ -193,6 +193,28 @@ pub async fn start(
                                 "file deleted",
                             ) {
                                 tracing::warn!("failed to record memory deletion: {e}");
+                            }
+                        }
+                        aegis_memory::monitor::MemoryEvent::FileAppeared { path, screen_verdict, .. } => {
+                            let action = format!("memory_appeared {}", path.display());
+                            let outcome = format!("verdict={screen_verdict:?}");
+                            if let Err(e) = monitor_recorder.record_simple(
+                                aegis_schemas::ReceiptType::MemoryIntegrity,
+                                &action,
+                                &outcome,
+                            ) {
+                                tracing::warn!("failed to record memory appeared: {e}");
+                            }
+                        }
+                        aegis_memory::monitor::MemoryEvent::FileTracked { path, content_hash, .. } => {
+                            let action = format!("memory_tracked {}", path.display());
+                            let outcome = format!("hash={}", &content_hash[..16.min(content_hash.len())]);
+                            if let Err(e) = monitor_recorder.record_simple(
+                                aegis_schemas::ReceiptType::MemoryIntegrity,
+                                &action,
+                                &outcome,
+                            ) {
+                                tracing::warn!("failed to record memory tracked: {e}");
                             }
                         }
                         _ => {}
