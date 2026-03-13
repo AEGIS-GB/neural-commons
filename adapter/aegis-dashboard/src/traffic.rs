@@ -34,7 +34,7 @@ pub struct TrafficEntry {
     pub is_streaming: bool,
 }
 
-const MAX_BODY_CAPTURE: usize = 32 * 1024; // 32KB per body
+const MAX_BODY_CAPTURE: usize = 256 * 1024; // 256KB per body — large enough for streaming responses with tool schemas
 
 /// In-memory ring buffer for traffic inspection.
 pub struct TrafficStore {

@@ -520,26 +520,37 @@ async fn api_traffic_detail(
 }
 
 /// Parse OpenAI-compatible request/response into chat message list.
+///
+/// Supports two formats:
+/// - `/v1/chat/completions`: request has `messages[]`, response has `choices[].message`
+/// - `/v1/responses` (SSE): request has `input[]`, response is SSE events with
+///   `response.output_text.delta` tokens and a `response.completed` event
 fn parse_chat_messages(req_body: &str, resp_body: &str) -> Vec<serde_json::Value> {
     let mut messages = Vec::new();
 
-    // Parse request messages
+    // Parse request messages — try "messages" (chat completions) then "input" (responses API)
     if let Ok(req) = serde_json::from_str::<serde_json::Value>(req_body) {
-        if let Some(msgs) = req.get("messages").and_then(|m| m.as_array()) {
+        let msgs = req.get("messages").and_then(|m| m.as_array())
+            .or_else(|| req.get("input").and_then(|m| m.as_array()));
+        if let Some(msgs) = msgs {
             for msg in msgs {
                 let role = msg.get("role").and_then(|r| r.as_str()).unwrap_or("unknown");
-                let content = msg.get("content").and_then(|c| c.as_str()).unwrap_or("");
-                messages.push(serde_json::json!({
-                    "role": role,
-                    "content": content,
-                    "source": "request",
-                }));
+                let content = extract_content(msg);
+                if !content.is_empty() {
+                    messages.push(serde_json::json!({
+                        "role": role,
+                        "content": content,
+                        "source": "request",
+                    }));
+                }
             }
         }
     }
 
-    // Parse response assistant message
+    // Parse response — try JSON first, then SSE
+    let mut got_response = false;
     if let Ok(resp) = serde_json::from_str::<serde_json::Value>(resp_body) {
+        // Chat completions format: choices[].message
         if let Some(choices) = resp.get("choices").and_then(|c| c.as_array()) {
             for choice in choices {
                 if let Some(msg) = choice.get("message") {
@@ -550,12 +561,124 @@ fn parse_chat_messages(req_body: &str, resp_body: &str) -> Vec<serde_json::Value
                         "content": content,
                         "source": "response",
                     }));
+                    got_response = true;
+                }
+            }
+        }
+        // Responses API JSON format: output[].content[].text
+        if !got_response {
+            if let Some(text) = extract_responses_api_text(&resp) {
+                if !text.is_empty() {
+                    messages.push(serde_json::json!({
+                        "role": "assistant",
+                        "content": text,
+                        "source": "response",
+                    }));
+                    got_response = true;
                 }
             }
         }
     }
 
+    // SSE format: parse event stream for response.completed or reassemble deltas
+    if !got_response {
+        if let Some(text) = parse_sse_response_text(resp_body) {
+            if !text.is_empty() {
+                messages.push(serde_json::json!({
+                    "role": "assistant",
+                    "content": text,
+                    "source": "response",
+                }));
+            }
+        }
+    }
+
     messages
+}
+
+/// Extract assistant text from a Responses API JSON object.
+/// Format: `{ "output": [{ "type": "message", "content": [{ "type": "output_text", "text": "..." }] }] }`
+fn extract_responses_api_text(resp: &serde_json::Value) -> Option<String> {
+    let output = resp.get("output")?.as_array()?;
+    let mut text = String::new();
+    for item in output {
+        if item.get("type").and_then(|t| t.as_str()) == Some("message") {
+            if let Some(content) = item.get("content").and_then(|c| c.as_array()) {
+                for part in content {
+                    if let Some(t) = part.get("text").and_then(|t| t.as_str()) {
+                        text.push_str(t);
+                    }
+                }
+            }
+        }
+    }
+    if text.is_empty() { None } else { Some(text) }
+}
+
+/// Extract text content from a message object.
+/// Handles both `"content": "string"` and `"content": [{"type": "text", "text": "..."}]`.
+fn extract_content(msg: &serde_json::Value) -> String {
+    if let Some(s) = msg.get("content").and_then(|c| c.as_str()) {
+        return s.to_string();
+    }
+    if let Some(arr) = msg.get("content").and_then(|c| c.as_array()) {
+        let parts: Vec<&str> = arr.iter()
+            .filter_map(|item| {
+                if item.get("type").and_then(|t| t.as_str()) == Some("text") {
+                    item.get("text").and_then(|t| t.as_str())
+                } else if item.get("type").and_then(|t| t.as_str()) == Some("input_text") {
+                    item.get("text").and_then(|t| t.as_str())
+                } else {
+                    None
+                }
+            })
+            .collect();
+        if !parts.is_empty() {
+            return parts.join("");
+        }
+    }
+    String::new()
+}
+
+/// Parse SSE event stream from /v1/responses to extract the assistant's output text.
+///
+/// Strategy: look for `response.completed` event first (has the full text).
+/// If not found (stream truncated), reassemble from `response.output_text.delta` events.
+fn parse_sse_response_text(sse_body: &str) -> Option<String> {
+    // First pass: look for response.completed with full output
+    for line in sse_body.lines() {
+        let data = match line.strip_prefix("data: ").or_else(|| line.strip_prefix("data:")) {
+            Some(d) => d,
+            None => continue,
+        };
+        if let Ok(evt) = serde_json::from_str::<serde_json::Value>(data) {
+            if evt.get("type").and_then(|t| t.as_str()) == Some("response.completed") {
+                if let Some(text) = extract_responses_api_text(
+                    evt.get("response").unwrap_or(&serde_json::Value::Null)
+                ) {
+                    return Some(text);
+                }
+            }
+        }
+    }
+
+    // Second pass: reassemble from delta events (if response.completed was truncated)
+    let mut text = String::new();
+    for line in sse_body.lines() {
+        let data = match line.strip_prefix("data: ").or_else(|| line.strip_prefix("data:")) {
+            Some(d) => d,
+            None => continue,
+        };
+        if let Ok(evt) = serde_json::from_str::<serde_json::Value>(data) {
+            if evt.get("type").and_then(|t| t.as_str()) == Some("response.output_text.delta") {
+                if let Some(delta) = evt.get("delta").and_then(|d| d.as_str()) {
+                    text.push_str(delta);
+                }
+            }
+        }
+    }
+
+    if text.is_empty() { None } else { Some(text) }
 }
 
 /// GET /dashboard/api/alerts/stream — SSE stream for critical alert push.
