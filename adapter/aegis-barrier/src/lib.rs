@@ -22,4 +22,5 @@ pub mod types;
 pub mod registry;
 pub mod write_token;
 pub mod protected_files;
+pub mod snapshot;
 pub mod evolution;

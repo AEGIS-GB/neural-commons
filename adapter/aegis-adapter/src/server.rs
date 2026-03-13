@@ -239,6 +239,22 @@ pub async fn start(
         let watcher_workspace = std::env::current_dir().unwrap_or_default();
         let barrier_mode = mode;
 
+        // Snapshot critical files at startup for enforce-mode restore.
+        // No git dependency — restores from in-memory copy.
+        let critical_paths: Vec<std::path::PathBuf> = barrier_protected.lock()
+            .map(|mgr| {
+                mgr.list_all()
+                    .iter()
+                    .filter(|e| e.critical)
+                    .filter(|e| e.scope == aegis_barrier::types::FileScope::WorkspaceRoot)
+                    .map(|e| std::path::PathBuf::from(&e.pattern))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let snapshot_store = Arc::new(
+            aegis_barrier::snapshot::SnapshotStore::load(&watcher_workspace, &critical_paths)
+        );
+
         tokio::spawn(async move {
             use notify::{Watcher, RecursiveMode, Config};
             use aegis_barrier::watcher::{FileWatcher, map_notify_event, is_excluded};
@@ -293,27 +309,20 @@ pub async fn start(
                     if is_protected {
                         let action = format!("filesystem_change {} {:?}", relative.display(), we.kind);
 
-                        // In enforce mode, revert critical file changes via git checkout
+                        // In enforce mode, restore critical files from startup snapshot
                         let reverted = if barrier_mode == Mode::Enforce && is_critical {
-                            let rel_str = relative.to_string_lossy().to_string();
-                            match std::process::Command::new("git")
-                                .args(["checkout", "HEAD", "--", &rel_str])
-                                .current_dir(&watcher_workspace)
-                                .output()
-                            {
-                                Ok(output) if output.status.success() => {
+                            match snapshot_store.restore(&watcher_workspace, relative) {
+                                Ok(true) => {
                                     tracing::warn!(
                                         path = %relative.display(),
-                                        "barrier: REVERTED critical file change (enforce mode)"
+                                        "barrier: RESTORED critical file from startup snapshot (enforce mode)"
                                     );
                                     true
                                 }
-                                Ok(output) => {
-                                    let stderr = String::from_utf8_lossy(&output.stderr);
-                                    tracing::error!(
+                                Ok(false) => {
+                                    tracing::warn!(
                                         path = %relative.display(),
-                                        stderr = %stderr,
-                                        "barrier: failed to revert file (git checkout failed)"
+                                        "barrier: no snapshot available for restore (file did not exist at startup)"
                                     );
                                     false
                                 }
@@ -321,7 +330,7 @@ pub async fn start(
                                     tracing::error!(
                                         path = %relative.display(),
                                         error = %e,
-                                        "barrier: failed to run git checkout for revert"
+                                        "barrier: failed to restore file from snapshot"
                                     );
                                     false
                                 }
