@@ -57,6 +57,16 @@ table.dtable tr:hover{background:#1c2128}
 .badge-blue{background:#1f2d3d;color:#58a6ff;border:1px solid #1f6feb}
 .badge-gray{background:#21262d;color:#8b949e;border:1px solid #30363d}
 .empty-state{color:#8b949e;font-size:13px;padding:16px 0}
+.chat-box{max-width:700px;margin:0 auto}
+.chat-msg{padding:10px 14px;margin:6px 0;border-radius:12px;font-size:13px;line-height:1.5;max-width:85%;white-space:pre-wrap;word-break:break-word}
+.chat-user{background:#1f3d5c;color:#c9d1d9;margin-left:auto;border-bottom-right-radius:4px}
+.chat-assistant{background:#1c2128;color:#e1e4e8;border:1px solid #30363d;border-bottom-left-radius:4px}
+.chat-system{background:#2d2a1f;color:#d29922;font-size:12px;font-style:italic;border:1px solid #9e6a03;text-align:center;max-width:100%}
+.traffic-row{cursor:pointer}
+.traffic-row:hover{background:#1c2128 !important}
+.body-pre{background:#0d1117;border:1px solid #30363d;border-radius:6px;padding:12px;font-family:monospace;font-size:12px;color:#c9d1d9;overflow-x:auto;max-height:400px;overflow-y:auto;white-space:pre-wrap;word-break:break-word;margin:8px 0}
+.detail-back{cursor:pointer;color:#58a6ff;font-size:13px;margin-bottom:12px;display:inline-block}
+.detail-back:hover{text-decoration:underline}
 </style>
 </head>
 <body>
@@ -73,6 +83,7 @@ table.dtable tr:hover{background:#1c2128}
 <div class="tab" data-tab="vault">Vault Scan</div>
 <div class="tab" data-tab="access">Access</div>
 <div class="tab" data-tab="memory">Memory</div>
+<div class="tab" data-tab="traffic">Traffic</div>
 <div class="tab" data-tab="alerts">Alerts</div>
 </div>
 <div class="content">
@@ -107,6 +118,12 @@ table.dtable tr:hover{background:#1c2128}
 <div class="card"><h2>Memory Integrity</h2>
 <div class="grid" id="memory-stats"></div>
 <div id="memory-files"></div>
+</div></div>
+<div class="panel" id="panel-traffic">
+<div class="card"><h2>Traffic Inspector</h2>
+<div class="grid" id="traffic-stats"></div>
+<div id="traffic-detail" style="display:none;margin-bottom:16px"></div>
+<div id="traffic-table"></div>
 </div></div>
 <div class="panel" id="panel-alerts"><div class="card"><h2>Emergency Alerts</h2><p>No alerts.</p></div></div>
 </div>
@@ -205,6 +222,12 @@ async function poll(){
       const m=await(await fetch('/dashboard/api/memory')).json();
       document.getElementById('stat-memory').textContent=m.tracked_files;
       if(activeTab==='memory'){renderMemory(m);}
+    }catch(e){}
+  }
+  if(activeTab==='traffic'){
+    try{
+      const t=await(await fetch('/dashboard/api/traffic')).json();
+      renderTraffic(t);
     }catch(e){}
   }
 }
@@ -311,6 +334,85 @@ function renderMemory(m){
   }
   h+='</table>';
   files.innerHTML=h;
+}
+let trafficDetailId=null;
+function renderTraffic(data){
+  if(trafficDetailId)return; // don't overwrite detail view
+  const stats=document.getElementById('traffic-stats');
+  const tbl=document.getElementById('traffic-table');
+  let sc='<div class="card"><div class="stat">'+data.total+'</div><div class="stat-label">Captured Requests</div></div>';
+  const streaming=data.entries?data.entries.filter(e=>e.is_streaming).length:0;
+  sc+='<div class="card"><div class="stat">'+streaming+'</div><div class="stat-label">Streaming (SSE)</div></div>';
+  const avgDur=data.entries&&data.entries.length>0?Math.round(data.entries.reduce((s,e)=>s+e.duration_ms,0)/data.entries.length):0;
+  sc+='<div class="card"><div class="stat">'+avgDur+'ms</div><div class="stat-label">Avg Latency</div></div>';
+  stats.innerHTML=sc;
+  if(!data.entries||data.entries.length===0){tbl.innerHTML='<p class="empty-state">No traffic captured yet. Send requests through the proxy to see them here.</p>';return;}
+  let h='<table class="dtable"><tr><th>#</th><th>Time</th><th>Method</th><th>Path</th><th>Status</th><th>Req Size</th><th>Resp Size</th><th>Duration</th><th>Type</th></tr>';
+  for(const e of data.entries){
+    const sc2=e.status<400?'badge-green':'badge-red';
+    h+='<tr class="traffic-row" onclick="showTrafficDetail('+e.id+')">';
+    h+='<td>'+e.id+'</td>';
+    h+='<td style="white-space:nowrap">'+fmtTimeShort(e.ts_ms)+'</td>';
+    h+='<td><span class="badge badge-blue">'+e.method+'</span></td>';
+    h+='<td style="max-width:250px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+esc(e.path)+'</td>';
+    h+='<td><span class="badge '+sc2+'">'+e.status+'</span></td>';
+    h+='<td>'+fmtBytes(e.request_size)+'</td>';
+    h+='<td>'+fmtBytes(e.response_size)+'</td>';
+    h+='<td>'+e.duration_ms+'ms</td>';
+    h+='<td>'+(e.is_streaming?'<span class="badge badge-yellow">SSE</span>':'<span class="badge badge-gray">REST</span>')+'</td>';
+    h+='</tr>';
+  }
+  h+='</table>';
+  tbl.innerHTML=h;
+}
+function fmtBytes(b){if(b<1024)return b+'B';if(b<1048576)return(b/1024).toFixed(1)+'KB';return(b/1048576).toFixed(1)+'MB';}
+async function showTrafficDetail(id){
+  trafficDetailId=id;
+  const detail=document.getElementById('traffic-detail');
+  const tbl=document.getElementById('traffic-table');
+  detail.style.display='block';
+  tbl.style.display='none';
+  detail.innerHTML='<p style="color:#8b949e">Loading...</p>';
+  try{
+    const d=await(await fetch('/dashboard/api/traffic/'+id)).json();
+    if(d.error){detail.innerHTML='<p class="empty-state">Entry not found (expired from ring buffer).</p>';return;}
+    const e=d.entry;
+    let h='<span class="detail-back" onclick="closeTrafficDetail()">\u2190 Back to traffic list</span>';
+    h+='<div style="display:flex;gap:12px;align-items:center;margin-bottom:16px">';
+    h+='<span class="badge badge-blue">'+e.method+'</span>';
+    h+='<span style="font-family:monospace;font-size:14px">'+esc(e.path)+'</span>';
+    const sc=e.status<400?'badge-green':'badge-red';
+    h+='<span class="badge '+sc+'">'+e.status+'</span>';
+    h+='<span style="color:#8b949e;font-size:12px">'+e.duration_ms+'ms</span>';
+    h+='<span style="color:#8b949e;font-size:12px">'+(e.is_streaming?'streaming':'')+'</span>';
+    h+='<span style="color:#8b949e;font-size:12px">'+fmtTime(e.ts_ms)+'</span>';
+    h+='</div>';
+    // Chat view if we have parsed messages
+    if(d.chat&&d.chat.length>0){
+      h+='<h3 style="color:#8b949e;font-size:12px;text-transform:uppercase;margin-bottom:8px">Chat View</h3>';
+      h+='<div class="chat-box">';
+      for(const m of d.chat){
+        const cls=m.role==='user'?'chat-user':m.role==='system'?'chat-system':'chat-assistant';
+        h+='<div class="chat-msg '+cls+'"><strong>'+esc(m.role)+'</strong><br>'+esc(m.content)+'</div>';
+      }
+      h+='</div>';
+    }
+    // Raw bodies
+    h+='<h3 style="color:#8b949e;font-size:12px;text-transform:uppercase;margin:16px 0 8px">Request Body ('+fmtBytes(e.request_size)+')</h3>';
+    h+='<div class="body-pre">'+fmtJson(e.request_body)+'</div>';
+    h+='<h3 style="color:#8b949e;font-size:12px;text-transform:uppercase;margin:16px 0 8px">Response Body ('+fmtBytes(e.response_size)+')</h3>';
+    h+='<div class="body-pre">'+fmtJson(e.response_body)+'</div>';
+    detail.innerHTML=h;
+  }catch(err){detail.innerHTML='<p class="empty-state">Failed to load detail.</p>';}
+}
+function closeTrafficDetail(){
+  trafficDetailId=null;
+  document.getElementById('traffic-detail').style.display='none';
+  document.getElementById('traffic-table').style.display='block';
+}
+function fmtJson(s){
+  if(!s)return'(empty)';
+  try{return esc(JSON.stringify(JSON.parse(s),null,2));}catch(e){return esc(s);}
 }
 function schedule(fn,ms){fn().finally(()=>setTimeout(()=>schedule(fn,ms),ms));}
 schedule(poll,2000);

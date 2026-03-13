@@ -18,7 +18,7 @@ use std::time::Instant;
 
 use aegis_evidence::EvidenceRecorder;
 use axum::{
-    extract::State,
+    extract::{Path, State},
     response::sse::{Event, KeepAlive, Sse},
     routing::get,
     Json, Router,
@@ -27,6 +27,8 @@ use futures::Stream;
 use serde::Serialize;
 use tokio::sync::broadcast;
 use tokio_stream::{wrappers::BroadcastStream, StreamExt};
+
+use crate::traffic::TrafficStore;
 
 // ── Shared alert type ────────────────────────────────────────────────────────
 
@@ -65,6 +67,8 @@ pub struct DashboardSharedState {
     pub observe_mode_checks_fn: Arc<dyn Fn() -> Vec<String> + Send + Sync>,
     /// Adapter start time for uptime calculation.
     pub start_time: Instant,
+    /// In-memory traffic inspector ring buffer.
+    pub traffic: Arc<TrafficStore>,
 }
 
 // ── Router ───────────────────────────────────────────────────────────────────
@@ -81,6 +85,8 @@ pub fn routes(state: Arc<DashboardSharedState>) -> Router {
         .route("/api/access", get(api_access))
         .route("/api/alerts", get(api_alerts))
         .route("/api/alerts/stream", get(api_alerts_stream))
+        .route("/api/traffic", get(api_traffic))
+        .route("/api/traffic/{id}", get(api_traffic_detail))
         .with_state(state)
 }
 
@@ -468,6 +474,88 @@ async fn api_alerts(
 
     let total = alerts.len() as u64;
     Json(serde_json::json!({ "alerts": alerts, "total": total }))
+}
+
+/// GET /dashboard/api/traffic — recent traffic entries (summary, no bodies).
+async fn api_traffic(
+    State(state): State<Arc<DashboardSharedState>>,
+) -> Json<serde_json::Value> {
+    let entries = state.traffic.list();
+    let summary: Vec<serde_json::Value> = entries.iter().rev().map(|e| {
+        serde_json::json!({
+            "id": e.id,
+            "ts_ms": e.ts_ms,
+            "method": e.method,
+            "path": e.path,
+            "status": e.status,
+            "request_size": e.request_size,
+            "response_size": e.response_size,
+            "duration_ms": e.duration_ms,
+            "is_streaming": e.is_streaming,
+        })
+    }).collect();
+
+    Json(serde_json::json!({
+        "total": entries.len(),
+        "entries": summary,
+    }))
+}
+
+/// GET /dashboard/api/traffic/:id — full traffic entry with bodies.
+async fn api_traffic_detail(
+    State(state): State<Arc<DashboardSharedState>>,
+    Path(id): Path<u64>,
+) -> Json<serde_json::Value> {
+    match state.traffic.get(id) {
+        Some(entry) => {
+            // Try to parse as chat messages for chat view
+            let chat_messages = parse_chat_messages(&entry.request_body, &entry.response_body);
+            Json(serde_json::json!({
+                "entry": entry,
+                "chat": chat_messages,
+            }))
+        }
+        None => Json(serde_json::json!({"error": "not found"})),
+    }
+}
+
+/// Parse OpenAI-compatible request/response into chat message list.
+fn parse_chat_messages(req_body: &str, resp_body: &str) -> Vec<serde_json::Value> {
+    let mut messages = Vec::new();
+
+    // Parse request messages
+    if let Ok(req) = serde_json::from_str::<serde_json::Value>(req_body) {
+        if let Some(msgs) = req.get("messages").and_then(|m| m.as_array()) {
+            for msg in msgs {
+                let role = msg.get("role").and_then(|r| r.as_str()).unwrap_or("unknown");
+                let content = msg.get("content").and_then(|c| c.as_str()).unwrap_or("");
+                messages.push(serde_json::json!({
+                    "role": role,
+                    "content": content,
+                    "source": "request",
+                }));
+            }
+        }
+    }
+
+    // Parse response assistant message
+    if let Ok(resp) = serde_json::from_str::<serde_json::Value>(resp_body) {
+        if let Some(choices) = resp.get("choices").and_then(|c| c.as_array()) {
+            for choice in choices {
+                if let Some(msg) = choice.get("message") {
+                    let role = msg.get("role").and_then(|r| r.as_str()).unwrap_or("assistant");
+                    let content = msg.get("content").and_then(|c| c.as_str()).unwrap_or("");
+                    messages.push(serde_json::json!({
+                        "role": role,
+                        "content": content,
+                        "source": "response",
+                    }));
+                }
+            }
+        }
+    }
+
+    messages
 }
 
 /// GET /dashboard/api/alerts/stream — SSE stream for critical alert push.

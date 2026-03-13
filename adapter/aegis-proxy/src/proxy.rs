@@ -34,6 +34,10 @@ use crate::config::{ProxyConfig, ProxyMode};
 use crate::error::ProxyError;
 use crate::middleware::{self, MiddlewareHooks, RequestInfo, ResponseInfo};
 
+/// Callback for recording traffic (request/response bodies) in the traffic inspector.
+/// Parameters: method, path, status, req_body, resp_body, duration_ms, is_streaming
+pub type TrafficRecorder = dyn Fn(&str, &str, u16, &[u8], &[u8], u64, bool) + Send + Sync;
+
 /// Shared application state for the proxy server.
 #[derive(Clone)]
 pub struct AppState {
@@ -45,6 +49,8 @@ pub struct AppState {
     pub identity_fingerprint: Option<String>,
     /// Per-identity rate limiter (None in pass-through mode).
     pub rate_limiter: Option<Arc<crate::rate_limit::RateLimiter>>,
+    /// Optional traffic recorder for the dashboard traffic inspector.
+    pub traffic_recorder: Option<Arc<TrafficRecorder>>,
 }
 
 /// Build the axum router for the proxy server.
@@ -81,6 +87,16 @@ pub async fn start(
     hooks: MiddlewareHooks,
     dashboard: Option<(String, Router)>,
 ) -> Result<(), ProxyError> {
+    start_with_traffic(config, hooks, dashboard, None).await
+}
+
+/// Start the proxy server with an optional traffic recorder for the dashboard inspector.
+pub async fn start_with_traffic(
+    config: ProxyConfig,
+    hooks: MiddlewareHooks,
+    dashboard: Option<(String, Router)>,
+    traffic_recorder: Option<Arc<TrafficRecorder>>,
+) -> Result<(), ProxyError> {
     let client = Client::builder()
         .timeout(std::time::Duration::from_secs(300)) // 5 min for long LLM responses
         .build()
@@ -101,6 +117,7 @@ pub async fn start(
         hooks: Arc::new(hooks),
         identity_fingerprint: None,
         rate_limiter,
+        traffic_recorder,
     };
 
     let app = build_router(state, dashboard);
@@ -324,17 +341,27 @@ async fn forward_request(
         let (evidence_tx, evidence_rx) = tokio::sync::oneshot::channel::<(String, usize)>();
 
         // Background task: read upstream chunks → hash → forward to client
+        let stream_traffic_recorder = state.traffic_recorder.clone();
+        let stream_method = method.to_string();
+        let stream_path = path.clone();
+        let stream_req_body = body_bytes.to_vec();
         tokio::spawn(async move {
             use tokio_stream::StreamExt;
             let mut hasher = Sha256::new();
             let mut total: usize = 0;
             let mut stream = std::pin::pin!(byte_stream);
+            let mut accumulated = Vec::new();
+            let capture_limit = 32 * 1024usize; // 32KB capture limit for traffic
 
             while let Some(chunk_result) = stream.next().await {
                 match chunk_result {
                     Ok(chunk) => {
                         hasher.update(&chunk);
                         total += chunk.len();
+                        if accumulated.len() < capture_limit {
+                            let remaining = capture_limit - accumulated.len();
+                            accumulated.extend_from_slice(&chunk[..chunk.len().min(remaining)]);
+                        }
                         let result: Result<bytes::Bytes, std::io::Error> = Ok(chunk);
                         if chunk_tx.send(result).await.is_err() {
                             break; // Client disconnected
@@ -352,6 +379,11 @@ async fn forward_request(
 
             let hash_hex = hex::encode(hasher.finalize());
             let _ = evidence_tx.send((hash_hex, total));
+
+            // Record streaming traffic
+            if let Some(ref recorder) = stream_traffic_recorder {
+                recorder(&stream_method, &stream_path, resp_status, &stream_req_body, &accumulated, start_time.elapsed().as_millis() as u64, true);
+            }
         });
 
         let body = Body::from_stream(tokio_stream::wrappers::ReceiverStream::new(chunk_rx));
@@ -418,6 +450,11 @@ async fn forward_request(
         }
     }
 
+    // Record traffic for dashboard inspector
+    if let Some(ref recorder) = state.traffic_recorder {
+        recorder(&method.to_string(), &path, resp_status, &body_bytes, &resp_body, duration_ms, false);
+    }
+
     // Build response
     let status = StatusCode::from_u16(resp_status)
         .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
@@ -446,6 +483,7 @@ mod tests {
             hooks: Arc::new(MiddlewareHooks::default()),
             identity_fingerprint: None,
             rate_limiter: None,
+            traffic_recorder: None,
         };
         let _router = build_router(state, None);
         // If it doesn't panic, it works
@@ -459,6 +497,7 @@ mod tests {
             hooks: Arc::new(MiddlewareHooks::default()),
             identity_fingerprint: Some("abc123def456".to_string()),
             rate_limiter: None,
+            traffic_recorder: None,
         };
         assert_eq!(state.identity_fingerprint.as_deref(), Some("abc123def456"));
     }
