@@ -86,7 +86,7 @@ pub async fn start(
         .map_err(|e| StartupError::Evidence(format!("{e}")))?;
     let recorder = Arc::new(recorder);
 
-    let (alert_tx, _) = tokio::sync::broadcast::channel::<aegis_dashboard::DashboardAlert>(32);
+    let (alert_tx, _alert_rx) = tokio::sync::broadcast::channel::<aegis_dashboard::DashboardAlert>(32);
 
     let chain_head = recorder.chain_head();
     info!(
