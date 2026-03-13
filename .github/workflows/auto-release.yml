@@ -1,10 +1,11 @@
 # Auto-release — bumps version, builds cross-platform binaries, publishes GitHub Release
 #
-# Flow: PR merged → ci.yml passes → this workflow does everything:
-#   1. Bump version in Cargo.toml (patch by default)
-#   2. Commit + tag
-#   3. Cross-compile 4 platforms
-#   4. Publish GitHub Release with binaries + checksums
+# Flow: PR merged to main → this workflow does everything:
+#   1. Run tests
+#   2. Bump version in Cargo.toml (patch by default)
+#   3. Commit + tag
+#   4. Cross-compile 4 platforms
+#   5. Publish GitHub Release with binaries + checksums
 #
 # To control bump type, add a label to the PR:
 #   "release:minor" → 0.2.0 → 0.3.0
@@ -15,9 +16,7 @@
 name: Auto Release
 
 on:
-  workflow_run:
-    workflows: ["CI"]
-    types: [completed]
+  push:
     branches: [main]
 
 permissions:
@@ -27,13 +26,22 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  # ── Test ───────────────────────────────────────────────────
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Run workspace tests
+        run: cargo test --workspace
+
   # ── Bump Version ──────────────────────────────────────────
   bump:
     name: Bump Version & Tag
+    needs: test
     runs-on: ubuntu-latest
-    if: >
-      github.event.workflow_run.conclusion == 'success' &&
-      github.event.workflow_run.event == 'push'
     outputs:
       skip: ${{ steps.skip_check.outputs.skip }}
       tag: ${{ steps.version.outputs.tag }}
@@ -47,7 +55,7 @@ jobs:
       - name: Check for release:skip label on merged PR
         id: skip_check
         run: |
-          COMMIT_SHA="${{ github.event.workflow_run.head_sha }}"
+          COMMIT_SHA="${{ github.sha }}"
           PR_NUMBER=$(gh pr list --state merged --search "$COMMIT_SHA" --json number --jq '.[0].number // empty')
 
           if [ -n "$PR_NUMBER" ]; then
