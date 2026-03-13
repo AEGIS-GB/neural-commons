@@ -696,53 +696,93 @@ fn main() {
 
 /// Run a systemctl command against the aegis service.
 fn run_systemctl(action: &str) {
-    // Try system service first, fall back to user service
-    let output = std::process::Command::new("systemctl")
-        .args([action, "aegis"])
+    // Check for updates on start/restart
+    if action == "start" || action == "restart" {
+        check_for_update();
+    }
+
+    // Try user service first, fall back to system service
+    let user_output = std::process::Command::new("systemctl")
+        .args(["--user", action, "aegis"])
         .output();
 
-    match output {
+    let success = match user_output {
         Ok(o) if o.status.success() => {
             eprintln!("aegis service {action}ed");
-            // Show status after start/restart
-            if action != "stop" {
-                std::thread::sleep(std::time::Duration::from_secs(2));
+            true
+        }
+        _ => {
+            // Fall back to system service
+            let sys_output = std::process::Command::new("systemctl")
+                .args([action, "aegis"])
+                .output();
+            match sys_output {
+                Ok(o) if o.status.success() => {
+                    eprintln!("aegis service {action}ed");
+                    true
+                }
+                Ok(o) => {
+                    let stderr = String::from_utf8_lossy(&o.stderr);
+                    if stderr.contains("not found") || stderr.contains("not loaded") {
+                        eprintln!("error: aegis systemd service not installed");
+                        eprintln!("hint: run 'aegis setup service' to install the systemd service");
+                    } else {
+                        eprintln!("error: systemctl {action} failed");
+                        eprint!("{}", stderr);
+                    }
+                    std::process::exit(1);
+                }
+                Err(e) => {
+                    eprintln!("error: failed to run systemctl: {e}");
+                    eprintln!("hint: systemd is required for aegis start/stop/restart");
+                    std::process::exit(1);
+                }
+            }
+        }
+    };
+
+    // Show status after start/restart
+    if success && action != "stop" {
+        std::thread::sleep(std::time::Duration::from_secs(2));
+        // Try user service status first
+        let status = std::process::Command::new("systemctl")
+            .args(["--user", "status", "aegis", "--no-pager", "-l"])
+            .output();
+        match status {
+            Ok(o) if o.status.success() || o.status.code() == Some(3) => {
+                // code 3 = inactive, still show it
+                eprint!("{}", String::from_utf8_lossy(&o.stdout));
+            }
+            _ => {
                 let _ = std::process::Command::new("systemctl")
                     .args(["status", "aegis", "--no-pager", "-l"])
                     .status();
             }
         }
-        Ok(o) => {
-            let stderr = String::from_utf8_lossy(&o.stderr);
-            // If system service fails due to permissions, try user service
-            if stderr.contains("Access denied") || stderr.contains("authentication required") {
-                let user_output = std::process::Command::new("systemctl")
-                    .args(["--user", action, "aegis"])
-                    .output();
-                match user_output {
-                    Ok(uo) if uo.status.success() => {
-                        eprintln!("aegis user service {action}ed");
-                    }
-                    _ => {
-                        eprintln!("error: failed to {action} aegis service");
-                        eprintln!("hint: you may need sudo: sudo systemctl {action} aegis");
-                        std::process::exit(1);
-                    }
-                }
-            } else if stderr.contains("not found") || stderr.contains("not loaded") {
-                eprintln!("error: aegis systemd service not installed");
-                eprintln!("hint: install with: sudo cp aegis.service /etc/systemd/system/ && sudo systemctl daemon-reload && sudo systemctl enable aegis");
-                std::process::exit(1);
-            } else {
-                eprintln!("error: systemctl {action} failed");
-                eprint!("{}", stderr);
-                std::process::exit(1);
+    }
+}
+
+/// Check GitHub for a newer release and suggest updating.
+fn check_for_update() {
+    let current = env!("CARGO_PKG_VERSION");
+
+    // Quick non-blocking check — don't delay startup if it fails
+    let output = std::process::Command::new("gh")
+        .args(["release", "view", "--repo", "LCatGA12/neural-commons", "--json", "tagName", "--jq", ".tagName"])
+        .output();
+
+    if let Ok(o) = output {
+        if o.status.success() {
+            let latest_tag = String::from_utf8_lossy(&o.stdout).trim().to_string();
+            let latest_ver = latest_tag.trim_start_matches('v');
+
+            if latest_ver != current {
+                eprintln!("╔══════════════════════════════════════════════════╗");
+                eprintln!("║  Update available: v{current} → {latest_tag}");
+                eprintln!("║  Run: aegis-update");
+                eprintln!("╚══════════════════════════════════════════════════╝");
+                eprintln!();
             }
-        }
-        Err(e) => {
-            eprintln!("error: failed to run systemctl: {e}");
-            eprintln!("hint: systemd is required for aegis start/stop/restart");
-            std::process::exit(1);
         }
     }
 }
