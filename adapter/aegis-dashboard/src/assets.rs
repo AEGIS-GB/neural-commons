@@ -230,12 +230,14 @@ function renderEvidence(e){
   sc+='<div class="card"><div class="stat">'+Object.keys(types).length+'</div><div class="stat-label">Receipt Types</div></div>';
   stats.innerHTML=sc;
   // Type breakdown
+  let typeBreakdown=document.getElementById('evidence-type-breakdown');
+  if(!typeBreakdown){typeBreakdown=document.createElement('div');typeBreakdown.id='evidence-type-breakdown';tbl.parentNode.insertBefore(typeBreakdown,tbl);}
   if(Object.keys(types).length>0){
     let tb='<div style="margin:12px 0 16px;display:flex;gap:8px;flex-wrap:wrap">';
     for(const[t,n]of Object.entries(types).sort((a,b)=>b[1]-a[1])){tb+=typeBadge(t)+' <span style="color:#8b949e;font-size:12px;margin-right:8px">'+n+'</span>';}
     tb+='</div>';
-    tbl.insertAdjacentHTML('beforebegin',tb);
-  }
+    typeBreakdown.innerHTML=tb;
+  }else{typeBreakdown.innerHTML='';}
   if(!e.recent_receipts||e.recent_receipts.length===0){tbl.innerHTML='<p class="empty-state">No receipts recorded yet.</p>';return;}
   let h='<table class="dtable"><tr><th>#</th><th>Time</th><th>Type</th><th>Action</th><th>Outcome</th><th>Mode</th><th>Payload Hash</th><th>Prev Hash</th></tr>';
   for(const r of e.recent_receipts){
