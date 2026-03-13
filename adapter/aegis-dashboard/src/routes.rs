@@ -322,38 +322,30 @@ async fn api_vault(
     let start_seq = chain_head.head_seq.saturating_sub(200).max(1);
     if let Ok(receipts) = state.evidence.export(Some(start_seq), None) {
         for receipt in &receipts {
-            // Look for ApiCall receipts that contain vault detection info in outcome
-            let outcome = receipt.context.outcome.as_deref().unwrap_or("");
-            if outcome.contains("vault") || outcome.contains("credential") {
-                if let Some(action) = &receipt.context.action {
-                    // Parse credential type from action/outcome
-                    let cred_type = if outcome.contains("bearer_token") {
-                        "bearer_token"
-                    } else if outcome.contains("api_key") {
-                        "api_key"
-                    } else {
-                        "unknown"
-                    };
-                    *by_type.entry(cred_type.to_string()).or_insert(0u64) += 1;
-                    if recent_findings.len() < 20 {
-                        recent_findings.push(VaultFinding {
-                            credential_type: cred_type.to_string(),
-                            masked_preview: action.chars().take(40).collect(),
-                            detected_at_ms: receipt.core.ts_ms,
-                        });
-                    }
-                }
+            if receipt.core.receipt_type != aegis_schemas::ReceiptType::VaultDetection {
+                continue;
             }
 
-            // Also match VaultDetection receipt type
-            if receipt.core.receipt_type == aegis_schemas::ReceiptType::VaultDetection {
-                let cred_type = receipt.context.action.as_deref().unwrap_or("unknown");
+            let outcome = receipt.context.outcome.as_deref().unwrap_or("");
+            let action = receipt.context.action.as_deref().unwrap_or("");
+
+            // Parse credential types from outcome: "credentials detected (count=1, types=aws_key:AKIA****MPLE)"
+            let types_str = outcome.split("types=").nth(1).unwrap_or("");
+            // Each entry is "type:masked", comma-separated
+            for entry in types_str.split(", ") {
+                let mut parts = entry.splitn(2, ':');
+                let cred_type = parts.next().unwrap_or("unknown").trim_end_matches(')');
+                let masked = parts.next().unwrap_or("****").trim_end_matches(')');
+
+                if cred_type.is_empty() {
+                    continue;
+                }
+
                 *by_type.entry(cred_type.to_string()).or_insert(0u64) += 1;
                 if recent_findings.len() < 20 {
                     recent_findings.push(VaultFinding {
                         credential_type: cred_type.to_string(),
-                        masked_preview: receipt.context.outcome.as_deref()
-                            .unwrap_or("detected").to_string(),
+                        masked_preview: format!("{} [{}]", masked, action),
                         detected_at_ms: receipt.core.ts_ms,
                     });
                 }

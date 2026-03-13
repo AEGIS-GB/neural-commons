@@ -107,6 +107,48 @@ impl EvidenceHook for EvidenceHookImpl {
             Ok(())
         })
     }
+
+    fn on_vault_detection<'a>(
+        &'a self,
+        path: &'a str,
+        direction: &'a str,
+        secrets: &'a [String],
+    ) -> Pin<Box<dyn Future<Output = Result<(), ProxyError>> + Send + 'a>> {
+        Box::pin(async move {
+            let action = format!("vault_{} {}", direction, path);
+            let outcome = format!(
+                "credentials detected (count={}, types={})",
+                secrets.len(),
+                secrets.join(", ")
+            );
+
+            self.recorder
+                .record_simple(ReceiptType::VaultDetection, &action, &outcome)
+                .map_err(|e| ProxyError::Internal(format!("evidence record error: {e}")))?;
+
+            // Push alert to dashboard SSE stream
+            let _ = self.alert_tx.send(crate::state::DashboardAlert {
+                ts_ms: std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_millis() as u64,
+                kind: "vault_detection".to_string(),
+                message: format!(
+                    "Vault: {} credential(s) detected in {} {}",
+                    secrets.len(), direction, path
+                ),
+                receipt_seq: self.recorder.chain_head().head_seq,
+            });
+
+            info!(
+                path = %path,
+                direction = %direction,
+                count = secrets.len(),
+                "evidence: vault detection recorded"
+            );
+            Ok(())
+        })
+    }
 }
 
 // ---------------------------------------------------------------------------

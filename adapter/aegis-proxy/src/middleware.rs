@@ -83,6 +83,14 @@ pub trait EvidenceHook: Send + Sync {
         req_info: &'a RequestInfo,
         resp_info: &'a ResponseInfo,
     ) -> Pin<Box<dyn Future<Output = Result<(), ProxyError>> + Send + 'a>>;
+
+    /// Called when the vault detects credentials in request or response traffic.
+    fn on_vault_detection<'a>(
+        &'a self,
+        path: &'a str,
+        direction: &'a str,
+        secrets: &'a [String],
+    ) -> Pin<Box<dyn Future<Output = Result<(), ProxyError>> + Send + 'a>>;
 }
 
 // ---------------------------------------------------------------------------
@@ -228,6 +236,15 @@ impl EvidenceHook for NoopEvidenceHook {
         &'a self,
         _req_info: &'a RequestInfo,
         _resp_info: &'a ResponseInfo,
+    ) -> Pin<Box<dyn Future<Output = Result<(), ProxyError>> + Send + 'a>> {
+        Box::pin(async { Ok(()) })
+    }
+
+    fn on_vault_detection<'a>(
+        &'a self,
+        _path: &'a str,
+        _direction: &'a str,
+        _secrets: &'a [String],
     ) -> Pin<Box<dyn Future<Output = Result<(), ProxyError>> + Send + 'a>> {
         Box::pin(async { Ok(()) })
     }

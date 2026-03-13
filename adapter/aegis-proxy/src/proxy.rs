@@ -259,6 +259,21 @@ async fn forward_request(
             }
         }
 
+        // Vault hook: scan request body for credentials
+        if let Some(ref vault) = state.hooks.vault {
+            if let Ok(body_str) = std::str::from_utf8(&body_bytes) {
+                let vault_decision = vault.scan(body_str).await;
+                if let middleware::VaultDecision::Detected(ref secrets) = vault_decision {
+                    info!(count = secrets.len(), "vault detected credentials in request");
+                    if let Some(ref evidence) = state.hooks.evidence {
+                        if let Err(e) = evidence.on_vault_detection(&path, "request", secrets).await {
+                            warn!("evidence hook error on vault detection: {e}");
+                        }
+                    }
+                }
+            }
+        }
+
         // SLM hook: screen parsed Anthropic message content (not raw body)
         if let Some(ref slm) = state.hooks.slm {
             let screen_content = if let Some(ref parsed) = anthropic_req {
@@ -453,8 +468,16 @@ async fn forward_request(
         if let Some(ref vault) = state.hooks.vault {
             if let Ok(body_str) = std::str::from_utf8(&resp_body) {
                 let vault_decision = vault.scan(body_str).await;
-                if let middleware::VaultDecision::Detected(secrets) = vault_decision {
+                if let middleware::VaultDecision::Detected(ref secrets) = vault_decision {
                     info!(count = secrets.len(), "vault detected credentials in response");
+
+                    // Record vault detection in evidence chain
+                    if let Some(ref evidence) = state.hooks.evidence {
+                        if let Err(e) = evidence.on_vault_detection(&path, "response", secrets).await {
+                            warn!("evidence hook error on vault detection: {e}");
+                        }
+                    }
+
                     // Redact credentials from the response body
                     if let Some(redacted) = vault.redact(body_str).await {
                         warn!(count = secrets.len(), "vault redacted credentials from response");
