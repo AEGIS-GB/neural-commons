@@ -109,10 +109,14 @@ pub async fn start(
         alert_tx: alert_tx.clone(),
     });
 
-    // 5b. Build dashboard shared state
+    // 5b. Create traffic store (in-memory ring buffer for dashboard inspector)
+    let traffic_store = Arc::new(aegis_dashboard::TrafficStore::new(200));
+
+    // 5c. Build dashboard shared state
     let dashboard_state = Arc::new(aegis_dashboard::DashboardSharedState {
         alert_tx: alert_tx.clone(),
         evidence: recorder.clone(),
+        traffic: traffic_store.clone(),
         mode_fn: Arc::new({
             let mc = mode_controller.clone();
             move || match mc.current() {
@@ -373,10 +377,18 @@ pub async fn start(
         "proxy server starting"
     );
 
-    aegis_proxy::proxy::start(
+    let traffic_recorder: Arc<aegis_proxy::proxy::TrafficRecorder> = {
+        let ts = traffic_store.clone();
+        Arc::new(move |method: &str, path: &str, status: u16, req: &[u8], resp: &[u8], dur: u64, streaming: bool| {
+            ts.record(method, path, status, req, resp, dur, streaming);
+        })
+    };
+
+    aegis_proxy::proxy::start_with_traffic(
         proxy_config,
         hooks,
         Some((dashboard_path, dashboard_router)),
+        Some(traffic_recorder),
     )
         .await
         .map_err(|e| StartupError::Proxy(format!("{e}")))?;
