@@ -1,0 +1,15 @@
+[Unit]
+Description=Aegis Adapter — neural commons proxy
+After=network.target
+
+[Service]
+Type=simple
+User=aegis
+WorkingDirectory=/home/aegis/aegis/neural-commons
+ExecStart=/home/aegis/aegis/neural-commons/target/release/aegis --no-slm
+Restart=on-failure
+RestartSec=3
+Environment=RUST_LOG=info
+
+[Install]
+WantedBy=multi-user.target
