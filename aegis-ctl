@@ -1,0 +1,85 @@
+#!/bin/bash
+# aegis-ctl — shortcut for managing the aegis service
+
+GREEN='\033[0;32m'
+RED='\033[0;31m'
+YELLOW='\033[1;33m'
+NC='\033[0m'
+
+check_health() {
+  for i in 1 2 3 4 5; do
+    code=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:3141/dashboard/api/status 2>/dev/null)
+    if [ "$code" = "200" ]; then
+      status=$(curl -s http://localhost:3141/dashboard/api/status 2>/dev/null)
+      mode=$(echo "$status" | grep -o '"mode":"[^"]*"' | cut -d'"' -f4)
+      health=$(echo "$status" | grep -o '"health":"[^"]*"' | cut -d'"' -f4)
+      version=$(echo "$status" | grep -o '"version":"[^"]*"' | cut -d'"' -f4)
+      echo -e "${GREEN}[OK]${NC} Aegis is healthy"
+      echo "     mode:      $mode"
+      echo "     health:    $health"
+      echo "     version:   $version"
+      echo "     dashboard: http://localhost:3141/dashboard"
+      return 0
+    fi
+    sleep 1
+  done
+  echo -e "${RED}[FAIL]${NC} Aegis did not become healthy within 5s"
+  echo "     Check logs: aegis-ctl logs"
+  return 1
+}
+
+case "$1" in
+  start)
+    echo -e "${YELLOW}[...]${NC} Starting aegis..."
+    sudo systemctl start aegis
+    if [ $? -eq 0 ]; then
+      check_health
+    else
+      echo -e "${RED}[FAIL]${NC} Failed to start aegis service"
+      exit 1
+    fi
+    ;;
+  stop)
+    echo -e "${YELLOW}[...]${NC} Stopping aegis..."
+    sudo systemctl stop aegis
+    if [ $? -eq 0 ]; then
+      for i in 1 2 3 4 5; do
+        if ! curl -s --max-time 1 -o /dev/null http://localhost:3141/dashboard/api/status 2>/dev/null; then
+          echo -e "${GREEN}[OK]${NC} Aegis stopped"
+          break
+        fi
+        if [ "$i" -eq 5 ]; then
+          echo -e "${RED}[WARN]${NC} Service stopped but port 3141 still responding"
+        fi
+        sleep 1
+      done
+    else
+      echo -e "${RED}[FAIL]${NC} Failed to stop aegis service"
+      exit 1
+    fi
+    ;;
+  restart)
+    echo -e "${YELLOW}[...]${NC} Restarting aegis..."
+    sudo systemctl restart aegis
+    if [ $? -eq 0 ]; then
+      check_health
+    else
+      echo -e "${RED}[FAIL]${NC} Failed to restart aegis service"
+      exit 1
+    fi
+    ;;
+  status)
+    sudo systemctl is-active aegis > /dev/null 2>&1
+    if [ $? -eq 0 ]; then
+      check_health
+    else
+      echo -e "${RED}[DOWN]${NC} Aegis is not running"
+    fi
+    ;;
+  logs)
+    journalctl -u aegis -f
+    ;;
+  *)
+    echo "Usage: aegis-ctl {start|stop|restart|status|logs}"
+    ;;
+esac
