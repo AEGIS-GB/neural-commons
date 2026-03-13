@@ -229,7 +229,7 @@ pub async fn start(
         info!("memory monitor started (interval={}s)", config.memory.hash_interval_secs);
     }
 
-    // 6b. Start barrier filesystem watcher (Layer 1 detection)
+    // 6b. Start barrier filesystem watcher (Layer 1 detection + enforce revert)
     if mode != Mode::PassThrough {
         let barrier_protected = Arc::new(std::sync::Mutex::new(
             aegis_barrier::protected_files::ProtectedFileManager::new(),
@@ -237,6 +237,7 @@ pub async fn start(
         let barrier_recorder = recorder.clone();
         let barrier_alert_tx = alert_tx.clone();
         let watcher_workspace = std::env::current_dir().unwrap_or_default();
+        let barrier_mode = mode;
 
         tokio::spawn(async move {
             use notify::{Watcher, RecursiveMode, Config};
@@ -291,7 +292,47 @@ pub async fn start(
 
                     if is_protected {
                         let action = format!("filesystem_change {} {:?}", relative.display(), we.kind);
-                        let outcome = if is_critical {
+
+                        // In enforce mode, revert critical file changes via git checkout
+                        let reverted = if barrier_mode == Mode::Enforce && is_critical {
+                            let rel_str = relative.to_string_lossy().to_string();
+                            match std::process::Command::new("git")
+                                .args(["checkout", "HEAD", "--", &rel_str])
+                                .current_dir(&watcher_workspace)
+                                .output()
+                            {
+                                Ok(output) if output.status.success() => {
+                                    tracing::warn!(
+                                        path = %relative.display(),
+                                        "barrier: REVERTED critical file change (enforce mode)"
+                                    );
+                                    true
+                                }
+                                Ok(output) => {
+                                    let stderr = String::from_utf8_lossy(&output.stderr);
+                                    tracing::error!(
+                                        path = %relative.display(),
+                                        stderr = %stderr,
+                                        "barrier: failed to revert file (git checkout failed)"
+                                    );
+                                    false
+                                }
+                                Err(e) => {
+                                    tracing::error!(
+                                        path = %relative.display(),
+                                        error = %e,
+                                        "barrier: failed to run git checkout for revert"
+                                    );
+                                    false
+                                }
+                            }
+                        } else {
+                            false
+                        };
+
+                        let outcome = if reverted {
+                            "critical_protected_file_reverted"
+                        } else if is_critical {
                             "critical_protected_file_modified"
                         } else {
                             "protected_file_modified"
@@ -306,10 +347,15 @@ pub async fn start(
                         }
 
                         if is_critical {
+                            let msg = if reverted {
+                                format!("Critical file modified and REVERTED: {}", relative.display())
+                            } else {
+                                format!("Critical file modified: {}", relative.display())
+                            };
                             let alert = aegis_dashboard::DashboardAlert {
                                 ts_ms: we.timestamp_ms,
                                 kind: "structural_write".to_string(),
-                                message: format!("Critical file modified: {}", relative.display()),
+                                message: msg,
                                 receipt_seq: barrier_recorder.chain_head().head_seq,
                             };
                             let _ = barrier_alert_tx.send(alert);
@@ -318,6 +364,7 @@ pub async fn start(
                         tracing::warn!(
                             path = %relative.display(),
                             critical = is_critical,
+                            reverted = reverted,
                             kind = ?we.kind,
                             "barrier: protected file change detected"
                         );

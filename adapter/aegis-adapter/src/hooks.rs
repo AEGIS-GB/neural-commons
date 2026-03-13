@@ -145,6 +145,20 @@ impl VaultHook for VaultHookImpl {
             }
         })
     }
+
+    fn redact<'a>(
+        &'a self,
+        content: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Option<String>> + Send + 'a>> {
+        Box::pin(async move {
+            let (redacted, result) = scanner::redact_text(content);
+            if result.findings.is_empty() {
+                None
+            } else {
+                Some(redacted)
+            }
+        })
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -162,46 +176,69 @@ pub struct BarrierHookImpl {
     pub alert_tx: tokio::sync::broadcast::Sender<crate::state::DashboardAlert>,
 }
 
+/// Protected filenames to scan for in request bodies.
+/// These are the critical identity/behavior files that should never be
+/// referenced in LLM prompts asking for modifications.
+const PROTECTED_FILENAMES: &[&str] = &[
+    "SOUL.md", "AGENTS.md", "IDENTITY.md", "TOOLS.md", "BOOT.md",
+    "MEMORY.md", ".env",
+];
+
 impl BarrierHook for BarrierHookImpl {
     fn check_write<'a>(
         &'a self,
         req_info: &'a RequestInfo,
     ) -> Pin<Box<dyn Future<Output = BarrierDecision> + Send + 'a>> {
         Box::pin(async move {
-            // Check if the request body references any protected file paths.
-            // The barrier primarily operates via filesystem watcher, but this
-            // hook provides Layer 3 (outbound proxy interlock) protection.
+            // Layer 3a: Check if the HTTP request path matches a protected file
             let path = std::path::Path::new(&req_info.path);
 
             if let Ok(mgr) = self.protected_files.lock() {
-                // Check if any part of the request path matches a protected file
                 if mgr.is_critical(path) {
                     let reason = format!("request targets critical protected path: {}", req_info.path);
-
-                    // Record WriteBarrier receipt
-                    if let Err(e) = self.recorder.record_simple(
-                        ReceiptType::WriteBarrier,
-                        &format!("{} {}", req_info.method, req_info.path),
-                        &reason,
-                    ) {
-                        info!("failed to record barrier receipt: {e}");
-                    }
-
-                    // Push SSE alert
-                    let alert = crate::state::DashboardAlert {
-                        ts_ms: req_info.timestamp_ms as u64,
-                        kind: "structural_write".to_string(),
-                        message: reason.clone(),
-                        receipt_seq: self.recorder.chain_head().head_seq,
-                    };
-                    let _ = self.alert_tx.send(alert);
-
+                    self.record_and_alert(&req_info.method, &req_info.path, &reason, req_info.timestamp_ms);
                     return BarrierDecision::Block(reason);
+                }
+            }
+
+            // Layer 3b: Scan request body for references to protected filenames.
+            // Catches prompts like "write to SOUL.md" or "modify AGENTS.md".
+            if let Some(ref body_text) = req_info.body_text {
+                let body_upper = body_text.to_uppercase();
+                for filename in PROTECTED_FILENAMES {
+                    let upper_name = filename.to_uppercase();
+                    if body_upper.contains(&upper_name) {
+                        let reason = format!(
+                            "request body references protected file: {}",
+                            filename
+                        );
+                        self.record_and_alert(&req_info.method, &req_info.path, &reason, req_info.timestamp_ms);
+                        return BarrierDecision::Block(reason);
+                    }
                 }
             }
 
             BarrierDecision::Allow
         })
+    }
+}
+
+impl BarrierHookImpl {
+    fn record_and_alert(&self, method: &str, path: &str, reason: &str, ts_ms: i64) {
+        if let Err(e) = self.recorder.record_simple(
+            ReceiptType::WriteBarrier,
+            &format!("{} {}", method, path),
+            reason,
+        ) {
+            info!("failed to record barrier receipt: {e}");
+        }
+        let alert = crate::state::DashboardAlert {
+            ts_ms: ts_ms as u64,
+            kind: "structural_write".to_string(),
+            message: reason.to_string(),
+            receipt_seq: self.recorder.chain_head().head_seq,
+        };
+        let _ = self.alert_tx.send(alert);
     }
 }
 
@@ -270,6 +307,7 @@ mod tests {
             body_hash: "a".repeat(64),
             source_ip: "127.0.0.1".into(),
             timestamp_ms: now_ms(),
+            body_text: None,
         }
     }
 

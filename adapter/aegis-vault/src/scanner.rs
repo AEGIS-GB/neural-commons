@@ -164,6 +164,47 @@ fn line_number_at(content: &str, byte_offset: usize) -> usize {
 // Public API
 // ---------------------------------------------------------------------------
 
+/// Redact all detected credentials in the text, replacing them with masked versions.
+/// Returns the redacted text and the list of findings.
+pub fn redact_text(content: &str) -> (String, ScanResult) {
+    let result = scan_text(content);
+    if result.findings.is_empty() {
+        return (content.to_string(), result);
+    }
+
+    // Collect all match ranges with their replacements, sorted by offset descending
+    // so we can replace from the end without invalidating earlier offsets.
+    let mut replacements: Vec<(usize, usize, String)> = Vec::new();
+
+    for pdef in PATTERNS {
+        let re = match Regex::new(pdef.pattern) {
+            Ok(r) => r,
+            Err(_) => continue,
+        };
+        for caps in re.captures_iter(content) {
+            let secret_match = caps.get(pdef.secret_group).unwrap_or(caps.get(0).unwrap());
+            let masked = mask_credential(secret_match.as_str());
+            replacements.push((secret_match.start(), secret_match.end(), masked));
+        }
+    }
+
+    // Sort by offset descending so replacements don't shift earlier offsets
+    replacements.sort_by(|a, b| b.0.cmp(&a.0));
+
+    // Deduplicate overlapping ranges (keep the first/largest)
+    let mut redacted = content.to_string();
+    let mut last_start = usize::MAX;
+    for (start, end, masked) in &replacements {
+        if *start >= last_start {
+            continue; // skip overlapping
+        }
+        redacted.replace_range(*start..*end, masked);
+        last_start = *start;
+    }
+
+    (redacted, result)
+}
+
 /// Scan arbitrary text for plaintext credentials.
 pub fn scan_text(content: &str) -> ScanResult {
     let mut findings = Vec::new();
