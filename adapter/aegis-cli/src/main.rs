@@ -6,6 +6,9 @@
 //!   aegis --pass-through         — dumb forwarder, zero inspection
 //!   aegis --enforce              — enable enforcement mode
 //!   aegis --no-slm              — disable SLM screening entirely
+//!   aegis start                  — start as background service (systemd)
+//!   aegis stop                   — stop background service
+//!   aegis restart                — restart background service
 //!   aegis status                 — show current adapter state
 //!   aegis scan                   — run credential + vulnerability scan
 //!   aegis export                 — export evidence chain as JSON
@@ -120,6 +123,15 @@ enum Commands {
         #[command(subcommand)]
         target: SetupTarget,
     },
+
+    /// Start aegis as a background service (via systemd)
+    Start,
+
+    /// Stop the aegis background service
+    Stop,
+
+    /// Restart the aegis background service
+    Restart,
 
     /// Open the dashboard in a browser
     Dashboard,
@@ -637,6 +649,18 @@ fn main() {
             }
         },
 
+        Some(Commands::Start) => {
+            run_systemctl("start");
+        }
+
+        Some(Commands::Stop) => {
+            run_systemctl("stop");
+        }
+
+        Some(Commands::Restart) => {
+            run_systemctl("restart");
+        }
+
         Some(Commands::Dashboard) => {
             let url = format!(
                 "http://{}/dashboard",
@@ -666,6 +690,59 @@ fn main() {
             println!("aegis {}", env!("CARGO_PKG_VERSION"));
             println!("neural-commons adapter");
             println!("mode: {}", mode_label);
+        }
+    }
+}
+
+/// Run a systemctl command against the aegis service.
+fn run_systemctl(action: &str) {
+    // Try system service first, fall back to user service
+    let output = std::process::Command::new("systemctl")
+        .args([action, "aegis"])
+        .output();
+
+    match output {
+        Ok(o) if o.status.success() => {
+            eprintln!("aegis service {action}ed");
+            // Show status after start/restart
+            if action != "stop" {
+                std::thread::sleep(std::time::Duration::from_secs(2));
+                let _ = std::process::Command::new("systemctl")
+                    .args(["status", "aegis", "--no-pager", "-l"])
+                    .status();
+            }
+        }
+        Ok(o) => {
+            let stderr = String::from_utf8_lossy(&o.stderr);
+            // If system service fails due to permissions, try user service
+            if stderr.contains("Access denied") || stderr.contains("authentication required") {
+                let user_output = std::process::Command::new("systemctl")
+                    .args(["--user", action, "aegis"])
+                    .output();
+                match user_output {
+                    Ok(uo) if uo.status.success() => {
+                        eprintln!("aegis user service {action}ed");
+                    }
+                    _ => {
+                        eprintln!("error: failed to {action} aegis service");
+                        eprintln!("hint: you may need sudo: sudo systemctl {action} aegis");
+                        std::process::exit(1);
+                    }
+                }
+            } else if stderr.contains("not found") || stderr.contains("not loaded") {
+                eprintln!("error: aegis systemd service not installed");
+                eprintln!("hint: install with: sudo cp aegis.service /etc/systemd/system/ && sudo systemctl daemon-reload && sudo systemctl enable aegis");
+                std::process::exit(1);
+            } else {
+                eprintln!("error: systemctl {action} failed");
+                eprint!("{}", stderr);
+                std::process::exit(1);
+            }
+        }
+        Err(e) => {
+            eprintln!("error: failed to run systemctl: {e}");
+            eprintln!("hint: systemd is required for aegis start/stop/restart");
+            std::process::exit(1);
         }
     }
 }
