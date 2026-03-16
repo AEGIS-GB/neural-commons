@@ -1,26 +1,44 @@
 //! Vault key derivation (D9)
 //!
-//! HKDF-SHA256, domain "aegis-vault-v1", info = bot fingerprint.
-//! 256-bit output key for AES-256-GCM.
+//! Derives a 256-bit AES-256-GCM encryption key using HKDF-SHA256 (RFC 5869).
+//!
+//! **Confirmed parameters (D9):**
+//! - Algorithm: HKDF-SHA256
+//! - Salt: `"aegis-vault-v1"` (stable for kdf_version=1; future versions may use a different salt)
+//! - IKM: VaultKdf seed from HD path `m/44'/784'/2'/0'` (see D0: SLIP-0010 derivation)
+//! - Info: bot_fingerprint (Ed25519 public key thumbprint, hex-encoded)
+//! - Output: 32 bytes → AES-256-GCM encryption key
+//! - Nonce: unique random 12-byte nonce per secret (standard AES-GCM construction)
+//! - KDF versioning: `kdf_version` stored per-secret row in SQLite for future algorithm upgrades
+//!
+//! **Key rotation:** Wipe and rescan — no re-encryption migration in Phase 1.
 
 use hkdf::Hkdf;
 use sha2::Sha256;
 
 use crate::VaultError;
 
-/// Domain separation string for vault key derivation.
+/// Domain separation salt for vault key derivation (kdf_version=1).
+///
+/// Future KDF versions may use a different salt; this constant is stable
+/// for all secrets stored with `kdf_version = 1`.
 pub const VAULT_DOMAIN: &str = "aegis-vault-v1";
 
-/// Derive a 256-bit vault key using HKDF-SHA256.
+/// Derive a 256-bit vault key using HKDF-SHA256 (RFC 5869).
 ///
-/// - `master_key_material`: the input keying material (e.g. bot master secret)
-/// - `bot_fingerprint`: the Ed25519 public key thumbprint (hex), used as HKDF info
+/// # Arguments
+/// - `master_key_material` — IKM: the VaultKdf seed from HD path `m/44'/784'/2'/0'`
+///   (see D0: SLIP-0010 derivation)
+/// - `bot_fingerprint` — Info: the Ed25519 public key thumbprint (hex-encoded)
 ///
-/// HKDF parameters:
-///   salt  = VAULT_DOMAIN bytes ("aegis-vault-v1")
-///   ikm   = master_key_material
-///   info  = bot_fingerprint bytes
-///   len   = 32 (256 bits)
+/// # HKDF parameters (kdf_version=1)
+/// | Parameter | Value |
+/// |-----------|-------|
+/// | Algorithm | HKDF-SHA256 |
+/// | Salt      | [`VAULT_DOMAIN`] (`"aegis-vault-v1"`) |
+/// | IKM       | `master_key_material` |
+/// | Info      | `bot_fingerprint` (UTF-8 bytes) |
+/// | Output    | 32 bytes (256 bits) → AES-256-GCM key |
 pub fn derive_vault_key(
     master_key_material: &[u8],
     bot_fingerprint: &str,

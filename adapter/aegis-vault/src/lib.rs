@@ -9,8 +9,7 @@
 //!   Rationale: plaintext credentials must never leave the adapter. An observe-mode
 //!   vault would be a completed credential leak, not a warning.
 //!   Receipt omits enforcement_mode field (always-enforce, not switchable).
-//!   TODO(D9): vault key derivation via HKDF-SHA256 must be locked before
-//!   actual encryption can be wired.
+//!   Key derivation: HKDF-SHA256 with per-row `kdf_version` for future upgrades (D9).
 
 pub mod scanner;
 pub mod storage;
