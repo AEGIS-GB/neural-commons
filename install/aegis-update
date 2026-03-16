@@ -1,0 +1,43 @@
+#!/bin/bash
+# Update Aegis to the latest GitHub release and restart the service
+set -e
+
+REPO="LCatGA12/neural-commons"
+BINARY="aegis-linux-x86_64"
+INSTALL_PATH="$HOME/.cargo/bin/aegis"
+
+echo "Checking latest release..."
+LATEST=$(gh release view --repo "$REPO" --json tagName --jq '.tagName' 2>/dev/null)
+CURRENT=$("$INSTALL_PATH" --version 2>/dev/null | awk '{print "v"$2}')
+
+if [ "$LATEST" = "$CURRENT" ]; then
+    echo "Already up to date: $CURRENT"
+    exit 0
+fi
+
+echo "Updating: $CURRENT → $LATEST"
+
+# Download latest binary
+TMPDIR=$(mktemp -d)
+gh release download "$LATEST" --repo "$REPO" --pattern "$BINARY" --pattern "$BINARY.sha256" --dir "$TMPDIR"
+
+# Verify checksum
+cd "$TMPDIR"
+sha256sum -c "$BINARY.sha256"
+
+# Stop service, install, restart
+systemctl --user stop aegis 2>/dev/null || true
+chmod +x "$BINARY"
+cp "$BINARY" "$INSTALL_PATH"
+cd -
+
+# Update service description
+sed -i "s/Aegis Adapter (v[0-9.]*)/Aegis Adapter (${LATEST})/" \
+    "$HOME/.config/systemd/user/aegis.service"
+systemctl --user daemon-reload
+systemctl --user restart aegis
+
+rm -rf "$TMPDIR"
+
+echo "Updated to $LATEST"
+systemctl --user status aegis --no-pager | head -5
