@@ -7,7 +7,7 @@
 //! Schema:
 //!   secrets(id TEXT PK, label TEXT, credential_type TEXT, encrypted_value BLOB,
 //!           nonce BLOB, created_ms INTEGER, updated_ms INTEGER, source_file TEXT,
-//!           masked_preview TEXT)
+//!           masked_preview TEXT, kdf_version INTEGER DEFAULT 1)
 
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
@@ -38,6 +38,9 @@ pub struct SecretEntry {
     pub created_ms: i64,
     /// When this entry was last updated (epoch ms)
     pub updated_ms: i64,
+    /// KDF version used to derive the encryption key (D9).
+    /// Version 1 = HKDF-SHA256 with salt "aegis-vault-v1".
+    pub kdf_version: u32,
 }
 
 /// A stored secret with its plaintext value (returned only when explicitly requested).
@@ -97,7 +100,8 @@ impl VaultStorage {
                     created_ms      INTEGER NOT NULL,
                     updated_ms      INTEGER NOT NULL,
                     source_file     TEXT,
-                    masked_preview  TEXT NOT NULL
+                    masked_preview  TEXT NOT NULL,
+                    kdf_version     INTEGER NOT NULL DEFAULT 1
                 );
 
                 CREATE INDEX IF NOT EXISTS idx_secrets_type
@@ -130,10 +134,10 @@ impl VaultStorage {
             .execute(
                 "INSERT OR REPLACE INTO secrets
                     (id, label, credential_type, encrypted_value, nonce,
-                     created_ms, updated_ms, source_file, masked_preview)
+                     created_ms, updated_ms, source_file, masked_preview, kdf_version)
                 VALUES (?1, ?2, ?3, ?4, ?5,
                         COALESCE((SELECT created_ms FROM secrets WHERE id = ?1), ?6),
-                        ?6, ?7, ?8)",
+                        ?6, ?7, ?8, ?9)",
                 params![
                     id,
                     label,
@@ -143,6 +147,7 @@ impl VaultStorage {
                     now_ms,
                     source_file,
                     masked_preview,
+                    1_u32, // kdf_version=1 (HKDF-SHA256, D9)
                 ],
             )
             .map_err(|e| VaultError::Storage(format!("failed to store secret: {e}")))?;
@@ -155,7 +160,7 @@ impl VaultStorage {
         self.conn
             .query_row(
                 "SELECT id, label, credential_type, masked_preview,
-                        source_file, created_ms, updated_ms
+                        source_file, created_ms, updated_ms, kdf_version
                  FROM secrets WHERE id = ?1",
                 params![id],
                 |row| {
@@ -167,6 +172,7 @@ impl VaultStorage {
                         source_file: row.get(4)?,
                         created_ms: row.get(5)?,
                         updated_ms: row.get(6)?,
+                        kdf_version: row.get(7)?,
                     })
                 },
             )
@@ -182,7 +188,7 @@ impl VaultStorage {
             .conn
             .query_row(
                 "SELECT id, label, credential_type, masked_preview,
-                        source_file, created_ms, updated_ms,
+                        source_file, created_ms, updated_ms, kdf_version,
                         encrypted_value, nonce
                  FROM secrets WHERE id = ?1",
                 params![id],
@@ -196,9 +202,10 @@ impl VaultStorage {
                             source_file: row.get(4)?,
                             created_ms: row.get(5)?,
                             updated_ms: row.get(6)?,
+                            kdf_version: row.get(7)?,
                         },
-                        row.get(7)?,
                         row.get(8)?,
+                        row.get(9)?,
                     ))
                 },
             )
@@ -223,7 +230,7 @@ impl VaultStorage {
             .conn
             .prepare(
                 "SELECT id, label, credential_type, masked_preview,
-                        source_file, created_ms, updated_ms
+                        source_file, created_ms, updated_ms, kdf_version
                  FROM secrets ORDER BY updated_ms DESC",
             )
             .map_err(|e| VaultError::Storage(format!("prepare failed: {e}")))?;
@@ -238,6 +245,7 @@ impl VaultStorage {
                     source_file: row.get(4)?,
                     created_ms: row.get(5)?,
                     updated_ms: row.get(6)?,
+                    kdf_version: row.get(7)?,
                 })
             })
             .map_err(|e| VaultError::Storage(format!("query failed: {e}")))?
