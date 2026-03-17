@@ -386,7 +386,8 @@ pub async fn start(
 
     // 7. Create middleware hooks
     let slm_config = aegis_slm::loopback::LoopbackConfig {
-        ollama_url: config.slm.ollama_url.clone(),
+        engine: config.slm.engine.clone(),
+        server_url: config.slm.ollama_url.clone(),
         model: config.slm.model.clone(),
         fallback_to_heuristics: config.slm.fallback_to_heuristics,
     };
@@ -483,7 +484,8 @@ fn create_middleware_hooks(
             ));
             let slm_hook: Option<Arc<dyn aegis_proxy::middleware::SlmHook>> = if slm_enabled {
                 info!(
-                    ollama_url = %slm_config.ollama_url,
+                    engine = %slm_config.engine,
+                    server_url = %slm_config.server_url,
                     model = %slm_config.model,
                     fallback = slm_config.fallback_to_heuristics,
                     "middleware hooks: evidence=yes vault=yes barrier=real slm=real"
@@ -595,7 +597,8 @@ mod tests {
 
     fn test_slm_config() -> aegis_slm::loopback::LoopbackConfig {
         aegis_slm::loopback::LoopbackConfig {
-            ollama_url: "http://127.0.0.1:11434".to_string(),
+            engine: "ollama".to_string(),
+            server_url: "http://127.0.0.1:11434".to_string(),
             model: "test-model".to_string(),
             fallback_to_heuristics: true,
         }

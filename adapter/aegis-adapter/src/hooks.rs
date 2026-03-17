@@ -439,7 +439,8 @@ mod tests {
     async fn slm_hook_admits_benign_via_heuristic() {
         let hook = SlmHookImpl {
             config: aegis_slm::loopback::LoopbackConfig {
-                ollama_url: "http://127.0.0.1:1".to_string(), // unreachable, forces heuristic
+                engine: "ollama".to_string(),
+                server_url: "http://127.0.0.1:1".to_string(), // unreachable, forces heuristic
                 model: "nonexistent".to_string(),
                 fallback_to_heuristics: true,
             },
@@ -452,7 +453,8 @@ mod tests {
     async fn slm_hook_fails_open_without_fallback() {
         let hook = SlmHookImpl {
             config: aegis_slm::loopback::LoopbackConfig {
-                ollama_url: "http://127.0.0.1:1".to_string(), // unreachable
+                engine: "ollama".to_string(),
+                server_url: "http://127.0.0.1:1".to_string(), // unreachable
                 model: "nonexistent".to_string(),
                 fallback_to_heuristics: false,
             },

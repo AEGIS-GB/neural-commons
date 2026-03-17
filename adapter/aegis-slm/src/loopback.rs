@@ -2,8 +2,8 @@
 //!
 //! Pipeline:
 //!   1. Build screening prompt from raw content
-//!   2. Try Ollama engine (primary)
-//!   3. Fall back to heuristic engine if Ollama fails and fallback enabled
+//!   2. Try primary engine (Ollama or OpenAI-compatible)
+//!   3. Fall back to heuristic engine if primary fails and fallback enabled
 //!   4. Parse SLM output JSON
 //!   5. Enrich with deterministic scoring
 //!   6. Apply holster policy
@@ -16,6 +16,7 @@ use tracing::{debug, info, warn};
 
 use crate::engine::heuristic::HeuristicEngine;
 use crate::engine::ollama::OllamaEngine;
+use crate::engine::openai_compat::OpenAiCompatEngine;
 use crate::engine::SlmEngine;
 use crate::holster::apply_holster;
 use crate::parser::parse_slm_output;
@@ -26,11 +27,13 @@ use crate::types::*;
 /// Configuration for the loopback screening pipeline.
 #[derive(Debug, Clone)]
 pub struct LoopbackConfig {
-    /// Ollama API URL (e.g., "http://localhost:11434")
-    pub ollama_url: String,
-    /// Model name (e.g., "llama3.2:1b")
+    /// SLM engine type: "ollama" or "openai"
+    pub engine: String,
+    /// Server URL (Ollama: "http://localhost:11434", LM Studio: "http://localhost:1234")
+    pub server_url: String,
+    /// Model name (e.g., "llama3.2:1b", "qwen2.5:1.5b")
     pub model: String,
-    /// Fall back to heuristic patterns if Ollama is unavailable
+    /// Fall back to heuristic patterns if primary engine is unavailable
     pub fallback_to_heuristics: bool,
 }
 
@@ -57,16 +60,19 @@ pub fn screen_content(config: &LoopbackConfig, content: &str) -> ScreeningDecisi
     // 1. Build prompt
     let prompt = screening_prompt(content);
 
-    // 2. Try Ollama engine first, fall back to heuristic if needed
+    // 2. Try primary engine, fall back to heuristic if needed
     let raw_output = {
-        let engine = OllamaEngine::new(&config.ollama_url, &config.model);
+        let engine: Box<dyn SlmEngine> = match config.engine.as_str() {
+            "openai" => Box::new(OpenAiCompatEngine::new(&config.server_url, &config.model)),
+            _ => Box::new(OllamaEngine::new(&config.server_url, &config.model)),
+        };
         match engine.generate(&prompt) {
             Ok(output) => {
-                debug!("ollama engine produced output");
+                debug!(engine = %config.engine, "SLM engine produced output");
                 output
             }
             Err(e) => {
-                warn!("ollama engine failed: {e}");
+                warn!(engine = %config.engine, "SLM engine failed: {e}");
                 if config.fallback_to_heuristics {
                     info!("falling back to heuristic engine");
                     let heuristic = HeuristicEngine::new();
@@ -152,7 +158,8 @@ mod tests {
     /// (points at non-existent Ollama)
     fn heuristic_only_config() -> LoopbackConfig {
         LoopbackConfig {
-            ollama_url: "http://127.0.0.1:1".to_string(), // unreachable
+            engine: "ollama".to_string(),
+            server_url: "http://127.0.0.1:1".to_string(), // unreachable
             model: "nonexistent".to_string(),
             fallback_to_heuristics: true,
         }
@@ -201,7 +208,8 @@ mod tests {
     #[test]
     fn fail_open_when_no_fallback() {
         let config = LoopbackConfig {
-            ollama_url: "http://127.0.0.1:1".to_string(),
+            engine: "ollama".to_string(),
+            server_url: "http://127.0.0.1:1".to_string(),
             model: "nonexistent".to_string(),
             fallback_to_heuristics: false,
         };
