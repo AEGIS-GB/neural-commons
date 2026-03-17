@@ -94,10 +94,10 @@ Five minutes to install. One binary. Zero code changes to your agent.
 **Step 1: Download.**
 
 ```
-gh release download --repo LCatGA12/neural-commons --pattern "aegis-linux-x86_64"
-chmod +x aegis-linux-x86_64
-mv aegis-linux-x86_64 ~/.local/bin/aegis
+curl -fsSL https://github.com/LCatGA12/neural-commons/releases/latest/download/install.sh | bash
 ```
+
+That's it. The installer detects your platform, downloads the binary, adds it to your PATH, creates a default config, and runs a first vulnerability scan. Nothing else to install — no Rust, no compiler, no dependencies.
 
 Binaries for Linux x86_64, macOS x86_64, macOS ARM, and Windows. SHA-256 checksums on every release.
 

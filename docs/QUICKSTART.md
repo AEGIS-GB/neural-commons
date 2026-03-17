@@ -18,15 +18,29 @@ Default mode is **observe-only** — Aegis logs and warns but never blocks. Your
 
 ---
 
+## Requirements
+
+The binary installer handles everything. You need:
+
+- **Linux x86_64, macOS (x86_64 or ARM), or Windows x86_64**
+- **curl or wget** (pre-installed on virtually all Linux/macOS systems)
+
+That's it. No Rust compiler, no build tools, no package manager, no runtime dependencies. Aegis is a single static binary.
+
 ## Install
 
 ```bash
 curl -fsSL https://github.com/LCatGA12/neural-commons/releases/latest/download/install.sh | bash
 ```
 
-This downloads the binary for your platform, generates an Ed25519 identity keypair, runs your first vulnerability scan, and creates a default config at `~/.aegis/config/config.toml`.
-
-Supported platforms: Linux x86_64, macOS x86_64, macOS ARM (Apple Silicon), Windows x86_64.
+The installer:
+1. Detects your platform
+2. Downloads the pre-compiled binary to `~/.aegis/bin/`
+3. Adds it to your PATH
+4. Creates a default config at `~/.aegis/config/config.toml`
+5. Runs a first vulnerability scan of your current directory
+6. Optionally prompts to pull an SLM model (if Ollama is installed)
+7. Optionally configures your bot framework
 
 **Build from source** (requires Rust 1.85+):
 
@@ -54,16 +68,16 @@ aegis setup openclaw
 ## Start
 
 ```bash
-aegis
+aegis --no-slm
 ```
 
 That's it. Aegis starts in observe-only mode on port 3141. Open http://localhost:3141/dashboard to see your security posture.
 
-Every request your OpenClaw agent sends now generates a signed evidence receipt. The write barrier is watching your identity files. The credential scanner is checking responses. If Ollama is running with `llama3.2:1b`, the SLM screens for injections too.
+Every request your OpenClaw agent sends now generates a signed evidence receipt. The write barrier is watching your identity files. The credential scanner is checking responses. The `--no-slm` flag skips the language model screening (which requires Ollama) — you still get heuristic pattern detection, evidence, vault, and barrier protection.
 
-## Optional: Enable SLM Injection Screening
+## Optional: Add SLM Injection Screening
 
-The local language model provides the strongest injection detection. It requires Ollama:
+Everything above works without a language model. If you want stronger injection detection, install Ollama and pull a model (~1.3GB):
 
 ```bash
 # Install Ollama (if not already)
@@ -72,18 +86,18 @@ curl -fsSL https://ollama.com/install.sh | sh
 # Pull the screening model (~1.3GB)
 ollama pull llama3.2:1b
 
-# Restart Aegis — it auto-detects Ollama
+# Restart Aegis without --no-slm to enable SLM screening
 aegis
 ```
 
-Without Ollama, Aegis uses heuristic regex patterns (less accurate but zero dependencies). You can also disable SLM entirely with `aegis --no-slm`.
+Without Ollama, use `aegis --no-slm`. You still get heuristic regex patterns for injection detection, plus all other protections (evidence, vault, barrier, memory). The SLM adds deeper semantic analysis but is not required.
 
 ## Common Commands
 
 ```bash
-aegis                        # start adapter (observe-only)
+aegis --no-slm               # start adapter (no Ollama needed)
+aegis                        # start with SLM screening (requires Ollama)
 aegis --enforce              # start with blocking enabled
-aegis --no-slm               # start without SLM screening
 aegis --pass-through         # dumb forwarder, zero inspection
 
 aegis setup openclaw         # configure OpenClaw integration

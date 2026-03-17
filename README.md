@@ -17,8 +17,8 @@ curl -fsSL https://github.com/LCatGA12/neural-commons/releases/latest/download/i
 # 2. Connect to OpenClaw
 aegis setup openclaw
 
-# 3. Start protection
-aegis
+# 3. Start protection (no Ollama needed)
+aegis --no-slm
 ```
 
 Dashboard: http://localhost:3141/dashboard

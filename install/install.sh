@@ -229,12 +229,13 @@ upstream_url = "https://api.anthropic.com"
 
 [slm]
 enabled = true
+engine = "ollama"
+ollama_url = "http://localhost:11434"
 model = "llama3.2:1b"
-# For better accuracy: model = "llama3.2:3b"
-
-[mode]
-default = "observe_only"
-# Set to "enforce" to enable blocking
+fallback_to_heuristics = true
+# Switch engine: aegis slm engine openai
+# Switch model:  aegis slm use qwen2.5:1.5b
+# Set server:    aegis slm server http://localhost:1234
 CONFIGEOF
         info "Default config: ${config_dir}/config.toml"
     fi
