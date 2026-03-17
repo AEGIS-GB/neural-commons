@@ -35,6 +35,7 @@ Stability, security, and developer experience improvements. No new subsystems.
 | [#39](https://github.com/LCatGA12/neural-commons/issues/39) | Update snapshots after file evolution | 1h |
 | [#40](https://github.com/LCatGA12/neural-commons/issues/40) | Vault scanning for SSE/streamed responses | 1d |
 | [#41](https://github.com/LCatGA12/neural-commons/issues/41) | Structured error codes | 4h |
+| [#55](https://github.com/LCatGA12/neural-commons/issues/55) | `aegis setup slm` — guided Ollama + model install | 2h |
 
 ### Medium Effort (~3 days)
 
@@ -60,6 +61,7 @@ First cluster infrastructure. Adapters connect to the mesh. Trust scoring begins
 | [#48](https://github.com/LCatGA12/neural-commons/issues/48) | Evaluator system | D20 |
 | [#49](https://github.com/LCatGA12/neural-commons/issues/49) | Botawiki read API | D22, D28, D29 |
 | [#50](https://github.com/LCatGA12/neural-commons/issues/50) | NATS bridge | D3 v3 |
+| [#56](https://github.com/LCatGA12/neural-commons/issues/56) | Standalone SLM — bundle ONNX model, drop Ollama dependency | D4 |
 
 **Depends on:** All v0.3.0 hardening complete. Gateway auth already implemented (Ed25519 stateless).
 
