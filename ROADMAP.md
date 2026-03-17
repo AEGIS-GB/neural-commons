@@ -1,17 +1,17 @@
 # Aegis Roadmap
 
-> Current release: **v0.2.7** (Tier 1 — Local Adapter)
+> Current release: **v0.2.11** (Tier 1 — Local Adapter)
 > Tracking: [GitHub Milestones](https://github.com/LCatGA12/neural-commons/milestones)
 
-## What's Shipped (v0.2.x — Tier 1) ✅
+## What's Shipped (v0.2.x — Tier 1)
 
-The local adapter is feature-complete with 412+ unit tests and 94 end-to-end tests passing.
+The local adapter is feature-complete with 461+ unit tests and 94 end-to-end tests passing.
 
 - **Core proxy** — HTTP forwarding with SSE streaming, incremental SHA-256 hashing, provider detection (Anthropic + OpenAI)
 - **Evidence chain** — SHA-256 hash chain in append-only SQLite WAL. Tamper-evident. Verifiable with `aegis export --verify`
 - **Credential vault** — Regex-based scanner, AES-256-GCM encryption, HKDF-SHA256 key derivation (D9), request + response scanning, VaultDetection receipts
 - **Write barrier** — Filesystem watcher on identity/memory files, snapshot-based restore in enforce mode, severity heuristics
-- **SLM screening** — Ollama HTTP + heuristic fallback, 14-pattern taxonomy, configurable holster presets
+- **SLM screening** — Ollama + OpenAI-compatible engines (LM Studio, vLLM, llama.cpp), heuristic fallback, 14-pattern taxonomy, configurable holster presets, CLI model/engine switching
 - **Memory monitor** — Change detection on MEMORY.md, memory/*.md, HEARTBEAT.md, SSE push
 - **Dashboard** — 7-tab web UI (Status, Evidence, Memory, Alerts, Vault, Access, Traffic), SSE alert stream
 - **CLI** — `aegis start/stop/restart`, `setup openclaw`, `scan`, `vault`, `export`, `update`

@@ -1,8 +1,14 @@
 # Neural Commons
 
-Trust infrastructure for 17,000+ MoltBook bot wardens. A Rust-based system that provides cryptographic identity, evidence recording, write protection, and credential security for AI bot ecosystems.
+[![CI](https://github.com/LCatGA12/neural-commons/actions/workflows/ci.yml/badge.svg)](https://github.com/LCatGA12/neural-commons/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/LCatGA12/neural-commons)](https://github.com/LCatGA12/neural-commons/releases/latest)
+[![License: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-blue.svg)](LICENSE)
 
-## Quick Start — Protect Your OpenClaw Agent
+Trust infrastructure for MoltBook bot wardens. A Rust proxy that gives AI agents cryptographic identity, tamper-evident evidence, write protection, credential security, and prompt injection screening.
+
+**[Why Install Aegis?](docs/WHY_INSTALL_AEGIS.md)** — written by an agent, for agents.
+
+## Quick Start
 
 ```bash
 # 1. Install
@@ -17,21 +23,21 @@ aegis
 
 Dashboard: http://localhost:3141/dashboard
 
-Your agent now has evidence recording, write barriers, credential scanning, and injection screening — all running locally. Default mode is observe-only (warns but never blocks). See [QUICKSTART.md](docs/QUICKSTART.md) for details.
+Your agent now has evidence recording, write barriers, credential scanning, and injection screening — all running locally. Default mode is observe-only (warns but never blocks).
+
+See the [Quickstart Guide](docs/QUICKSTART.md) for full setup details.
 
 ---
 
 ## What It Does
 
-Neural Commons sits between a bot and its upstream API as a transparent proxy. It watches what happens, records tamper-proof evidence, and protects critical files from unauthorized modification — all without breaking existing workflows.
+Aegis sits between a bot and its upstream LLM provider as a transparent proxy. It watches what happens, records tamper-proof evidence, and protects critical files — all without breaking existing workflows.
 
-**Core capabilities:**
-
-- **Evidence Chain** — Every significant event produces a signed, hash-chained receipt. Receipts are linked with SHA-256, signed with Ed25519, and stored locally. The chain is verifiable end-to-end.
-- **Write Barrier** — Triple-layer detection for unauthorized file changes: real-time filesystem watcher, periodic hash sweeps, and outbound proxy interlock with single-use write tokens.
-- **SLM Holster** — Small Language Model integration for prompt injection detection. 14-pattern threat taxonomy, deterministic scoring, and configurable rejection thresholds (Aggressive / Balanced / Permissive).
-- **Credential Vault** — Automatic detection and encryption of plaintext secrets (API keys, tokens, passwords) found in bot workspaces. AES-256-GCM encryption with HKDF-derived keys.
-- **Memory Integrity** — Monitors bot memory files (MEMORY.md, SOUL.md, etc.) for unauthorized changes, injection attempts, and configuration drift.
+- **Evidence Chain** — Every API call produces a signed, hash-chained receipt. SHA-256 linked, Ed25519 signed, stored in append-only SQLite. Verifiable end-to-end with `aegis export --verify`.
+- **Write Barrier** — Triple-layer detection for unauthorized file changes: real-time filesystem watcher, periodic hash sweeps, and outbound proxy interlock. Protects SOUL.md, AGENTS.md, MEMORY.md, .env, and custom files.
+- **SLM Screening** — Local prompt injection detection via Ollama, LM Studio, vLLM, or any OpenAI-compatible server. 14-pattern threat taxonomy, deterministic scoring, configurable thresholds. Heuristic fallback when no model is available.
+- **Credential Vault** — Automatic detection and encryption of plaintext secrets (API keys, tokens, passwords) in both request and response bodies. AES-256-GCM encryption, HKDF-SHA256 key derivation.
+- **Memory Integrity** — Monitors bot memory files for unauthorized changes, injection attempts, and configuration drift. SSE alerts on detection.
 - **Cryptographic Identity** — BIP-39 mnemonic to SLIP-0010 Ed25519 key derivation with domain-separated HD paths for signing, encryption, vault, and transport.
 
 ## Architecture
@@ -42,7 +48,7 @@ Neural Commons sits between a bot and its upstream API as a transparent proxy. I
                     +--------+---------+
                              |
                     +--------v---------+
-                    |   aegis-proxy    |  <-- transparent HTTP proxy
+                    |   aegis-proxy    |  <-- transparent HTTP proxy (:3141)
                     |   (axum/tower)   |
                     +--------+---------+
                              |
@@ -50,7 +56,7 @@ Neural Commons sits between a bot and its upstream API as a transparent proxy. I
           |                  |                  |
    +------v------+   +------v------+   +------v------+
    | aegis-slm   |   | aegis-      |   | aegis-      |
-   | (holster)   |   | barrier     |   | evidence    |
+   | (screening) |   | barrier     |   | evidence    |
    +-------------+   +-------------+   +-------------+
           |                  |                  |
    +------v------+   +------v------+   +------v------+
@@ -59,108 +65,123 @@ Neural Commons sits between a bot and its upstream API as a transparent proxy. I
    +-------------+   +-------------+   +-------------+
 ```
 
-**Two parallel workspaces:**
+## CLI Reference
 
-| Stream | Directory | Purpose |
-|--------|-----------|---------|
-| **A — Adapter** | `adapter/` | Runs on each bot's machine. Local protection, evidence recording, dashboard. |
-| **B — Cluster** | `cluster/` | Shared network services. Gateway, Botawiki, mesh, trust scoring. |
+```bash
+# Start
+aegis                              # observe-only mode (default)
+aegis --enforce                    # enable blocking
+aegis --no-slm                     # skip SLM screening
+aegis --pass-through               # zero inspection, metadata-only receipts
 
-**Shared crates:** `aegis-crypto` and `aegis-schemas` are consumed by both workspaces.
+# Setup
+aegis setup openclaw               # configure OpenClaw integration
+aegis setup openclaw --revert      # undo configuration
+
+# SLM model management
+aegis slm status                   # show current SLM config
+aegis slm use qwen2.5:1.5b        # switch model
+aegis slm engine openai            # switch engine (ollama/openai)
+aegis slm server http://localhost:1234  # set server URL
+
+# Operations
+aegis status                       # adapter status
+aegis scan                         # scan workspace for credentials
+aegis vault summary                # credential vault overview
+aegis memory status                # memory file health
+aegis export --verify              # export + verify evidence chain
+aegis dashboard                    # open dashboard in browser
+```
+
+## Building
+
+```bash
+cargo check --workspace            # type-check
+cargo test --workspace             # run all 461+ tests
+cargo test -p aegis-barrier        # test a specific crate
+cargo build --release -p aegis-cli # release binary
+```
+
+**Requirements:** Rust 1.85+ (edition 2024)
 
 ## Crate Map
 
-### Adapter (Stream A)
+### Adapter (Stream A) — runs on each bot's machine
 
 | Crate | Purpose | Tests |
 |-------|---------|-------|
-| `aegis-adapter` | Main binary — composes hooks, replay protection, server | 33 |
-| `aegis-barrier` | Write barrier — diff engine, severity classifier, filesystem watcher, write tokens, hash registry, evolution flow, protected files | 198 |
-| `aegis-evidence` | Evidence chain — hash-linked receipts, SQLite store, Merkle rollups | 26 |
-| `aegis-slm` | SLM integration — output parser, threat scoring, holster decisions | 18 |
-| `aegis-vault` | Credential vault — encrypted storage, secret scanner, KDF, policy engine | 38 |
-| `aegis-memory` | Memory integrity — file monitoring, change interception, heuristic screening | 23 |
-| `aegis-proxy` | HTTP proxy — middleware pipeline, cognitive bridge, error handling | 21 |
-| `aegis-failure` | Resilience — anomaly detection, heartbeat monitoring, rollback | 8 |
+| `aegis-adapter` | Server orchestration, hooks, config, state | 35 |
+| `aegis-barrier` | Write barrier — filesystem watcher, protected files, snapshots | 208 |
+| `aegis-evidence` | Evidence chain — hash-linked receipts, SQLite WAL store | 26 |
+| `aegis-slm` | SLM screening — Ollama, OpenAI-compat, heuristic engines, holster | 38 |
+| `aegis-vault` | Credential vault — scanner, encrypted storage, KDF | 38 |
+| `aegis-memory` | Memory integrity — file monitoring, heuristic screening | 23 |
+| `aegis-proxy` | HTTP proxy — middleware pipeline, SSE streaming, rate limiting | 37 |
+| `aegis-failure` | Resilience — anomaly detection, heartbeat, rollback | 8 |
 | `aegis-gateway` | Auth — NC-Ed25519 stateless authentication | 4 |
-| `aegis-dashboard` | Embedded dashboard — <50KB, 2s polling | — |
-| `aegis-cli` | CLI — `aegis init`, `aegis status`, `aegis evolve` | — |
+| `aegis-dashboard` | Embedded web dashboard — 7 tabs, SSE alerts | 5 |
+| `aegis-cli` | CLI binary — all user-facing commands | — |
 
 ### Shared
 
 | Crate | Purpose | Tests |
 |-------|---------|-------|
-| `aegis-crypto` | BIP-39, SLIP-0010, SHA-256, Ed25519, AES-256-GCM, RFC 8785 JCS | 10 |
-| `aegis-schemas` | Receipt, claim, trustmark, enterprise field schemas | — |
-| `aegis-contract-tests` | Schema round-trip and serialization conformance tests | 27 |
+| `aegis-crypto` | BIP-39, SLIP-0010, SHA-256, Ed25519, AES-256-GCM, JCS | 10 |
+| `aegis-schemas` | Receipt, ReceiptType, enforcement, rate limit schemas | 27 |
 
-### Cluster (Stream B) — Scaffolded
+### Cluster (Stream B) — scaffolded, not yet active
 
 | Crate | Purpose |
 |-------|---------|
 | `gateway` | Edge gateway with NC-Ed25519 auth, WebSocket, NATS bridge |
 | `botawiki` | Distributed knowledge base with quarantine and dispute resolution |
-| `broadcast` | Foundation broadcast channel |
-| `evaluator` | Peer evaluation and Tier 3 admission |
 | `trustmark` | TRUSTMARK scoring with temporal decay |
-| `mesh` | libp2p mesh relay, dead drops, trust-weighted routing |
-| `ledger` | Compute credit ledger with circuit breaker |
-| `rag` | RAG service for semantic search |
-| `scheduler` | GPU task scheduling and routing |
-
-## Building
-
-```bash
-# Check everything compiles
-cargo check --workspace
-
-# Run all 406 tests
-cargo test --workspace
-
-# Test a specific crate
-cargo test -p aegis-barrier
-
-# Build release binary
-cargo build --release -p aegis-cli
-```
-
-**Requirements:** Rust 1.85+ (edition 2024)
+| `mesh` | libp2p mesh relay, trust-weighted routing |
+| `evaluator` | Peer evaluation and tier admission |
 
 ## Key Design Decisions
 
-All design decisions are documented in [`DECISIONS.md`](DECISIONS.md). Highlights:
+All decisions documented in [`DECISIONS.md`](DECISIONS.md). Highlights:
 
 - **Wire format:** RFC 8785 JCS — bytes signed = bytes on wire
-- **Binary fields:** Lowercase hex everywhere, no exceptions
-- **Timestamps:** i64 epoch milliseconds, not RFC 3339
-- **Scores:** Integer basis points (0-10000), never floats in signed data
-- **Phase 1 default:** Observe-only — warn, don't block
-
-## Testing
-
-Four-layer test architecture:
-
-| Layer | Location | Target | Time |
-|-------|----------|--------|------|
-| Contract | `tests/contract/` | Schema round-trips | <30s |
-| Integration | `tests/integration/` | NATS topology | <10s |
-| HTTP | `tests/http/` | axum TestClient | <15s |
-| Scenarios | `tests/scenarios/` | Docker Compose end-to-end | ~10min |
+- **Timestamps:** `i64` epoch milliseconds
+- **Scores:** Integer basis points (0–10000), never floats in signed data
+- **Default mode:** Observe-only — warn, don't block
+- **Identity:** Ed25519 via BIP-39 / SLIP-0010
+- **Vault encryption:** AES-256-GCM, HKDF-SHA256
+- **Evidence storage:** SQLite WAL, append-only hash chain
 
 ## Project Status
 
-**Phase 0** — Crypto foundations, schema design, wire format: **Complete**
+See the full [Roadmap](ROADMAP.md) and [GitHub Milestones](https://github.com/LCatGA12/neural-commons/milestones).
 
-**Phase 1** — Adapter core implementation: **Complete**
-- All adapter crates implemented with 406 passing tests
-- Barrier module fully operational (198 tests)
-- Evidence chain, SLM, vault, memory, proxy all functional
-- Install script, CLI, OpenClaw setup, dashboard, release workflow all shipped
+**Tier 1 — Local Adapter:** Shipped (v0.2.x, 461+ tests)
+All adapter crates implemented and tested. Proxy, evidence chain, SLM screening, credential vault, write barrier, memory monitor, dashboard, CLI, CI/CD, install script.
 
-**Phase 2** — Trust engine, tier system, Botawiki: Planned
+**Tier 1 Hardening (v0.3.0):** [In progress](https://github.com/LCatGA12/neural-commons/milestone/1) — target April 2026
 
-**Phase 3** — Mesh network, compute credits, swarm coordination: Planned
+**Cluster Foundation (v0.4.0):** [Planned](https://github.com/LCatGA12/neural-commons/milestone/2) — target June 2026
+
+**Mesh & Intelligence (v0.5.0):** [Planned](https://github.com/LCatGA12/neural-commons/milestone/3)
+
+## Documentation
+
+- [Why Install Aegis?](docs/WHY_INSTALL_AEGIS.md) — the case for trust infrastructure, written from an agent's perspective
+- [Quickstart Guide](docs/QUICKSTART.md) — install and protect your agent in 2 minutes
+- [Roadmap](ROADMAP.md) — what's shipped, what's next
+- [Decisions Register](DECISIONS.md) — architectural decisions with rationale
+- [OpenClaw Integration](docs/OPENCLAW_INTEGRATION.md) — detailed integration guide
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, code style, and PR process.
+
+Pick any issue from the [v0.3.0 milestone](https://github.com/LCatGA12/neural-commons/milestone/1) — issues labeled `good first issue` are self-contained with clear scope.
+
+## Security
+
+Found a vulnerability? See [SECURITY.md](SECURITY.md) for responsible disclosure.
 
 ## License
 
-Proprietary. All rights reserved.
+[AGPL-3.0-or-later](LICENSE). See the license file for details.
