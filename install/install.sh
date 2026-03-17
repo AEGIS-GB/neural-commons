@@ -147,26 +147,116 @@ add_to_path() {
 
 prompt_slm_model() {
     echo ""
-    info "Optional: Download a small language model for injection screening."
-    info "This requires Ollama (https://ollama.ai) to be installed."
+    info "Optional: Enable SLM injection screening."
+    info "This adds local AI-powered prompt injection detection."
+    info "Without it, Aegis still protects you with heuristic patterns."
     echo ""
 
-    if ! command -v ollama >/dev/null 2>&1; then
-        warn "Ollama not found. SLM screening will use heuristic fallback."
-        warn "Install Ollama later and run: ollama pull llama3.2:1b"
-        return
-    fi
-
-    read -r -p "Download llama3.2:1b for SLM screening? [y/N] " response
+    read -r -p "Set up SLM screening now? [y/N] " response
     case "$response" in
-        [yY]|[yY][eE][sS])
-            info "Pulling llama3.2:1b..."
-            ollama pull llama3.2:1b || warn "Model pull failed. You can retry later."
-            ;;
+        [yY]|[yY][eE][sS]) ;;
         *)
-            info "Skipped. Run 'ollama pull llama3.2:1b' later to enable SLM screening."
+            info "Skipped. You can enable SLM later:"
+            info "  aegis slm engine ollama"
+            info "  aegis slm use llama3.2:1b"
+            return
             ;;
     esac
+
+    echo ""
+    echo "  Which SLM server do you use?"
+    echo ""
+    echo "  1) Ollama        (most common — ollama.ai)"
+    echo "  2) LM Studio     (OpenAI-compatible — lmstudio.ai)"
+    echo "  3) Other OpenAI-compatible server (vLLM, llama.cpp, LocalAI)"
+    echo ""
+
+    read -r -p "Select [1-3]: " engine_choice
+    case "$engine_choice" in
+        2)
+            "${INSTALL_DIR}/aegis" slm engine openai 2>/dev/null || true
+            read -r -p "LM Studio server URL [http://localhost:1234]: " lms_url
+            lms_url="${lms_url:-http://localhost:1234}"
+            "${INSTALL_DIR}/aegis" slm server "$lms_url" 2>/dev/null || true
+            read -r -p "Model name (as shown in LM Studio): " model_name
+            if [ -n "$model_name" ]; then
+                "${INSTALL_DIR}/aegis" slm use "$model_name" 2>/dev/null || true
+            fi
+            info "SLM configured for LM Studio."
+            info "Start with: aegis  (not --no-slm)"
+            return
+            ;;
+        3)
+            "${INSTALL_DIR}/aegis" slm engine openai 2>/dev/null || true
+            read -r -p "Server URL: " server_url
+            if [ -n "$server_url" ]; then
+                "${INSTALL_DIR}/aegis" slm server "$server_url" 2>/dev/null || true
+            fi
+            read -r -p "Model name: " model_name
+            if [ -n "$model_name" ]; then
+                "${INSTALL_DIR}/aegis" slm use "$model_name" 2>/dev/null || true
+            fi
+            info "SLM configured for OpenAI-compatible server."
+            info "Start with: aegis  (not --no-slm)"
+            return
+            ;;
+        *)
+            # Default: Ollama
+            ;;
+    esac
+
+    # Ollama path
+    if ! command -v ollama >/dev/null 2>&1; then
+        info "Ollama is not installed."
+        read -r -p "Install Ollama now? [y/N] " install_ollama
+        case "$install_ollama" in
+            [yY]|[yY][eE][sS])
+                info "Installing Ollama..."
+                curl -fsSL https://ollama.com/install.sh | sh || {
+                    warn "Ollama install failed. Install manually: https://ollama.ai"
+                    return
+                }
+                ;;
+            *)
+                info "Skipped. Install Ollama later: https://ollama.ai"
+                info "Then run: ollama pull llama3.2:1b && aegis"
+                return
+                ;;
+        esac
+    fi
+
+    echo ""
+    echo "  Which model? (smaller = faster, larger = more accurate)"
+    echo ""
+    echo "  1) llama3.2:1b    (~1.3GB — fast, good enough for most screening)"
+    echo "  2) llama3.2:3b    (~2.0GB — better accuracy)"
+    echo "  3) qwen2.5:1.5b   (~1.5GB — strong multilingual support)"
+    echo "  4) Custom model name"
+    echo ""
+
+    read -r -p "Select [1-4]: " model_choice
+    local model
+    case "$model_choice" in
+        2) model="llama3.2:3b" ;;
+        3) model="qwen2.5:1.5b" ;;
+        4)
+            read -r -p "Model name: " model
+            if [ -z "$model" ]; then
+                model="llama3.2:1b"
+            fi
+            ;;
+        *) model="llama3.2:1b" ;;
+    esac
+
+    info "Pulling ${model}..."
+    ollama pull "$model" || {
+        warn "Model pull failed. Try later: ollama pull ${model}"
+        return
+    }
+
+    "${INSTALL_DIR}/aegis" slm use "$model" 2>/dev/null || true
+    info "SLM configured: engine=ollama model=${model}"
+    info "Start with: aegis  (not --no-slm)"
 }
 
 # --- Framework setup prompt ---
