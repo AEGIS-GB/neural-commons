@@ -16,6 +16,10 @@
 //!   aegis vault list             — list vault secrets (masked)
 //!   aegis vault scan             — scan for plaintext credentials
 //!   aegis memory status          — show memory file health
+//!   aegis slm status             — show current SLM configuration
+//!   aegis slm use <model>        — switch SLM model
+//!   aegis slm engine <engine>    — switch SLM engine (ollama/openai)
+//!   aegis slm server <url>       — set SLM server URL
 //!   aegis dashboard              — open dashboard URL in browser
 //!   aegis version                — show version
 
@@ -133,6 +137,12 @@ enum Commands {
     /// Restart the aegis background service
     Restart,
 
+    /// SLM screening configuration
+    Slm {
+        #[command(subcommand)]
+        action: SlmCommands,
+    },
+
     /// Open the dashboard in a browser
     Dashboard,
 
@@ -188,6 +198,27 @@ enum VaultCommands {
     },
     /// Show vault summary
     Summary,
+}
+
+#[derive(Subcommand)]
+enum SlmCommands {
+    /// Show current SLM configuration
+    Status,
+    /// Switch the SLM model (e.g. aegis slm use qwen2.5:1.5b)
+    Use {
+        /// Model name (e.g. llama3.2:1b, qwen2.5:1.5b, phi-3-mini)
+        model: String,
+    },
+    /// Switch the SLM engine (ollama or openai)
+    Engine {
+        /// Engine type: "ollama" or "openai" (OpenAI-compatible: LM Studio, vLLM, etc.)
+        engine: String,
+    },
+    /// Set the SLM server URL
+    Server {
+        /// Server URL (e.g. http://localhost:11434 for Ollama, http://localhost:1234 for LM Studio)
+        url: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -649,6 +680,32 @@ fn main() {
             }
         },
 
+        Some(Commands::Slm { action }) => match action {
+            SlmCommands::Status => {
+                eprintln!("slm configuration:");
+                eprintln!("  enabled:    {}", config.slm.enabled);
+                eprintln!("  engine:     {}", config.slm.engine);
+                eprintln!("  model:      {}", config.slm.model);
+                eprintln!("  server url: {}", config.slm.ollama_url);
+                eprintln!("  heuristic fallback: {}", config.slm.fallback_to_heuristics);
+            }
+            SlmCommands::Use { model } => {
+                update_slm_config(&cli.config, "model", &model);
+            }
+            SlmCommands::Engine { engine } => {
+                if engine != "ollama" && engine != "openai" {
+                    eprintln!("error: engine must be 'ollama' or 'openai'");
+                    eprintln!("  ollama  — Ollama API (http://localhost:11434)");
+                    eprintln!("  openai  — OpenAI-compatible API (LM Studio, vLLM, llama.cpp, LocalAI)");
+                    std::process::exit(1);
+                }
+                update_slm_config(&cli.config, "engine", &engine);
+            }
+            SlmCommands::Server { url } => {
+                update_slm_config(&cli.config, "ollama_url", &url);
+            }
+        },
+
         Some(Commands::Start) => {
             run_systemctl("start");
         }
@@ -922,4 +979,83 @@ fn setup_openclaw(dry_run: bool, revert: bool, proxy_url: &str) {
     eprintln!("updated {}", config_path.display());
     eprintln!("  baseUrl: {} -> {}", old_url, proxy_url);
     eprintln!("  revert with: aegis setup openclaw --revert");
+}
+
+/// Update a single field in the [slm] section of the config TOML.
+///
+/// Creates the config file with defaults if it doesn't exist.
+fn update_slm_config(config_path: &str, field: &str, value: &str) {
+    let path = Path::new(config_path);
+
+    // If the config file doesn't exist, create one with defaults
+    if !path.exists() {
+        let parent = path.parent().unwrap_or(Path::new("."));
+        std::fs::create_dir_all(parent).unwrap_or_else(|e| {
+            eprintln!("error: cannot create {}: {e}", parent.display());
+            std::process::exit(1);
+        });
+
+        let default_config = AdapterConfig::default();
+        let toml_str = toml::to_string_pretty(&default_config).unwrap_or_else(|e| {
+            eprintln!("error: failed to serialize default config: {e}");
+            std::process::exit(1);
+        });
+        std::fs::write(path, &toml_str).unwrap_or_else(|e| {
+            eprintln!("error: failed to write {}: {e}", path.display());
+            std::process::exit(1);
+        });
+        eprintln!("created default config at {}", path.display());
+    }
+
+    let content = std::fs::read_to_string(path).unwrap_or_else(|e| {
+        eprintln!("error: failed to read {}: {e}", path.display());
+        std::process::exit(1);
+    });
+
+    let mut doc: toml::Value = toml::from_str(&content).unwrap_or_else(|e| {
+        eprintln!("error: invalid TOML in {}: {e}", path.display());
+        std::process::exit(1);
+    });
+
+    // Ensure [slm] table exists
+    let table = doc.as_table_mut().unwrap();
+    if !table.contains_key("slm") {
+        table.insert("slm".to_string(), toml::Value::Table(toml::map::Map::new()));
+    }
+    let slm = table.get_mut("slm").unwrap().as_table_mut().unwrap();
+
+    let old_value = slm
+        .get(field)
+        .and_then(|v| v.as_str())
+        .unwrap_or("(not set)")
+        .to_string();
+
+    slm.insert(field.to_string(), toml::Value::String(value.to_string()));
+
+    let toml_str = toml::to_string_pretty(&doc).unwrap_or_else(|e| {
+        eprintln!("error: failed to serialize config: {e}");
+        std::process::exit(1);
+    });
+
+    std::fs::write(path, &toml_str).unwrap_or_else(|e| {
+        eprintln!("error: failed to write {}: {e}", path.display());
+        std::process::exit(1);
+    });
+
+    let friendly_name = match field {
+        "model" => "model",
+        "engine" => "engine",
+        "ollama_url" => "server url",
+        _ => field,
+    };
+
+    eprintln!("slm {}: {} -> {}", friendly_name, old_value, value);
+    eprintln!("config: {}", path.display());
+
+    if field == "engine" && value == "openai" {
+        eprintln!("hint: set the server URL with: aegis slm server http://localhost:1234");
+    }
+    if field == "model" {
+        eprintln!("hint: make sure the model is pulled/available on your SLM server");
+    }
 }

@@ -1,11 +1,14 @@
 //! Engine trait for SLM inference.
 //!
-//! Two implementations:
-//!   - `OllamaEngine`: HTTP client for Ollama API (primary)
+//! Three implementations:
+//!   - `OllamaEngine`: HTTP client for Ollama API (`/api/generate`)
+//!   - `OpenAiCompatEngine`: HTTP client for any OpenAI-compatible API (`/v1/chat/completions`)
+//!     — works with LM Studio, vLLM, llama.cpp, text-generation-inference, LocalAI
 //!   - `HeuristicEngine`: Regex-based fallback (no model required)
 
 pub mod heuristic;
 pub mod ollama;
+pub mod openai_compat;
 
 /// Engine trait for SLM inference.
 pub trait SlmEngine: Send + Sync {
