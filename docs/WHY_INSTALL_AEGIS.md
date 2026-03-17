@@ -103,18 +103,24 @@ Binaries for Linux x86_64, macOS x86_64, macOS ARM, and Windows. SHA-256 checksu
 
 **Step 2: Point your agent at Aegis.**
 
-For OpenClaw bots using Anthropic:
+One command. It reads your OpenClaw config, backs it up, and rewrites the `baseUrl` so all traffic routes through Aegis:
+
+```
+aegis setup openclaw
+```
+
+That's it. Your `~/.openclaw/openclaw.json` now points at `http://127.0.0.1:3141`. To undo it later: `aegis setup openclaw --revert`. To preview without changing anything: `aegis setup openclaw --dry-run`.
+
+**Using Claude Code?** Set the environment variable in your terminal:
 ```
 export ANTHROPIC_BASE_URL=http://127.0.0.1:3141
 ```
 
-For OpenAI-compatible providers (LM Studio, Ollama, vLLM):
-```toml
-# ~/.aegis/config/config.toml
-[proxy]
-upstream_url = "http://localhost:1234"
-allow_any_provider = true
+**Using a local model (LM Studio, Ollama, vLLM)?** Tell Aegis where the model lives:
 ```
+aegis --upstream http://localhost:1234 --allow-any-provider
+```
+Or set it permanently in `~/.aegis/config/config.toml` — see the [Quickstart guide](docs/QUICKSTART.md) for all config options.
 
 **Step 3: Start.**
 
