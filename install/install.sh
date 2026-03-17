@@ -207,22 +207,14 @@ prompt_slm_model() {
 
     # Ollama path
     if ! command -v ollama >/dev/null 2>&1; then
-        info "Ollama is not installed."
-        read -r -p "Install Ollama now? [y/N] " install_ollama
-        case "$install_ollama" in
-            [yY]|[yY][eE][sS])
-                info "Installing Ollama..."
-                curl -fsSL https://ollama.com/install.sh | sh || {
-                    warn "Ollama install failed. Install manually: https://ollama.ai"
-                    return
-                }
-                ;;
-            *)
-                info "Skipped. Install Ollama later: https://ollama.ai"
-                info "Then run: ollama pull llama3.2:1b && aegis"
-                return
-                ;;
-        esac
+        info "Ollama is not installed. To set up SLM with Ollama:"
+        echo ""
+        echo "  1. Install Ollama:  curl -fsSL https://ollama.com/install.sh | sh"
+        echo "  2. Pull a model:    ollama pull llama3.2:1b"
+        echo "  3. Start Aegis:     aegis"
+        echo ""
+        info "Run these after the installer finishes."
+        return
     fi
 
     echo ""
