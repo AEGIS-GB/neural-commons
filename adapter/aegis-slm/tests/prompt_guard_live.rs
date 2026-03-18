@@ -14,7 +14,7 @@ mod live_tests {
             .parent()
             .unwrap()
             .join("models")
-            .join("prompt-guard-2")
+            .join("protectai-v2")
     }
 
     fn has_model() -> bool {
