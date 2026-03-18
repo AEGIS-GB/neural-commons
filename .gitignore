@@ -40,3 +40,10 @@ tests/scenarios/output/
 adapter/install/*.sig
 *.tar.gz
 *.zip
+
+# ML models (downloaded at runtime)
+models/
+*.onnx
+
+# Aegis data
+.aegis/

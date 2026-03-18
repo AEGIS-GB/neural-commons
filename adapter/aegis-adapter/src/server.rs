@@ -390,6 +390,7 @@ pub async fn start(
         server_url: config.slm.ollama_url.clone(),
         model: config.slm.model.clone(),
         fallback_to_heuristics: config.slm.fallback_to_heuristics,
+        prompt_guard_model_dir: None, // TODO: add to config.toml when prompt-guard feature is enabled
     };
     let slm_enabled = config.slm.enabled;
     let hooks = create_middleware_hooks(recorder.clone(), mode, alert_tx.clone(), slm_config, slm_enabled);
@@ -601,6 +602,7 @@ mod tests {
             server_url: "http://127.0.0.1:11434".to_string(),
             model: "test-model".to_string(),
             fallback_to_heuristics: true,
+            prompt_guard_model_dir: None,
         }
     }
 

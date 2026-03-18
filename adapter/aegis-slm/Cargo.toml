@@ -5,6 +5,10 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+[features]
+default = []
+prompt-guard = ["ort", "tokenizers"]
+
 [dependencies]
 aegis-schemas = { path = "../../aegis-schemas" }
 regex.workspace = true
@@ -14,3 +18,5 @@ serde_json.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 thiserror.workspace = true
+ort = { workspace = true, optional = true }
+tokenizers = { workspace = true, optional = true }

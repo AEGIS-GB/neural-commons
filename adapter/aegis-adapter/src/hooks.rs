@@ -443,6 +443,7 @@ mod tests {
                 server_url: "http://127.0.0.1:1".to_string(), // unreachable, forces heuristic
                 model: "nonexistent".to_string(),
                 fallback_to_heuristics: true,
+                prompt_guard_model_dir: None,
             },
         };
         let decision = hook.screen("Hello, how are you?").await;
@@ -457,6 +458,7 @@ mod tests {
                 server_url: "http://127.0.0.1:1".to_string(), // unreachable
                 model: "nonexistent".to_string(),
                 fallback_to_heuristics: false,
+                prompt_guard_model_dir: None,
             },
         };
         // With no fallback and unreachable Ollama, should fail open

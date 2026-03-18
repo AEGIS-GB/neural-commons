@@ -97,3 +97,7 @@ anyhow = "1"
 # Config
 toml = "0.8"
 notify = "7"
+
+# ML inference
+ort = "2.0.0-rc.12"
+tokenizers = { version = "0.22", default-features = false, features = ["onig"] }

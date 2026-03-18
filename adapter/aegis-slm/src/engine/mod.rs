@@ -1,14 +1,18 @@
 //! Engine trait for SLM inference.
 //!
-//! Three implementations:
+//! Four implementations:
 //!   - `OllamaEngine`: HTTP client for Ollama API (`/api/generate`)
 //!   - `OpenAiCompatEngine`: HTTP client for any OpenAI-compatible API (`/v1/chat/completions`)
 //!     — works with LM Studio, vLLM, llama.cpp, text-generation-inference, LocalAI
 //!   - `HeuristicEngine`: Regex-based fallback (no model required)
+//!   - `PromptGuardEngine`: ONNX classifier (Meta Llama Prompt Guard 2, 86M params)
+//!     — requires `prompt-guard` feature flag
 
 pub mod heuristic;
 pub mod ollama;
 pub mod openai_compat;
+#[cfg(feature = "prompt-guard")]
+pub mod prompt_guard;
 
 /// Engine trait for SLM inference.
 pub trait SlmEngine: Send + Sync {
