@@ -79,6 +79,9 @@ impl SlmEngine for OpenAiCompatEngine {
     fn generate(&self, prompt: &str) -> Result<String, String> {
         let endpoint = format!("{}/v1/chat/completions", self.url);
 
+        // Don't send response_format — not all servers support json_object
+        // (LM Studio requires json_schema, vLLM may not support it at all).
+        // The screening prompt already instructs the model to output JSON.
         let request_body = ChatCompletionRequest {
             model: &self.model,
             messages: vec![ChatMessage {
@@ -86,9 +89,7 @@ impl SlmEngine for OpenAiCompatEngine {
                 content: prompt,
             }],
             temperature: 0.0,
-            response_format: Some(ResponseFormat {
-                r#type: "json_object".to_string(),
-            }),
+            response_format: None,
         };
 
         debug!(
