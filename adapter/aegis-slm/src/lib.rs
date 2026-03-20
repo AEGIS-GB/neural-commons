@@ -17,6 +17,7 @@
 pub mod engine;
 pub mod holster;
 pub mod loopback;
+pub mod metaprompt;
 pub mod parser;
 pub mod prompt;
 pub mod scoring;

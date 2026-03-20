@@ -41,6 +41,13 @@ pub struct ProxyConfig {
     /// Set to true in config.toml to bypass the provider check.
     #[serde(default)]
     pub allow_any_provider: bool,
+
+    /// Inject metaprompt hardening rules into upstream system messages (default: false).
+    /// When enabled, Aegis prepends security rules to the system prompt of every
+    /// forwarded request, instructing the upstream LLM to treat ingested content
+    /// as untrusted and refuse social engineering / exfiltration attempts.
+    #[serde(default)]
+    pub metaprompt_hardening: bool,
 }
 
 /// Proxy operating mode.
@@ -66,6 +73,7 @@ impl Default for ProxyConfig {
             mode: ProxyMode::ObserveOnly,
             provider: Provider::Anthropic,
             allow_any_provider: false,
+            metaprompt_hardening: false,
         }
     }
 }

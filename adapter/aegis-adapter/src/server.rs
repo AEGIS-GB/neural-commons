@@ -408,6 +408,7 @@ pub async fn start(
         },
         provider: aegis_proxy::config::Provider::Anthropic,
         allow_any_provider: config.proxy.allow_any_provider,
+        metaprompt_hardening: config.slm.metaprompt_hardening,
     };
 
     // 8. Warn if upstream is still the default (common misconfiguration)

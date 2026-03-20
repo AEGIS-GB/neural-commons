@@ -121,6 +121,9 @@ pub struct SlmSection {
     /// Fall back to heuristic patterns if model unavailable
     #[serde(default = "default_true")]
     pub fallback_to_heuristics: bool,
+    /// Inject metaprompt hardening rules into upstream system messages (default: true)
+    #[serde(default = "default_true")]
+    pub metaprompt_hardening: bool,
 }
 
 impl Default for SlmSection {
@@ -131,6 +134,7 @@ impl Default for SlmSection {
             ollama_url: default_ollama_url(),
             model: default_slm_model(),
             fallback_to_heuristics: true,
+            metaprompt_hardening: true,
         }
     }
 }
