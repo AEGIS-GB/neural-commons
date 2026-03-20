@@ -15,6 +15,8 @@ pub struct GpuInfo {
     pub name: String,
     /// VRAM in MB (0 if unknown)
     pub vram_mb: u64,
+    /// Whether VRAM was actually detected or is unknown
+    pub vram_detected: bool,
 }
 
 /// System hardware summary.
@@ -28,6 +30,8 @@ pub struct HardwareInfo {
     pub arch: String,
     /// Operating system
     pub os: String,
+    /// Detection issues — tools that were missing or failed
+    pub warnings: Vec<String>,
 }
 
 /// Recommended SLM configuration based on hardware.
@@ -51,7 +55,8 @@ pub struct SlmRecommendation {
 
 /// Detect system hardware (GPU, RAM, CPU arch).
 pub fn detect_hardware() -> HardwareInfo {
-    let gpus = detect_gpus();
+    let mut warnings = Vec::new();
+    let gpus = detect_gpus(&mut warnings);
     let ram_mb = detect_ram_mb();
     let arch = std::env::consts::ARCH.to_string();
     let os = std::env::consts::OS.to_string();
@@ -61,6 +66,7 @@ pub fn detect_hardware() -> HardwareInfo {
         ram_mb,
         arch,
         os,
+        warnings,
     }
 }
 
@@ -68,6 +74,8 @@ pub fn detect_hardware() -> HardwareInfo {
 pub fn recommend(hw: &HardwareInfo) -> SlmRecommendation {
     let best_gpu = hw.gpus.iter().max_by_key(|g| g.vram_mb);
     let vram = best_gpu.map(|g| g.vram_mb).unwrap_or(0);
+    let has_gpu = !hw.gpus.is_empty();
+    let vram_known = best_gpu.map(|g| g.vram_detected).unwrap_or(false);
     let is_apple_silicon = hw.arch == "aarch64" && hw.os == "macos";
 
     // Apple Silicon uses unified memory — can use a large portion of RAM for models
@@ -77,6 +85,31 @@ pub fn recommend(hw: &HardwareInfo) -> SlmRecommendation {
     } else {
         vram
     };
+
+    // GPU detected but VRAM unknown — can't auto-recommend, ask the warden
+    if has_gpu && !vram_known && !is_apple_silicon {
+        let gpu_name = best_gpu.map(|g| g.name.as_str()).unwrap_or("Unknown GPU");
+        return SlmRecommendation {
+            tier: "unknown".to_string(),
+            engine: "openai".to_string(),
+            model: "auto".to_string(),
+            model_description: format!("GPU detected ({}) but VRAM unknown", gpu_name),
+            expected_detection: "depends on model chosen".to_string(),
+            expected_latency: "depends on model chosen".to_string(),
+            notes: vec![
+                format!("GPU found: {} — but VRAM could not be detected.", gpu_name),
+                "Install GPU drivers to enable automatic detection:".to_string(),
+                "  NVIDIA: install nvidia-drivers (provides nvidia-smi)".to_string(),
+                "  AMD:    install rocm (provides rocm-smi)".to_string(),
+                String::new(),
+                "Or choose manually based on your VRAM:".to_string(),
+                "  12GB+:  aegis slm use qwen/qwen3-30b-a3b  (100% detection)".to_string(),
+                "  6-12GB: aegis slm use qwen/qwen3-8b       (~70% detection)".to_string(),
+                "  3-6GB:  aegis slm use qwen/qwen3-1.7b     (~45% detection)".to_string(),
+                "  <3GB:   aegis --no-slm                     (~65% heuristic only)".to_string(),
+            ],
+        };
+    }
 
     if effective_vram >= 12_000 {
         // 12GB+ VRAM: Can run Qwen 30B-A3B (MoE, only 3B active)
@@ -154,17 +187,51 @@ pub fn recommend(hw: &HardwareInfo) -> SlmRecommendation {
 // GPU detection (cross-platform)
 // ---------------------------------------------------------------------------
 
-fn detect_gpus() -> Vec<GpuInfo> {
+fn detect_gpus(warnings: &mut Vec<String>) -> Vec<GpuInfo> {
     let mut gpus = Vec::new();
 
     // Try NVIDIA (nvidia-smi)
-    if let Some(gpu) = detect_nvidia() {
-        gpus.push(gpu);
+    match detect_nvidia() {
+        Some(gpu) => gpus.push(gpu),
+        None => {
+            // Check if NVIDIA hardware exists but driver tools are missing
+            if has_nvidia_hardware() {
+                warnings.push(
+                    "NVIDIA GPU detected via PCI but nvidia-smi not found. \
+                     Install NVIDIA drivers for accurate VRAM detection: \
+                     https://www.nvidia.com/drivers".to_string()
+                );
+                gpus.push(GpuInfo {
+                    vendor: "nvidia".to_string(),
+                    name: "NVIDIA GPU (drivers not installed)".to_string(),
+                    vram_mb: 0,
+                    vram_detected: false,
+                });
+            }
+        }
     }
 
     // Try AMD (rocm-smi)
-    if let Some(gpu) = detect_amd() {
-        gpus.push(gpu);
+    match detect_amd() {
+        Some(gpu) => gpus.push(gpu),
+        None => {
+            // Check if AMD hardware exists but ROCm tools are missing
+            if has_amd_hardware() {
+                warnings.push(
+                    "AMD GPU detected via PCI but rocm-smi not found. \
+                     Install ROCm for accurate VRAM detection: \
+                     https://rocm.docs.amd.com/en/latest/deploy/linux/install.html".to_string()
+                );
+                // Try to estimate VRAM from PCI config space
+                let (name, vram_mb) = estimate_amd_from_pci();
+                gpus.push(GpuInfo {
+                    vendor: "amd".to_string(),
+                    name,
+                    vram_mb,
+                    vram_detected: vram_mb > 0,
+                });
+            }
+        }
     }
 
     // Try Apple Silicon
@@ -174,14 +241,261 @@ fn detect_gpus() -> Vec<GpuInfo> {
         }
     }
 
-    // Try Intel (Linux)
+    // Fallback: scan PCI/sysfs for any GPU if nothing detected yet
     if gpus.is_empty() && std::env::consts::OS == "linux" {
-        if let Some(gpu) = detect_intel_linux() {
+        if let Some(gpu) = detect_gpu_from_sysfs(warnings) {
+            gpus.push(gpu);
+        } else if let Some(gpu) = detect_intel_linux() {
+            gpus.push(gpu);
+        }
+    }
+
+    // Windows fallback
+    if gpus.is_empty() && std::env::consts::OS == "windows" {
+        if let Some(gpu) = detect_gpu_windows(warnings) {
             gpus.push(gpu);
         }
     }
 
     gpus
+}
+
+/// Check if NVIDIA hardware exists via lspci or /sys
+fn has_nvidia_hardware() -> bool {
+    // Check lspci
+    if let Ok(output) = Command::new("lspci").output() {
+        if output.status.success() {
+            let text = String::from_utf8_lossy(&output.stdout).to_lowercase();
+            if text.contains("nvidia") && (text.contains("vga") || text.contains("3d controller")) {
+                return true;
+            }
+        }
+    }
+    // Check sysfs
+    if let Ok(entries) = std::fs::read_dir("/sys/class/drm") {
+        for entry in entries.flatten() {
+            if let Ok(vendor) = std::fs::read_to_string(entry.path().join("device/vendor")) {
+                if vendor.trim() == "0x10de" { // NVIDIA vendor ID
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
+/// Check if AMD discrete GPU hardware exists via lspci or /sys
+fn has_amd_hardware() -> bool {
+    if let Ok(output) = Command::new("lspci").output() {
+        if output.status.success() {
+            let text = String::from_utf8_lossy(&output.stdout).to_lowercase();
+            if text.contains("amd") && (text.contains("vga") || text.contains("display")) {
+                return true;
+            }
+        }
+    }
+    if let Ok(entries) = std::fs::read_dir("/sys/class/drm") {
+        for entry in entries.flatten() {
+            if let Ok(vendor) = std::fs::read_to_string(entry.path().join("device/vendor")) {
+                if vendor.trim() == "0x1002" { // AMD vendor ID
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
+/// Try to get AMD GPU name and VRAM from PCI/sysfs
+fn estimate_amd_from_pci() -> (String, u64) {
+    let name = if let Ok(output) = Command::new("lspci").output() {
+        if output.status.success() {
+            let text = String::from_utf8_lossy(&output.stdout);
+            text.lines()
+                .find(|l| l.to_lowercase().contains("amd") && (l.contains("VGA") || l.contains("Display")))
+                .and_then(|l| l.split(':').last())
+                .map(|s| s.trim().to_string())
+                .unwrap_or_else(|| "AMD GPU".to_string())
+        } else {
+            "AMD GPU".to_string()
+        }
+    } else {
+        "AMD GPU".to_string()
+    };
+
+    // Try to read VRAM from sysfs (amdgpu driver exposes this)
+    let vram_mb = read_amd_vram_from_sysfs().unwrap_or(0);
+
+    (name, vram_mb)
+}
+
+/// Read AMD VRAM from sysfs (works without rocm-smi if amdgpu driver is loaded)
+fn read_amd_vram_from_sysfs() -> Option<u64> {
+    let drm_dir = std::fs::read_dir("/sys/class/drm").ok()?;
+    for entry in drm_dir.flatten() {
+        let path = entry.path();
+        // Look for card0/device/mem_info_vram_total
+        let vram_path = path.join("device/mem_info_vram_total");
+        if vram_path.exists() {
+            if let Ok(content) = std::fs::read_to_string(&vram_path) {
+                if let Ok(bytes) = content.trim().parse::<u64>() {
+                    return Some(bytes / (1024 * 1024));
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Detect GPU on Linux from sysfs when no vendor-specific tools are available
+fn detect_gpu_from_sysfs(warnings: &mut Vec<String>) -> Option<GpuInfo> {
+    let drm_dir = std::fs::read_dir("/sys/class/drm").ok()?;
+    for entry in drm_dir.flatten() {
+        let path = entry.path();
+        let vendor_path = path.join("device/vendor");
+        let vram_path = path.join("device/mem_info_vram_total");
+
+        if let Ok(vendor_id) = std::fs::read_to_string(&vendor_path) {
+            let vendor_id = vendor_id.trim();
+            let (vendor, driver_hint) = match vendor_id {
+                "0x10de" => ("nvidia", "Install NVIDIA drivers: https://www.nvidia.com/drivers"),
+                "0x1002" => ("amd", "Install ROCm: https://rocm.docs.amd.com"),
+                "0x8086" => ("intel", "Intel integrated GPU (shared memory)"),
+                _ => continue,
+            };
+
+            let vram_mb = if vram_path.exists() {
+                std::fs::read_to_string(&vram_path)
+                    .ok()
+                    .and_then(|s| s.trim().parse::<u64>().ok())
+                    .map(|b| b / (1024 * 1024))
+                    .unwrap_or(0)
+            } else {
+                0
+            };
+
+            let name = get_pci_device_name(vendor_id).unwrap_or_else(|| format!("{} GPU", vendor));
+
+            if vram_mb == 0 && vendor != "intel" {
+                warnings.push(format!(
+                    "{} GPU found but VRAM size unknown. {}",
+                    vendor.to_uppercase(), driver_hint
+                ));
+            }
+
+            return Some(GpuInfo {
+                vendor: vendor.to_string(),
+                name,
+                vram_mb,
+                vram_detected: vram_mb > 0,
+            });
+        }
+    }
+    None
+}
+
+/// Try to get a human-readable PCI device name from lspci
+fn get_pci_device_name(vendor_id: &str) -> Option<String> {
+    let vendor_name = match vendor_id {
+        "0x10de" => "nvidia",
+        "0x1002" => "amd",
+        "0x8086" => "intel",
+        _ => return None,
+    };
+
+    let output = Command::new("lspci").output().ok()?;
+    if !output.status.success() { return None; }
+
+    let text = String::from_utf8_lossy(&output.stdout);
+    text.lines()
+        .find(|l| l.to_lowercase().contains(vendor_name) && (l.contains("VGA") || l.contains("3D") || l.contains("Display")))
+        .and_then(|l| l.split(':').last())
+        .map(|s| s.trim().to_string())
+}
+
+/// Detect GPU on Windows using WMIC
+fn detect_gpu_windows(warnings: &mut Vec<String>) -> Option<GpuInfo> {
+    let output = Command::new("wmic")
+        .args(["path", "Win32_VideoController", "get", "Name,AdapterRAM", "/format:csv"])
+        .output()
+        .ok()?;
+
+    if !output.status.success() {
+        // Try PowerShell as fallback (WMIC deprecated on newer Windows)
+        return detect_gpu_powershell(warnings);
+    }
+
+    let text = String::from_utf8_lossy(&output.stdout);
+    for line in text.lines().skip(1) {
+        let parts: Vec<&str> = line.split(',').collect();
+        if parts.len() >= 3 {
+            let adapter_ram: u64 = parts[1].trim().parse().unwrap_or(0);
+            let name = parts[2].trim().to_string();
+            if !name.is_empty() {
+                let vram_mb = adapter_ram / (1024 * 1024);
+                let vendor = if name.to_lowercase().contains("nvidia") {
+                    "nvidia"
+                } else if name.to_lowercase().contains("amd") || name.to_lowercase().contains("radeon") {
+                    "amd"
+                } else if name.to_lowercase().contains("intel") {
+                    "intel"
+                } else {
+                    "unknown"
+                };
+
+                return Some(GpuInfo {
+                    vendor: vendor.to_string(),
+                    name,
+                    vram_mb,
+                    vram_detected: vram_mb > 0,
+                });
+            }
+        }
+    }
+
+    warnings.push("Could not detect GPU via WMIC. Try running as administrator.".to_string());
+    None
+}
+
+/// PowerShell fallback for Windows GPU detection
+fn detect_gpu_powershell(_warnings: &mut Vec<String>) -> Option<GpuInfo> {
+    let output = Command::new("powershell")
+        .args(["-Command", "Get-CimInstance Win32_VideoController | Select-Object Name,AdapterRAM | ConvertTo-Json"])
+        .output()
+        .ok()?;
+
+    if !output.status.success() { return None; }
+
+    let text = String::from_utf8_lossy(&output.stdout);
+    let json: serde_json::Value = serde_json::from_str(&text).ok()?;
+
+    // Can be a single object or array
+    let gpu = if json.is_array() {
+        json.as_array()?.first()?.clone()
+    } else {
+        json
+    };
+
+    let name = gpu.get("Name")?.as_str()?.to_string();
+    let adapter_ram = gpu.get("AdapterRAM").and_then(|v| v.as_u64()).unwrap_or(0);
+    let vram_mb = adapter_ram / (1024 * 1024);
+
+    let vendor = if name.to_lowercase().contains("nvidia") {
+        "nvidia"
+    } else if name.to_lowercase().contains("amd") || name.to_lowercase().contains("radeon") {
+        "amd"
+    } else if name.to_lowercase().contains("intel") {
+        "intel"
+    } else {
+        "unknown"
+    };
+
+    Some(GpuInfo {
+        vendor: vendor.to_string(),
+        name,
+        vram_mb,
+        vram_detected: vram_mb > 0,
+    })
 }
 
 fn detect_nvidia() -> Option<GpuInfo> {
@@ -205,6 +519,7 @@ fn detect_nvidia() -> Option<GpuInfo> {
         vendor: "nvidia".to_string(),
         name,
         vram_mb,
+        vram_detected: vram_mb > 0,
     })
 }
 
@@ -265,6 +580,7 @@ fn detect_amd() -> Option<GpuInfo> {
         vendor: "amd".to_string(),
         name,
         vram_mb,
+        vram_detected: vram_mb > 0,
     })
 }
 
@@ -302,6 +618,7 @@ fn detect_apple_gpu() -> Option<GpuInfo> {
         vendor: "apple".to_string(),
         name,
         vram_mb,
+        vram_detected: true, // Apple always reports GPU info via system_profiler
     })
 }
 
@@ -331,6 +648,7 @@ fn detect_intel_linux() -> Option<GpuInfo> {
         vendor: "intel".to_string(),
         name,
         vram_mb: 0, // Shared memory, not useful for LLM inference
+        vram_detected: true, // Intel iGPU uses shared memory, 0 is accurate
     })
 }
 
@@ -428,10 +746,19 @@ pub fn format_hardware_info(hw: &HardwareInfo) -> String {
     } else {
         for gpu in &hw.gpus {
             if gpu.vram_mb > 0 {
-                lines.push(format!("  GPU:  {} ({} MB VRAM)", gpu.name, gpu.vram_mb));
-            } else {
+                lines.push(format!("  GPU:  {} ({} MB / {:.0} GB VRAM)", gpu.name, gpu.vram_mb, gpu.vram_mb as f64 / 1024.0));
+            } else if gpu.vram_detected {
                 lines.push(format!("  GPU:  {} (shared memory)", gpu.name));
+            } else {
+                lines.push(format!("  GPU:  {} (VRAM unknown — install drivers)", gpu.name));
             }
+        }
+    }
+
+    if !hw.warnings.is_empty() {
+        lines.push(String::new());
+        for warning in &hw.warnings {
+            lines.push(format!("  WARNING: {}", warning));
         }
     }
 
@@ -496,10 +823,12 @@ mod tests {
                 vendor: "nvidia".to_string(),
                 name: "RTX 4090".to_string(),
                 vram_mb: 24576,
+                vram_detected: true,
             }],
             ram_mb: 32768,
             arch: "x86_64".to_string(),
             os: "linux".to_string(),
+            warnings: vec![],
         };
         let rec = recommend(&hw);
         assert_eq!(rec.tier, "optimal");
@@ -513,10 +842,12 @@ mod tests {
                 vendor: "nvidia".to_string(),
                 name: "RTX 3060".to_string(),
                 vram_mb: 8192,
+                vram_detected: true,
             }],
             ram_mb: 16384,
             arch: "x86_64".to_string(),
             os: "linux".to_string(),
+            warnings: vec![],
         };
         let rec = recommend(&hw);
         assert_eq!(rec.tier, "good");
@@ -530,10 +861,32 @@ mod tests {
             ram_mb: 8192,
             arch: "x86_64".to_string(),
             os: "linux".to_string(),
+            warnings: vec![],
         };
         let rec = recommend(&hw);
         assert_eq!(rec.tier, "cpu-only");
         assert_eq!(rec.model, "disabled");
+    }
+
+    #[test]
+    fn recommend_unknown_when_vram_not_detected() {
+        let hw = HardwareInfo {
+            gpus: vec![GpuInfo {
+                vendor: "nvidia".to_string(),
+                name: "NVIDIA GPU (drivers not installed)".to_string(),
+                vram_mb: 0,
+                vram_detected: false,
+            }],
+            ram_mb: 32768,
+            arch: "x86_64".to_string(),
+            os: "linux".to_string(),
+            warnings: vec!["NVIDIA GPU detected but nvidia-smi not found.".to_string()],
+        };
+        let rec = recommend(&hw);
+        assert_eq!(rec.tier, "unknown");
+        // Should give manual instructions, not auto-recommend cpu-only
+        let text = format_recommendation(&rec);
+        assert!(text.contains("choose manually"));
     }
 
     #[test]
@@ -543,10 +896,12 @@ mod tests {
                 vendor: "apple".to_string(),
                 name: "Apple M2 Pro".to_string(),
                 vram_mb: 0,
+                vram_detected: true,
             }],
             ram_mb: 32768, // 32GB unified → 75% = 24GB effective
             arch: "aarch64".to_string(),
             os: "macos".to_string(),
+            warnings: vec![],
         };
         let rec = recommend(&hw);
         assert_eq!(rec.tier, "optimal");
@@ -559,10 +914,12 @@ mod tests {
                 vendor: "nvidia".to_string(),
                 name: "RTX 3090".to_string(),
                 vram_mb: 24576,
+                vram_detected: true,
             }],
             ram_mb: 32768,
             arch: "x86_64".to_string(),
             os: "linux".to_string(),
+            warnings: vec![],
         };
         let rec = recommend(&hw);
         let text = format_recommendation(&rec);
