@@ -22,6 +22,12 @@ struct OllamaGenerateRequest<'a> {
     prompt: &'a str,
     stream: bool,
     format: &'a str,
+    options: OllamaOptions,
+}
+
+#[derive(Serialize)]
+struct OllamaOptions {
+    num_predict: u32,
 }
 
 /// Ollama generate response body.
@@ -124,6 +130,7 @@ impl SlmEngine for OllamaEngine {
             prompt,
             stream: false,
             format: "json",
+            options: OllamaOptions { num_predict: 512 },
         };
 
         debug!(
