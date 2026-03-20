@@ -480,48 +480,81 @@ function showSlmDetail(seq){
     h+='<div style="font-size:11px;font-weight:600;text-transform:uppercase;margin-bottom:4px;color:'+(e.action==='reject'?'#f85149':'#d29922')+'">'+(e.action==='reject'?'BLOCKED':'QUARANTINED')+'</div>';
     h+='<div style="font-size:13px;color:#e1e4e8">'+escHtml(e.reason)+'</div></div>';
   }
-  // ── PIPELINE FLOW (per-entry) ──
+  // ── PIPELINE FLOW (per-entry) — correct order: Heuristic → Classifier → SLM Pass A → SLM Pass B → Holster ──
   h+='<div style="margin-bottom:20px"><div style="font-size:12px;color:#8b949e;margin-bottom:10px">SCREENING PIPELINE</div>';
   h+='<div style="display:flex;flex-wrap:wrap;gap:0;align-items:stretch">';
+  const stoppedAt=e.engine; // which layer made the final decision
   // Stage 1: Input
   h+='<div class="flow-node flow-in" style="flex:0 0 auto">Input</div><div class="flow-arrow">→</div>';
-  // Stage 2: Pass A (injection)
+  // Stage 2: Heuristic (always runs first, <1ms)
+  const heur_caught=stoppedAt==='heuristic';
+  h+='<div class="flow-node '+(heur_caught?'flow-node-caught':'flow-holster')+'" style="flex:0 0 auto">';
+  h+='Heuristic<br><span class="flow-ms">&lt;1ms</span>';
+  if(heur_caught)h+='<br><span style="font-size:10px;color:#f85149;font-weight:600">CAUGHT</span>';
+  else h+='<br><span style="font-size:10px;color:#3fb950">clear</span>';
+  h+='</div><div class="flow-arrow">→</div>';
+  // Stage 3: ProtectAI Classifier
+  const cls_ran=e.classifier_ms!=null&&e.classifier_ms>0;
+  const cls_caught=stoppedAt==='prompt-guard';
+  if(!heur_caught){
+    h+='<div class="flow-node '+(cls_caught?'flow-node-caught':cls_ran?'flow-enrich':'flow-parse')+'" style="flex:0 0 auto">';
+    h+='Classifier<br><span class="flow-ms">'+(cls_ran?e.classifier_ms+'ms':'~5ms')+'</span>';
+    if(cls_caught)h+='<br><span style="font-size:10px;color:#f85149;font-weight:600">CAUGHT</span>';
+    else h+='<br><span style="font-size:10px;color:#3fb950">clear</span>';
+    h+='</div><div class="flow-arrow">→</div>';
+  }
+  // Stage 4: SLM Pass A (injection) — only if heuristic+classifier were clean
   const passA_ran=e.pass_a_ms!=null&&e.pass_a_ms>0;
   const passA_caught=anns.some(a=>['DirectInjection','IndirectInjection','PersonaHijack','AuthorityEscalation','EncodingEvasion','BoundaryErosion','MemoryPoison'].includes(a.pattern));
-  h+='<div class="flow-node '+(passA_caught?'flow-node-caught':passA_ran?'flow-enrich':'flow-parse')+'" style="flex:0 0 auto">';
-  h+='Pass A<br><span class="flow-ms">'+(passA_ran?e.pass_a_ms+'ms':'skipped')+'</span>';
-  if(passA_caught)h+='<br><span style="font-size:10px;color:#f85149;font-weight:600">CAUGHT</span>';
-  else if(passA_ran)h+='<br><span style="font-size:10px;color:#3fb950">clear</span>';
-  h+='</div><div class="flow-arrow">→</div>';
-  // Stage 3: Pass B (recon)
-  const passB_ran=e.pass_b_ms!=null&&e.pass_b_ms>0;
-  const passB_caught=anns.some(a=>['ExfiltrationAttempt','CredentialProbe','ToolAbuse','LinkInjection'].includes(a.pattern));
-  h+='<div class="flow-node '+(passB_caught?'flow-node-caught':passB_ran?'flow-enrich':'flow-parse')+'" style="flex:0 0 auto">';
-  h+='Pass B<br><span class="flow-ms">'+(passB_ran?e.pass_b_ms+'ms':'skipped')+'</span>';
-  if(passB_caught)h+='<br><span style="font-size:10px;color:#f85149;font-weight:600">CAUGHT</span>';
-  else if(passB_ran)h+='<br><span style="font-size:10px;color:#3fb950">clear</span>';
-  h+='</div><div class="flow-arrow">→</div>';
-  // Stage 4: Classifier (if ran)
-  const cls_ran=e.classifier_ms!=null&&e.classifier_ms>0;
-  if(cls_ran){
-    h+='<div class="flow-node flow-holster" style="flex:0 0 auto">Classifier<br><span class="flow-ms">'+e.classifier_ms+'ms</span></div><div class="flow-arrow">→</div>';
+  if(!heur_caught&&!cls_caught){
+    h+='<div class="flow-node '+(passA_caught?'flow-node-caught':passA_ran?'flow-enrich':'flow-parse')+'" style="flex:0 0 auto">';
+    h+='SLM Pass A<br><span class="flow-ms">'+(passA_ran?e.pass_a_ms+'ms':'skipped')+'</span>';
+    if(passA_caught)h+='<br><span style="font-size:10px;color:#f85149;font-weight:600">CAUGHT</span>';
+    else if(passA_ran)h+='<br><span style="font-size:10px;color:#3fb950">clear</span>';
+    h+='</div><div class="flow-arrow">→</div>';
+    // Stage 5: SLM Pass B (recon)
+    const passB_ran=e.pass_b_ms!=null&&e.pass_b_ms>0;
+    const passB_caught=anns.some(a=>['ExfiltrationAttempt','CredentialProbe','ToolAbuse','LinkInjection'].includes(a.pattern));
+    h+='<div class="flow-node '+(passB_caught?'flow-node-caught':passB_ran?'flow-enrich':'flow-parse')+'" style="flex:0 0 auto">';
+    h+='SLM Pass B<br><span class="flow-ms">'+(passB_ran?e.pass_b_ms+'ms':'skipped')+'</span>';
+    if(passB_caught)h+='<br><span style="font-size:10px;color:#f85149;font-weight:600">CAUGHT</span>';
+    else if(passB_ran)h+='<br><span style="font-size:10px;color:#3fb950">clear</span>';
+    h+='</div><div class="flow-arrow">→</div>';
   }
-  // Stage 5: Holster
+  // Stage 6: Holster / Final Decision
   const holsterColor=e.action==='reject'?'#2d1f1f':e.action==='quarantine'?'#2d2a1f':'#1f2d1f';
   const holsterBorder=e.action==='reject'?'#da3633':e.action==='quarantine'?'#9e6a03':'#238636';
   const holsterText=e.action==='reject'?'#f85149':e.action==='quarantine'?'#d29922':'#3fb950';
   h+='<div class="flow-node" style="flex:0 0 auto;background:'+holsterColor+';color:'+holsterText+';border:2px solid '+holsterBorder+';font-weight:600">';
-  h+=(e.holster_profile||'Holster')+'<br><span style="font-size:12px">→ '+e.action.toUpperCase()+'</span>';
+  h+=(e.holster_profile||'Decision')+'<br><span style="font-size:12px">→ '+e.action.toUpperCase()+'</span>';
   if(e.threshold_exceeded)h+='<br><span style="font-size:10px">threshold exceeded</span>';
   h+='</div>';
   h+='</div></div>';
   // ── LAYER-BY-LAYER BREAKDOWN ──
   h+='<div style="margin-bottom:20px"><div style="font-size:12px;color:#8b949e;margin-bottom:10px">LAYER RESULTS</div>';
   h+='<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">';
-  // Pass A result
-  h+='<div style="padding:10px 14px;background:#0d1117;border:1px solid #30363d;border-radius:6px">';
-  h+='<div style="font-size:11px;font-weight:600;color:#d29922;margin-bottom:6px">PASS A — Injection Detection</div>';
-  if(passA_ran){
+  // Layer 1: Heuristic
+  h+='<div style="padding:10px 14px;background:#0d1117;border:1px solid '+(heur_caught?'#da3633':'#30363d')+';border-radius:6px">';
+  h+='<div style="font-size:11px;font-weight:600;color:#3fb950;margin-bottom:6px">LAYER 1 — Heuristic (regex)</div>';
+  if(heur_caught){
+    h+='<div style="color:#f85149;font-size:12px;font-weight:600;margin-bottom:4px">CAUGHT — stopped here</div>';
+    for(const a of anns)h+='<div style="font-size:11px;margin:2px 0"><span class="badge badge-red" style="font-size:10px">'+escHtml(a.pattern)+'</span> <span style="color:#8b949e">sev:'+a.severity+'</span></div>';
+  }else{h+='<div style="color:#3fb950;font-size:12px">Clear — no regex matches</div>';}
+  h+='<div style="font-size:10px;color:#8b949e;margin-top:4px">&lt;1ms</div>';
+  h+='</div>';
+  // Layer 2: ProtectAI Classifier
+  h+='<div style="padding:10px 14px;background:#0d1117;border:1px solid '+(cls_caught?'#da3633':'#30363d')+';border-radius:6px">';
+  h+='<div style="font-size:11px;font-weight:600;color:#a371f7;margin-bottom:6px">LAYER 2 — ProtectAI Classifier</div>';
+  if(heur_caught){h+='<div style="color:#8b949e;font-size:12px">Skipped — heuristic already caught</div>';}
+  else if(cls_caught){h+='<div style="color:#f85149;font-size:12px;font-weight:600">CAUGHT — high-confidence MALICIOUS</div>';}
+  else{h+='<div style="color:#3fb950;font-size:12px">Clear — classified as safe</div>';}
+  h+='<div style="font-size:10px;color:#8b949e;margin-top:4px">'+(cls_ran?e.classifier_ms+'ms':'~5ms')+'</div>';
+  h+='</div>';
+  // Layer 3: SLM Pass A (injection)
+  h+='<div style="padding:10px 14px;background:#0d1117;border:1px solid '+(passA_caught?'#da3633':'#30363d')+';border-radius:6px">';
+  h+='<div style="font-size:11px;font-weight:600;color:#d29922;margin-bottom:6px">LAYER 3a — SLM Pass A (injection)</div>';
+  if(heur_caught||cls_caught){h+='<div style="color:#8b949e;font-size:12px">Skipped — earlier layer caught</div>';}
+  else if(passA_ran){
     const passA_anns=anns.filter(a=>['DirectInjection','IndirectInjection','PersonaHijack','AuthorityEscalation','EncodingEvasion','BoundaryErosion','MemoryPoison'].includes(a.pattern));
     if(passA_anns.length>0){
       h+='<div style="color:#f85149;font-size:12px;font-weight:600;margin-bottom:4px">'+passA_anns.length+' pattern(s) detected</div>';
@@ -530,10 +563,11 @@ function showSlmDetail(seq){
     h+='<div style="font-size:10px;color:#8b949e;margin-top:4px">'+e.pass_a_ms+'ms</div>';
   }else{h+='<div style="color:#8b949e;font-size:12px">Did not run</div>';}
   h+='</div>';
-  // Pass B result
-  h+='<div style="padding:10px 14px;background:#0d1117;border:1px solid #30363d;border-radius:6px">';
-  h+='<div style="font-size:11px;font-weight:600;color:#58a6ff;margin-bottom:6px">PASS B — Recon / Exfiltration</div>';
-  if(passB_ran){
+  // Layer 3: SLM Pass B (recon)
+  h+='<div style="padding:10px 14px;background:#0d1117;border:1px solid '+(passB_caught?'#da3633':'#30363d')+';border-radius:6px">';
+  h+='<div style="font-size:11px;font-weight:600;color:#58a6ff;margin-bottom:6px">LAYER 3b — SLM Pass B (recon)</div>';
+  if(heur_caught||cls_caught){h+='<div style="color:#8b949e;font-size:12px">Skipped — earlier layer caught</div>';}
+  else if(passB_ran){
     const passB_anns=anns.filter(a=>['ExfiltrationAttempt','CredentialProbe','ToolAbuse','LinkInjection'].includes(a.pattern));
     if(passB_anns.length>0){
       h+='<div style="color:#f85149;font-size:12px;font-weight:600;margin-bottom:4px">'+passB_anns.length+' pattern(s) detected</div>';
@@ -543,8 +577,8 @@ function showSlmDetail(seq){
   }else{h+='<div style="color:#8b949e;font-size:12px">Did not run</div>';}
   h+='</div>';
   // Holster decision
-  h+='<div style="padding:10px 14px;background:#0d1117;border:1px solid #30363d;border-radius:6px">';
-  h+='<div style="font-size:11px;font-weight:600;color:#a371f7;margin-bottom:6px">HOLSTER — Final Decision</div>';
+  h+='<div style="padding:10px 14px;background:#0d1117;border:1px solid #30363d;border-radius:6px;grid-column:1/-1">';
+  h+='<div style="font-size:11px;font-weight:600;color:#e1e4e8;margin-bottom:6px">FINAL DECISION</div>';
   h+='<div style="font-size:13px;font-weight:600;color:'+holsterText+'">'+e.action.toUpperCase()+'</div>';
   if(e.holster_profile)h+='<div style="font-size:11px;color:#8b949e;margin-top:2px">Profile: '+e.holster_profile+'</div>';
   if(e.threshold_exceeded!=null)h+='<div style="font-size:11px;color:#8b949e">Threshold: <span style="color:'+(e.threshold_exceeded?'#f85149':'#3fb950')+'">'+(e.threshold_exceeded?'exceeded':'within limits')+'</span></div>';
