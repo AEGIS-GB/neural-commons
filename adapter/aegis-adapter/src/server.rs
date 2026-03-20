@@ -30,6 +30,45 @@ use crate::replay::{MonotonicCounter, NonceRegistry};
 use crate::state::AdapterState;
 use crate::Mode;
 
+/// Auto-detect the ProtectAI classifier model directory.
+/// Searches standard locations for model.onnx + tokenizer.json.
+fn detect_prompt_guard_model() -> Option<String> {
+    let candidates = [
+        // Relative to working directory
+        "models/protectai-v2",
+        // Aegis data directory
+        ".aegis/models/protectai-v2",
+    ];
+    // Also check home-relative paths
+    let home_candidates: Vec<PathBuf> = if let Ok(home) = std::env::var("HOME") {
+        vec![
+            PathBuf::from(&home).join(".aegis/models/protectai-v2"),
+        ]
+    } else {
+        vec![]
+    };
+
+    for candidate in &candidates {
+        let path = PathBuf::from(candidate);
+        if path.join("tokenizer.json").exists()
+            && (path.join("model.onnx").exists() || path.join("model.quant.onnx").exists())
+        {
+            info!(path = %path.display(), "ProtectAI classifier model found");
+            return Some(path.to_string_lossy().to_string());
+        }
+    }
+    for path in &home_candidates {
+        if path.join("tokenizer.json").exists()
+            && (path.join("model.onnx").exists() || path.join("model.quant.onnx").exists())
+        {
+            info!(path = %path.display(), "ProtectAI classifier model found");
+            return Some(path.to_string_lossy().to_string());
+        }
+    }
+    warn!("ProtectAI classifier model not found — classifier layer disabled");
+    None
+}
+
 /// Errors from server startup.
 #[derive(Debug, thiserror::Error)]
 pub enum StartupError {
@@ -390,7 +429,7 @@ pub async fn start(
         server_url: config.slm.ollama_url.clone(),
         model: config.slm.model.clone(),
         fallback_to_heuristics: config.slm.fallback_to_heuristics,
-        prompt_guard_model_dir: None, // TODO: add to config.toml when prompt-guard feature is enabled
+        prompt_guard_model_dir: detect_prompt_guard_model(),
     };
     let slm_enabled = config.slm.enabled;
     let hooks = create_middleware_hooks(recorder.clone(), mode, alert_tx.clone(), slm_config, slm_enabled);

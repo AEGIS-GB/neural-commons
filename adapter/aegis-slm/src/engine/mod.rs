@@ -6,12 +6,10 @@
 //!     — works with LM Studio, vLLM, llama.cpp, text-generation-inference, LocalAI
 //!   - `HeuristicEngine`: Regex-based fallback (no model required)
 //!   - `PromptGuardEngine`: ONNX classifier (ProtectAI DeBERTa-v2, 184M params)
-//!     — requires `prompt-guard` feature flag
 
 pub mod heuristic;
 pub mod ollama;
 pub mod openai_compat;
-#[cfg(feature = "prompt-guard")]
 pub mod prompt_guard;
 
 /// Engine trait for SLM inference.

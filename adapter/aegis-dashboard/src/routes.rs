@@ -211,6 +211,35 @@ struct SlmScreeningEntry {
     screening_ms: u64,
     engine: String,
     annotation_count: u32,
+    pass_a_ms: Option<u64>,
+    pass_b_ms: Option<u64>,
+    classifier_ms: Option<u64>,
+    confidence: Option<u32>,
+    dimensions: Option<SlmDimensionsEntry>,
+    screened_text: Option<String>,
+    reason: Option<String>,
+    explanation: Option<String>,
+    annotations: Option<Vec<SlmAnnotationEntryApi>>,
+    holster_profile: Option<String>,
+    holster_action: Option<String>,
+    threshold_exceeded: Option<bool>,
+    escalated: Option<bool>,
+}
+
+#[derive(Debug, Serialize)]
+struct SlmDimensionsEntry {
+    injection: u32,
+    manipulation: u32,
+    exfiltration: u32,
+    persistence: u32,
+    evasion: u32,
+}
+
+#[derive(Debug, Serialize)]
+struct SlmAnnotationEntryApi {
+    pattern: String,
+    excerpt: String,
+    severity: u32,
 }
 
 // ── Handlers ─────────────────────────────────────────────────────────────────
@@ -575,6 +604,70 @@ async fn api_slm(
             timing_values.push(screening_ms);
 
             if entries.len() < 50 {
+                let pass_a_ms = detail
+                    .and_then(|d| d.get("pass_a_ms"))
+                    .and_then(|v| v.as_u64());
+                let pass_b_ms = detail
+                    .and_then(|d| d.get("pass_b_ms"))
+                    .and_then(|v| v.as_u64());
+                let classifier_ms = detail
+                    .and_then(|d| d.get("classifier_ms"))
+                    .and_then(|v| v.as_u64());
+                let confidence = detail
+                    .and_then(|d| d.get("confidence"))
+                    .and_then(|v| v.as_u64())
+                    .map(|v| v as u32);
+                let dimensions = detail
+                    .and_then(|d| d.get("dimensions"))
+                    .and_then(|d| {
+                        Some(SlmDimensionsEntry {
+                            injection: d.get("injection")?.as_u64()? as u32,
+                            manipulation: d.get("manipulation")?.as_u64()? as u32,
+                            exfiltration: d.get("exfiltration")?.as_u64()? as u32,
+                            persistence: d.get("persistence")?.as_u64()? as u32,
+                            evasion: d.get("evasion")?.as_u64()? as u32,
+                        })
+                    });
+                let screened_text = detail
+                    .and_then(|d| d.get("screened_text"))
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string());
+                let reason = detail
+                    .and_then(|d| d.get("reason"))
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string());
+                let explanation = detail
+                    .and_then(|d| d.get("explanation"))
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string());
+                let annotations = detail
+                    .and_then(|d| d.get("annotations"))
+                    .and_then(|v| v.as_array())
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|a| {
+                                Some(SlmAnnotationEntryApi {
+                                    pattern: a.get("pattern")?.as_str()?.to_string(),
+                                    excerpt: a.get("excerpt")?.as_str()?.to_string(),
+                                    severity: a.get("severity")?.as_u64()? as u32,
+                                })
+                            })
+                            .collect()
+                    });
+                let holster_profile = detail
+                    .and_then(|d| d.get("holster_profile"))
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string());
+                let holster_action = detail
+                    .and_then(|d| d.get("holster_action"))
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string());
+                let threshold_exceeded = detail
+                    .and_then(|d| d.get("threshold_exceeded"))
+                    .and_then(|v| v.as_bool());
+                let escalated = detail
+                    .and_then(|d| d.get("escalated"))
+                    .and_then(|v| v.as_bool());
                 entries.push(SlmScreeningEntry {
                     seq: receipt.core.seq,
                     ts_ms: receipt.core.ts_ms,
@@ -584,6 +677,19 @@ async fn api_slm(
                     screening_ms,
                     engine,
                     annotation_count,
+                    pass_a_ms,
+                    pass_b_ms,
+                    classifier_ms,
+                    confidence,
+                    dimensions,
+                    screened_text,
+                    reason,
+                    explanation,
+                    annotations,
+                    holster_profile,
+                    holster_action,
+                    threshold_exceeded,
+                    escalated,
                 });
             }
         }

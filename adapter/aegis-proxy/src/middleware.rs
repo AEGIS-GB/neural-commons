@@ -161,6 +161,41 @@ pub struct SlmVerdict {
     pub annotation_count: u32,
     /// Threat dimension breakdown (optional, Phase 1 summary).
     pub dimensions: Option<SlmDimensions>,
+    /// The text that was screened (truncated to 500 chars for storage).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub screened_text: Option<String>,
+    /// Reason string from the decision layer (quarantine/reject reason).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    /// SLM's human-readable explanation of its analysis.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub explanation: Option<String>,
+    /// Detected patterns with excerpts from the screened text.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub annotations: Option<Vec<SlmAnnotationEntry>>,
+    /// Holster profile that made the decision.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub holster_profile: Option<String>,
+    /// Holster action (the layer that decided).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub holster_action: Option<String>,
+    /// Whether the holster threshold was exceeded.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub threshold_exceeded: Option<bool>,
+    /// Whether this was escalated from a lower engine.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub escalated: Option<bool>,
+}
+
+/// A detected pattern annotation with excerpt.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct SlmAnnotationEntry {
+    /// Pattern name from the taxonomy.
+    pub pattern: String,
+    /// Literal excerpt from the screened text.
+    pub excerpt: String,
+    /// Severity in basis points (0–10000).
+    pub severity: u32,
 }
 
 /// Five-axis threat dimension scores (basis points 0–10000 each).

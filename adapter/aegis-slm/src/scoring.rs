@@ -75,14 +75,26 @@ pub fn enrich(
     slm_output: &SlmOutput,
     screened_input: &[u8],
 ) -> EnrichedAnalysis {
-    // Step 1: Enrich each annotation with span + severity
+    // Step 1: Enrich each annotation with span + severity.
+    // Discard annotations whose excerpt is not found in the input (hallucinated).
     let enriched_annotations: Vec<EnrichedAnnotation> = slm_output
         .annotations
         .iter()
-        .map(|ann| {
+        .filter_map(|ann| {
             let severity = pattern_severity(&ann.pattern);
             let (span, span_ambiguous, span_approximate) =
                 resolve_span(&ann.excerpt, screened_input);
+
+            // If the excerpt is not found in the screened input, the model
+            // hallucinated this annotation — discard it to avoid false positives.
+            if span_approximate {
+                tracing::debug!(
+                    pattern = ?ann.pattern,
+                    excerpt = %ann.excerpt,
+                    "discarding hallucinated annotation: excerpt not found in input"
+                );
+                return None;
+            }
 
             let excerpt_truncated = ann.excerpt.chars().count() > 100;
             let final_excerpt = if excerpt_truncated {
@@ -91,15 +103,15 @@ pub fn enrich(
                 ann.excerpt.clone()
             };
 
-            EnrichedAnnotation {
+            Some(EnrichedAnnotation {
                 pattern: ann.pattern.clone(),
                 span,
                 severity,
                 excerpt: final_excerpt,
                 span_ambiguous: if span_ambiguous { Some(true) } else { None },
                 excerpt_truncated: if excerpt_truncated { Some(true) } else { None },
-                span_approximate: if span_approximate { Some(true) } else { None },
-            }
+                span_approximate: None,
+            })
         })
         .collect();
 
