@@ -15,8 +15,10 @@
 //!   breakdown in Phase 1 (SlmReceiptDetail::Summary).
 
 pub mod engine;
+pub mod hardware;
 pub mod holster;
 pub mod loopback;
+pub mod metaprompt;
 pub mod parser;
 pub mod prompt;
 pub mod scoring;

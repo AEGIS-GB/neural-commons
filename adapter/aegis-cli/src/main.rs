@@ -71,6 +71,10 @@ struct Cli {
     #[arg(long)]
     no_slm: bool,
 
+    /// Override SLM model (e.g. --slm-model qwen/qwen3-30b-a3b)
+    #[arg(long)]
+    slm_model: Option<String>,
+
     /// Enable verbose logging
     #[arg(short, long)]
     verbose: bool,
@@ -204,9 +208,11 @@ enum VaultCommands {
 enum SlmCommands {
     /// Show current SLM configuration
     Status,
-    /// Switch the SLM model (e.g. aegis slm use qwen2.5:1.5b)
+    /// Detect hardware and recommend the best SLM model for this machine
+    Recommend,
+    /// Switch the SLM model (e.g. aegis slm use qwen/qwen3-30b-a3b)
     Use {
-        /// Model name (e.g. llama3.2:1b, qwen2.5:1.5b, phi-3-mini)
+        /// Model name (e.g. qwen/qwen3-30b-a3b, qwen/qwen3-8b)
         model: String,
     },
     /// Switch the SLM engine (ollama or openai)
@@ -297,6 +303,11 @@ fn main() {
     if cli.no_slm {
         config.slm.enabled = false;
         config.slm.fallback_to_heuristics = false;
+    }
+
+    // --slm-model overrides the SLM model from CLI
+    if let Some(ref model) = cli.slm_model {
+        config.slm.model = model.clone();
     }
 
     match cli.command {
@@ -683,11 +694,39 @@ fn main() {
         Some(Commands::Slm { action }) => match action {
             SlmCommands::Status => {
                 eprintln!("slm configuration:");
-                eprintln!("  enabled:    {}", config.slm.enabled);
-                eprintln!("  engine:     {}", config.slm.engine);
-                eprintln!("  model:      {}", config.slm.model);
-                eprintln!("  server url: {}", config.slm.ollama_url);
-                eprintln!("  heuristic fallback: {}", config.slm.fallback_to_heuristics);
+                eprintln!("  enabled:              {}", config.slm.enabled);
+                eprintln!("  engine:               {}", config.slm.engine);
+                eprintln!("  model:                {}", config.slm.model);
+                eprintln!("  server url:           {}", config.slm.ollama_url);
+                eprintln!("  heuristic fallback:   {}", config.slm.fallback_to_heuristics);
+                eprintln!("  metaprompt hardening: {}", config.slm.metaprompt_hardening);
+                eprintln!("  screening:            2-pass (injection + reconnaissance)");
+            }
+            SlmCommands::Recommend => {
+                eprintln!("detecting hardware...\n");
+                let hw = aegis_slm::hardware::detect_hardware();
+                eprintln!("hardware:");
+                eprintln!("{}", aegis_slm::hardware::format_hardware_info(&hw));
+                eprintln!();
+
+                let rec = aegis_slm::hardware::recommend(&hw);
+                eprintln!("recommendation:");
+                eprintln!("{}", aegis_slm::hardware::format_recommendation(&rec));
+                eprintln!();
+
+                // Hardware tier table
+                eprintln!("all tiers:");
+                eprintln!("  {:12} {:8} {:28} {:12} {:10}", "TIER", "VRAM", "MODEL", "DETECTION", "LATENCY");
+                eprintln!("  {:=<12} {:=>8} {:=<28} {:=>12} {:=>10}", "", "", "", "", "");
+                eprintln!("  {:12} {:>8} {:28} {:>12} {:>10}", "optimal", "12GB+", "qwen/qwen3-30b-a3b (MoE 3B)", "100%", "3-8s");
+                eprintln!("  {:12} {:>8} {:28} {:>12} {:>10}", "good", "6-12GB", "qwen/qwen3-8b", "~70%", "4-10s");
+                eprintln!("  {:12} {:>8} {:28} {:>12} {:>10}", "basic", "3-6GB", "qwen/qwen3-1.7b", "~45%", "1-3s");
+                eprintln!("  {:12} {:>8} {:28} {:>12} {:>10}", "cpu-only", "none", "heuristic + classifier only", "~65%", "<10ms");
+                eprintln!();
+                eprintln!("  * cpu-only uses no LLM — heuristic patterns + ProtectAI classifier.");
+                eprintln!("  * All tiers include heuristic + classifier. SLM adds on top.");
+                eprintln!("  * Metaprompt hardening is always available regardless of tier.");
+                eprintln!("  * Apple Silicon uses unified memory — 32GB Mac ≈ 24GB effective for models.");
             }
             SlmCommands::Use { model } => {
                 update_slm_config(&cli.config, "model", &model);

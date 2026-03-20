@@ -13,6 +13,7 @@ path = "src/main.rs"
 aegis-adapter = { path = "../aegis-adapter" }
 aegis-crypto = { path = "../../aegis-crypto" }
 aegis-evidence = { path = "../aegis-evidence" }
+aegis-slm = { path = "../aegis-slm" }
 aegis-vault = { path = "../aegis-vault" }
 aegis-memory = { path = "../aegis-memory" }
 clap.workspace = true

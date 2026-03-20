@@ -20,7 +20,7 @@ use crate::engine::openai_compat::OpenAiCompatEngine;
 use crate::engine::SlmEngine;
 use crate::holster::apply_holster;
 use crate::parser::parse_slm_output;
-use crate::prompt::screening_prompt;
+use crate::prompt::{screening_prompt_injection, screening_prompt_recon};
 use crate::scoring::enrich;
 use crate::types::*;
 
@@ -79,46 +79,96 @@ pub fn screen_content(config: &LoopbackConfig, content: &str) -> ScreeningDecisi
         }
     }
 
-    // 1. Build prompt
-    let prompt = screening_prompt(content);
+    // 1. Build 2-pass prompts
+    let prompt_a = screening_prompt_injection(content);
+    let prompt_b = screening_prompt_recon(content);
 
-    // 2. Try primary engine, fall back to heuristic if needed
-    let raw_output = {
-        let engine: Box<dyn SlmEngine> = match config.engine.as_str() {
-            "openai" => Box::new(OpenAiCompatEngine::new(&config.server_url, &config.model)),
-            _ => Box::new(OllamaEngine::new(&config.server_url, &config.model)),
-        };
-        match engine.generate(&prompt) {
-            Ok(output) => {
-                debug!(engine = %config.engine, "SLM engine produced output");
-                output
-            }
-            Err(e) => {
-                warn!(engine = %config.engine, "SLM engine failed: {e}");
-                if config.fallback_to_heuristics {
-                    info!("falling back to heuristic engine");
-                    let heuristic = HeuristicEngine::new();
-                    // Heuristic takes raw content, NOT the screening prompt
-                    match heuristic.generate(content) {
-                        Ok(output) => output,
-                        Err(e) => {
-                            warn!("heuristic engine also failed: {e}");
-                            return ScreeningDecision::Admit; // fail open
-                        }
+    // 2. Try primary engine with both passes, fall back to heuristic if needed
+    let engine: Box<dyn SlmEngine> = match config.engine.as_str() {
+        "openai" => Box::new(OpenAiCompatEngine::new(&config.server_url, &config.model)),
+        _ => Box::new(OllamaEngine::new(&config.server_url, &config.model)),
+    };
+
+    let (raw_a, raw_b) = match (engine.generate(&prompt_a), engine.generate(&prompt_b)) {
+        (Ok(a), Ok(b)) => {
+            debug!(engine = %config.engine, "SLM 2-pass completed");
+            (a, b)
+        }
+        (Err(e), _) | (_, Err(e)) => {
+            warn!(engine = %config.engine, "SLM engine failed: {e}");
+            if config.fallback_to_heuristics {
+                info!("falling back to heuristic engine");
+                let heuristic = HeuristicEngine::new();
+                match heuristic.generate(content) {
+                    Ok(output) => {
+                        // Heuristic returns a single output — use it directly
+                        let slm_output = match parse_slm_output(&output, &EngineProfile::Loopback) {
+                            Ok(o) => o,
+                            Err(e) => {
+                                warn!("heuristic parse failed: {e}");
+                                return ScreeningDecision::Quarantine(format!("parse_failure: {e}"));
+                            }
+                        };
+                        let enriched = enrich(&slm_output, content.as_bytes());
+                        let holster_result = apply_holster(
+                            &enriched,
+                            &HolsterProfile::default(),
+                            &Namespace::Inbound,
+                            &EngineProfile::Loopback,
+                            false,
+                        );
+                        return match holster_result.action {
+                            HolsterAction::Admit => ScreeningDecision::Admit,
+                            HolsterAction::Quarantine => ScreeningDecision::Quarantine(format!(
+                                "threat_score={} intent={:?}", enriched.threat_score, enriched.intent
+                            )),
+                            HolsterAction::Reject => ScreeningDecision::Reject(format!(
+                                "threat_score={} intent={:?}", enriched.threat_score, enriched.intent
+                            )),
+                        };
                     }
-                } else {
-                    return ScreeningDecision::Admit; // fail open
+                    Err(e) => {
+                        warn!("heuristic engine also failed: {e}");
+                        return ScreeningDecision::Admit; // fail open
+                    }
                 }
+            } else {
+                return ScreeningDecision::Admit; // fail open
             }
         }
     };
 
-    // 3. Parse SLM output
-    let slm_output = match parse_slm_output(&raw_output, &EngineProfile::Loopback) {
-        Ok(output) => output,
-        Err(e) => {
-            warn!("SLM output parse failed: {e}");
-            return ScreeningDecision::Quarantine(format!("parse_failure: {e}"));
+    // 3. Parse both pass outputs and merge annotations
+    let output_a = parse_slm_output(&raw_a, &EngineProfile::Loopback);
+    let output_b = parse_slm_output(&raw_b, &EngineProfile::Loopback);
+
+    let slm_output = match (output_a, output_b) {
+        (Ok(a), Ok(b)) => {
+            // Merge: take higher confidence, combine annotations and explanations
+            let mut merged = a;
+            merged.annotations.extend(b.annotations);
+            if b.confidence > merged.confidence {
+                merged.confidence = b.confidence;
+            }
+            if !b.explanation.is_empty() && b.explanation != merged.explanation {
+                if !merged.explanation.is_empty() {
+                    merged.explanation.push_str("; ");
+                }
+                merged.explanation.push_str(&b.explanation);
+            }
+            merged
+        }
+        (Ok(a), Err(e)) => {
+            warn!("Pass B parse failed: {e}");
+            a
+        }
+        (Err(e), Ok(b)) => {
+            warn!("Pass A parse failed: {e}");
+            b
+        }
+        (Err(ea), Err(eb)) => {
+            warn!("Both passes parse failed: A={ea}, B={eb}");
+            return ScreeningDecision::Quarantine(format!("parse_failure: A={ea}, B={eb}"));
         }
     };
 
