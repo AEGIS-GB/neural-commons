@@ -25,6 +25,7 @@ struct ChatCompletionRequest<'a> {
     model: &'a str,
     messages: Vec<ChatMessage<'a>>,
     temperature: f32,
+    max_tokens: u32,
     #[serde(skip_serializing_if = "Option::is_none")]
     response_format: Option<ResponseFormat>,
 }
@@ -89,6 +90,7 @@ impl SlmEngine for OpenAiCompatEngine {
                 content: prompt,
             }],
             temperature: 0.0,
+            max_tokens: 512,
             response_format: None,
         };
 

@@ -20,7 +20,7 @@ use crate::engine::openai_compat::OpenAiCompatEngine;
 use crate::engine::SlmEngine;
 use crate::holster::apply_holster;
 use crate::parser::parse_slm_output;
-use crate::prompt::{screening_prompt_injection, screening_prompt_recon};
+use crate::prompt::screening_prompt_combined;
 use crate::scoring::enrich;
 use crate::types::*;
 
@@ -190,10 +190,9 @@ pub fn screen_content_rich(config: &LoopbackConfig, content: &str) -> ScreeningR
         }
     }
 
-    // 2. SLM DEEP ANALYSIS — only reached if heuristic found nothing.
-    //    Build 2-pass prompts and run through the primary engine.
-    let prompt_a = screening_prompt_injection(content);
-    let prompt_b = screening_prompt_recon(content);
+    // 2. SLM DEEP ANALYSIS — single combined pass covering injection + recon.
+    //    Only reached if heuristic + classifier found nothing.
+    let prompt = screening_prompt_combined(content);
 
     let engine: Box<dyn SlmEngine> = match config.engine.as_str() {
         "openai" => Box::new(OpenAiCompatEngine::new(&config.server_url, &config.model)),
@@ -201,25 +200,19 @@ pub fn screen_content_rich(config: &LoopbackConfig, content: &str) -> ScreeningR
     };
 
     let pass_a_start = Instant::now();
-    let result_a = engine.generate(&prompt_a);
+    let result = engine.generate(&prompt);
     let pass_a_ms = pass_a_start.elapsed().as_millis() as u64;
-
-    let pass_b_start = Instant::now();
-    let result_b = engine.generate(&prompt_b);
-    let pass_b_ms = pass_b_start.elapsed().as_millis() as u64;
 
     let engine_name = config.engine.clone();
 
-    let (raw_a, raw_b, pass_a_time, pass_b_time, actual_engine) = match (result_a, result_b) {
-        (Ok(a), Ok(b)) => {
-            debug!(engine = %config.engine, "SLM 2-pass completed");
-            (a, b, Some(pass_a_ms), Some(pass_b_ms), engine_name)
+    let raw_output = match result {
+        Ok(raw) => {
+            debug!(engine = %config.engine, ms = pass_a_ms, "SLM single-pass completed");
+            raw
         }
-        (Err(e), _) | (_, Err(e)) => {
-            // SLM failed/timed out. Heuristic pre-filter was clean, but
-            // the heuristic only catches obvious patterns. Quarantine so
-            // the gap is visible — a DDoS that forces timeouts must not
-            // silently degrade to heuristic-only screening.
+        Err(e) => {
+            // SLM failed/timed out. Quarantine so the gap is visible —
+            // a DDoS that forces timeouts must not silently degrade.
             warn!(engine = %config.engine, "SLM engine failed: {e} — quarantining (unscreened)");
             return ScreeningResult {
                 decision: ScreeningDecision::Quarantine(format!(
@@ -237,51 +230,23 @@ pub fn screen_content_rich(config: &LoopbackConfig, content: &str) -> ScreeningR
         }
     };
 
-    // 3. Parse both pass outputs and merge annotations
-    let output_a = parse_slm_output(&raw_a, &EngineProfile::Loopback);
-    let output_b = parse_slm_output(&raw_b, &EngineProfile::Loopback);
-
-    let slm_output = match (output_a, output_b) {
-        (Ok(a), Ok(b)) => {
-            // Merge: take higher confidence, combine annotations and explanations
-            let mut merged = a;
-            merged.annotations.extend(b.annotations);
-            if b.confidence > merged.confidence {
-                merged.confidence = b.confidence;
-            }
-            if !b.explanation.is_empty() && b.explanation != merged.explanation {
-                if !merged.explanation.is_empty() {
-                    merged.explanation.push_str("; ");
-                }
-                merged.explanation.push_str(&b.explanation);
-            }
-            merged
-        }
-        (Ok(a), Err(e)) => {
-            warn!("Pass B parse failed: {e}");
-            a
-        }
-        (Err(e), Ok(b)) => {
-            warn!("Pass A parse failed: {e}");
-            b
-        }
-        (Err(ea), Err(eb)) => {
-            // Both SLM passes produced unparseable output. The SLM ran
-            // but couldn't produce a usable verdict — quarantine so the
-            // gap is visible in the dashboard.
-            warn!("Both SLM passes parse failed: A={ea}, B={eb} — quarantining (unscreened)");
+    // 3. Parse the combined output
+    let slm_output = match parse_slm_output(&raw_output, &EngineProfile::Loopback) {
+        Ok(output) => output,
+        Err(e) => {
+            warn!("SLM parse failed: {e} — quarantining (unscreened)");
             return ScreeningResult {
                 decision: ScreeningDecision::Quarantine(format!(
-                    "slm_parse_failure: A={ea}, B={eb} (heuristic pre-filter clean, SLM unscreened)"
+                    "slm_parse_failure: {e} (heuristic pre-filter clean, SLM unscreened)"
                 )),
                 enriched: None,
                 holster: None,
                 timing: ScreeningTiming {
                     total_ms: pipeline_start.elapsed().as_millis() as u64,
-                    pass_a_ms: pass_a_time,
-                    pass_b_ms: pass_b_time,
+                    pass_a_ms: Some(pass_a_ms),
+                    pass_b_ms: None,
                     classifier_ms,
-                    engine: actual_engine,
+                    engine: engine_name,
                 },
             };
         }
@@ -342,10 +307,10 @@ pub fn screen_content_rich(config: &LoopbackConfig, content: &str) -> ScreeningR
         holster: Some(holster_result),
         timing: ScreeningTiming {
             total_ms: pipeline_start.elapsed().as_millis() as u64,
-            pass_a_ms: pass_a_time,
-            pass_b_ms: pass_b_time,
+            pass_a_ms: Some(pass_a_ms),
+            pass_b_ms: None,
             classifier_ms,
-            engine: actual_engine,
+            engine: engine_name,
         },
     }
 }
