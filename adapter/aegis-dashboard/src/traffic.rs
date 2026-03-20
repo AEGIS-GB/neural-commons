@@ -32,6 +32,12 @@ pub struct TrafficEntry {
     pub duration_ms: u64,
     /// Whether the response was streamed (SSE).
     pub is_streaming: bool,
+    /// SLM screening duration in milliseconds (None if SLM not run).
+    pub slm_duration_ms: Option<u64>,
+    /// SLM verdict: "admit", "quarantine", or "reject" (None if not run).
+    pub slm_verdict: Option<String>,
+    /// SLM threat score in basis points 0–10000 (None if not run).
+    pub slm_threat_score: Option<u32>,
 }
 
 const MAX_BODY_CAPTURE: usize = 256 * 1024; // 256KB per body — large enough for streaming responses with tool schemas
@@ -52,7 +58,7 @@ impl TrafficStore {
         }
     }
 
-    /// Record a request/response pair.
+    /// Record a request/response pair with optional SLM screening data.
     pub fn record(
         &self,
         method: &str,
@@ -62,6 +68,9 @@ impl TrafficStore {
         resp_body: &[u8],
         duration_ms: u64,
         is_streaming: bool,
+        slm_duration_ms: Option<u64>,
+        slm_verdict: Option<&str>,
+        slm_threat_score: Option<u32>,
     ) {
         let req_str = String::from_utf8_lossy(
             &req_body[..req_body.len().min(MAX_BODY_CAPTURE)]
@@ -92,6 +101,9 @@ impl TrafficStore {
             response_size: resp_body.len(),
             duration_ms,
             is_streaming,
+            slm_duration_ms,
+            slm_verdict: slm_verdict.map(|s| s.to_string()),
+            slm_threat_score,
         };
 
         let mut entries = self.entries.write().unwrap();

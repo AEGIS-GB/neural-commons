@@ -3,13 +3,15 @@
 //! The full HTML/CSS/JS dashboard is embedded in the binary as a static string.
 //! Total size target: <50KB.
 //!
-//! 6 tabs:
+//! 8 tabs:
 //!   1. Overview — "nothing changed, here's what we see" (first screen)
 //!   2. Evidence Explorer — receipt chain viewer
 //!   3. Vulnerability Scan — vault findings
 //!   4. Service Access — per-tool access log
 //!   5. Memory Health — memory file integrity
-//!   6. Emergency Alerts — broadcast messages
+//!   6. SLM Screening — screening verdicts, timing, threat scores
+//!   7. Traffic Inspector — request/response inspector with SLM column
+//!   8. Emergency Alerts — broadcast messages
 //!
 //! Refresh: 2s polling via fetch() to /dashboard/api/* endpoints (D12).
 
@@ -67,6 +69,30 @@ table.dtable tr:hover{background:#1c2128}
 .body-pre{background:#0d1117;border:1px solid #30363d;border-radius:6px;padding:12px;font-family:monospace;font-size:12px;color:#c9d1d9;overflow-x:auto;max-height:400px;overflow-y:auto;white-space:pre-wrap;word-break:break-word;margin:8px 0}
 .detail-back{cursor:pointer;color:#58a6ff;font-size:13px;margin-bottom:12px;display:inline-block}
 .detail-back:hover{text-decoration:underline}
+.flow-node{padding:8px 14px;border-radius:8px;font-size:12px;font-weight:500;text-align:center;min-width:70px;line-height:1.4}
+.flow-arrow{color:#30363d;font-size:18px;padding:0 2px;flex-shrink:0}
+.flow-in{background:#1f2d3d;color:#58a6ff;border:1px solid #1f6feb}
+.flow-parse{background:#21262d;color:#8b949e;border:1px solid #30363d}
+.flow-enrich{background:#2d2a1f;color:#d29922;border:1px solid #9e6a03}
+.flow-holster{background:#1f2d1f;color:#3fb950;border:1px solid #238636}
+.flow-decision{background:#21262d;color:#e1e4e8;border:2px solid #58a6ff;font-weight:600}
+.flow-node-caught{background:#2d1f1f;color:#f85149;border:2px solid #da3633;font-weight:600}
+.flow-ms{font-size:10px;color:#8b949e;font-weight:400}
+.filter-btn{background:#21262d;color:#8b949e;border:1px solid #30363d;padding:5px 14px;border-radius:16px;font-size:12px;cursor:pointer;font-weight:500}
+.filter-btn:hover{background:#30363d;color:#e1e4e8}
+.filter-btn.filter-active{background:#1f2d3d;color:#58a6ff;border-color:#1f6feb}
+.dim-bar{display:flex;align-items:center;gap:6px;margin:3px 0}
+.dim-bar-label{font-size:11px;color:#8b949e;width:80px;text-align:right}
+.dim-bar-track{width:120px;height:6px;background:#21262d;border-radius:3px;overflow:hidden}
+.dim-bar-fill{height:100%;border-radius:3px}
+.dim-bar-val{font-size:10px;color:#8b949e;width:40px}
+.timing-bar{display:flex;height:20px;border-radius:4px;overflow:hidden;background:#21262d;margin:8px 0}
+.timing-seg{display:flex;align-items:center;justify-content:center;font-size:10px;color:#fff;min-width:20px;white-space:nowrap;padding:0 4px}
+.slm-detail-card{background:#161b22;border:1px solid #30363d;border-radius:8px;padding:20px;margin-top:16px}
+.slm-detail-grid{display:grid;grid-template-columns:1fr 1fr;gap:20px}
+@media(max-width:700px){.slm-detail-grid{grid-template-columns:1fr}}
+table.dtable .screening-row{cursor:pointer}
+table.dtable .screening-row:hover{background:#1c2128}
 </style>
 </head>
 <body>
@@ -83,6 +109,7 @@ table.dtable tr:hover{background:#1c2128}
 <div class="tab" data-tab="vault">Vault Scan</div>
 <div class="tab" data-tab="access">Access</div>
 <div class="tab" data-tab="memory">Memory</div>
+<div class="tab" data-tab="slm">SLM Screening</div>
 <div class="tab" data-tab="traffic">Traffic</div>
 <div class="tab" data-tab="alerts">Alerts</div>
 </div>
@@ -119,6 +146,19 @@ table.dtable tr:hover{background:#1c2128}
 <div class="grid" id="memory-stats"></div>
 <div id="memory-files"></div>
 </div></div>
+<div class="panel" id="panel-slm">
+<div class="grid" id="slm-stats"></div>
+<div class="card"><h2>Screening Log</h2>
+<div id="slm-filters" style="display:flex;gap:8px;margin-bottom:12px">
+  <button class="filter-btn filter-active" data-filter="all" onclick="slmFilter('all')">All</button>
+  <button class="filter-btn" data-filter="admit" onclick="slmFilter('admit')">Admit</button>
+  <button class="filter-btn" data-filter="quarantine" onclick="slmFilter('quarantine')">Quarantine</button>
+  <button class="filter-btn" data-filter="reject" onclick="slmFilter('reject')">Reject</button>
+</div>
+<div id="slm-table"></div>
+</div>
+<div id="slm-detail" style="display:none"></div>
+</div>
 <div class="panel" id="panel-traffic">
 <div class="card"><h2>Traffic Inspector</h2>
 <div class="grid" id="traffic-stats"></div>
@@ -222,6 +262,12 @@ async function poll(){
       const m=await(await fetch('/dashboard/api/memory')).json();
       document.getElementById('stat-memory').textContent=m.tracked_files;
       if(activeTab==='memory'){renderMemory(m);}
+    }catch(e){}
+  }
+  if(activeTab==='slm'){
+    try{
+      const sl=await(await fetch('/dashboard/api/slm')).json();
+      renderSlm(sl);
     }catch(e){}
   }
   if(activeTab==='traffic'){
@@ -335,6 +381,234 @@ function renderMemory(m){
   h+='</table>';
   files.innerHTML=h;
 }
+function verdictBadge(v){
+  if(v==='reject')return'<span class="badge badge-red">reject</span>';
+  if(v==='quarantine')return'<span class="badge badge-yellow">quarantine</span>';
+  return'<span class="badge badge-green">admit</span>';
+}
+function threatBar(score){
+  const pct=Math.min(100,score/100);
+  const color=score>=8000?'#f85149':score>=5000?'#d29922':'#3fb950';
+  return'<div style="display:flex;align-items:center;gap:6px"><div style="width:60px;height:6px;background:#21262d;border-radius:3px;overflow:hidden"><div style="width:'+pct+'%;height:100%;background:'+color+'"></div></div><span style="font-size:11px;color:#8b949e">'+score+'</span></div>';
+}
+let slmData=null;
+let slmFilterVal='all';
+function slmFilter(f){
+  slmFilterVal=f;
+  document.querySelectorAll('.filter-btn').forEach(b=>{b.classList.toggle('filter-active',b.dataset.filter===f);});
+  if(slmData)renderSlmTable(slmData);
+}
+function renderSlm(sl){
+  slmData=sl;
+  const stats=document.getElementById('slm-stats');
+  // Stats cards — 5 cards: total, verdicts, avg, p95/max, engine mix
+  let sc='<div class="card"><div class="stat">'+sl.total_screenings+'</div><div class="stat-label">Total Screenings</div></div>';
+  const total=sl.total_screenings||1;
+  const aPct=Math.round(sl.verdict_counts.admit/total*100);
+  const qPct=Math.round(sl.verdict_counts.quarantine/total*100);
+  const rPct=Math.round(sl.verdict_counts.reject/total*100);
+  sc+='<div class="card"><div style="display:flex;gap:10px;align-items:baseline;flex-wrap:wrap">'+verdictBadge('admit')+' <span class="stat" style="font-size:22px">'+sl.verdict_counts.admit+'</span><span style="font-size:12px;color:#8b949e">('+aPct+'%)</span>'+verdictBadge('quarantine')+' <span class="stat" style="font-size:22px;color:#d29922">'+sl.verdict_counts.quarantine+'</span><span style="font-size:12px;color:#8b949e">('+qPct+'%)</span>'+verdictBadge('reject')+' <span class="stat" style="font-size:22px;color:#f85149">'+sl.verdict_counts.reject+'</span><span style="font-size:12px;color:#8b949e">('+rPct+'%)</span></div>';
+  // Stacked verdict bar
+  sc+='<div style="display:flex;height:8px;border-radius:4px;overflow:hidden;margin-top:8px;background:#21262d">';
+  if(aPct>0)sc+='<div style="width:'+aPct+'%;background:#3fb950"></div>';
+  if(qPct>0)sc+='<div style="width:'+qPct+'%;background:#d29922"></div>';
+  if(rPct>0)sc+='<div style="width:'+rPct+'%;background:#f85149"></div>';
+  sc+='</div><div class="stat-label">Verdict Distribution</div></div>';
+  sc+='<div class="card"><div class="stat">'+sl.timing_stats.avg_ms+'<span style="font-size:14px">ms</span></div><div class="stat-label">Avg Screening Time</div></div>';
+  sc+='<div class="card"><div class="stat">'+sl.timing_stats.p95_ms+'<span style="font-size:14px">ms</span> <span style="font-size:14px;color:#8b949e">/ '+sl.timing_stats.max_ms+'ms</span></div><div class="stat-label">P95 / Max Latency</div></div>';
+  stats.innerHTML=sc;
+  renderSlmTable(sl);
+}
+function renderSlmTable(sl){
+  const tbl=document.getElementById('slm-table');
+  const detail=document.getElementById('slm-detail');
+  if(detail.style.display!=='none')return; // don't overwrite detail view
+  if(!sl.recent_screenings||sl.recent_screenings.length===0){tbl.innerHTML='<p class="empty-state">No SLM screenings recorded yet.</p>';return;}
+  const filtered=slmFilterVal==='all'?sl.recent_screenings:sl.recent_screenings.filter(e=>e.action===slmFilterVal);
+  let h='<table class="dtable"><tr><th>Time</th><th>Verdict</th><th>Threat Score</th><th>Intent</th><th>Timing</th><th>Engine</th><th></th></tr>';
+  for(const e of filtered){
+    h+='<tr class="screening-row" onclick="showSlmDetail('+e.seq+')">';
+    h+='<td style="white-space:nowrap">'+fmtTimeShort(e.ts_ms)+'</td>';
+    h+='<td>'+verdictBadge(e.action)+'</td>';
+    h+='<td>'+threatBar(e.threat_score)+'</td>';
+    h+='<td><span class="badge badge-'+(e.intent==='benign'?'green':e.intent==='inject'||e.intent==='exfiltrate'?'red':'yellow')+'">'+e.intent+'</span></td>';
+    // Mini timing breakdown
+    h+='<td style="white-space:nowrap"><div class="timing-bar" style="width:100px;height:14px">';
+    const tot=e.screening_ms||1;
+    const a=e.pass_a_ms||0,b=e.pass_b_ms||0,c=e.classifier_ms||0;
+    if(a>0)h+='<div class="timing-seg" style="width:'+Math.max(10,a/tot*100)+'%;background:#d29922" title="Pass A: '+a+'ms"></div>';
+    if(b>0)h+='<div class="timing-seg" style="width:'+Math.max(10,b/tot*100)+'%;background:#58a6ff" title="Pass B: '+b+'ms"></div>';
+    if(c>0)h+='<div class="timing-seg" style="width:'+Math.max(10,c/tot*100)+'%;background:#3fb950" title="Classifier: '+c+'ms"></div>';
+    if(a===0&&b===0&&c===0)h+='<div class="timing-seg" style="width:100%;background:#8b949e" title="Total: '+tot+'ms"></div>';
+    h+='</div><span style="font-size:10px;color:#8b949e">'+e.screening_ms+'ms</span></td>';
+    h+='<td><span class="badge badge-gray">'+e.engine+'</span></td>';
+    h+='<td style="font-size:11px;color:#58a6ff;cursor:pointer">detail →</td>';
+    h+='</tr>';
+  }
+  h+='</table>';
+  if(filtered.length===0)h='<p class="empty-state">No '+slmFilterVal+' screenings found.</p>';
+  tbl.innerHTML=h;
+}
+function escHtml(s){const d=document.createElement('div');d.textContent=s;return d.innerHTML;}
+function layerStatus(detected,label){
+  if(detected)return'<div style="display:flex;align-items:center;gap:6px"><span style="color:#f85149;font-size:14px">⛔</span><span style="font-size:12px;color:#f85149;font-weight:600">'+label+' — CAUGHT</span></div>';
+  return'<div style="display:flex;align-items:center;gap:6px"><span style="color:#3fb950;font-size:14px">✓</span><span style="font-size:12px;color:#3fb950">'+label+' — clear</span></div>';
+}
+function showSlmDetail(seq){
+  if(!slmData)return;
+  const e=slmData.recent_screenings.find(s=>s.seq===seq);
+  if(!e)return;
+  const detail=document.getElementById('slm-detail');
+  detail.style.display='block';
+  const anns=e.annotations||[];
+  const hasPatterns=anns.length>0;
+  const isDangerous=e.action==='reject'||e.action==='quarantine';
+  let h='<div class="slm-detail-card">';
+  h+='<span class="detail-back" onclick="closeSlmDetail()">← Back to screening list</span>';
+  h+='<h2 style="font-size:16px;margin:12px 0 16px">Screening #'+e.seq+' — '+verdictBadge(e.action)+' <span style="font-size:13px;color:#8b949e">'+new Date(e.ts_ms).toLocaleString()+'</span></h2>';
+  // ── SCREENED TEXT ──
+  if(e.screened_text){
+    h+='<div style="margin-bottom:16px"><div style="font-size:12px;color:#8b949e;margin-bottom:6px">SCREENED TEXT</div>';
+    let stxt=escHtml(e.screened_text);
+    // Highlight matched excerpts in the text
+    if(anns.length>0){for(const ann of anns){const ex=escHtml(ann.excerpt);if(ex&&stxt.includes(ex)){stxt=stxt.replace(ex,'<mark style="background:#5c2d0e;color:#f0883e;padding:1px 2px;border-radius:2px">'+ex+'</mark>');}}}
+    h+='<div class="body-pre" style="max-height:150px">'+stxt+'</div></div>';
+  }
+  // ── REASON BANNER ──
+  if(e.reason&&isDangerous){
+    h+='<div style="margin-bottom:16px;padding:10px 14px;background:'+(e.action==='reject'?'rgba(248,81,73,0.1);border:1px solid #da3633':'rgba(210,153,34,0.1);border:1px solid #9e6a03')+';border-radius:6px">';
+    h+='<div style="font-size:11px;font-weight:600;text-transform:uppercase;margin-bottom:4px;color:'+(e.action==='reject'?'#f85149':'#d29922')+'">'+(e.action==='reject'?'BLOCKED':'QUARANTINED')+'</div>';
+    h+='<div style="font-size:13px;color:#e1e4e8">'+escHtml(e.reason)+'</div></div>';
+  }
+  // ── PIPELINE FLOW (per-entry) ──
+  h+='<div style="margin-bottom:20px"><div style="font-size:12px;color:#8b949e;margin-bottom:10px">SCREENING PIPELINE</div>';
+  h+='<div style="display:flex;flex-wrap:wrap;gap:0;align-items:stretch">';
+  // Stage 1: Input
+  h+='<div class="flow-node flow-in" style="flex:0 0 auto">Input</div><div class="flow-arrow">→</div>';
+  // Stage 2: Pass A (injection)
+  const passA_ran=e.pass_a_ms!=null&&e.pass_a_ms>0;
+  const passA_caught=anns.some(a=>['DirectInjection','IndirectInjection','PersonaHijack','AuthorityEscalation','EncodingEvasion','BoundaryErosion','MemoryPoison'].includes(a.pattern));
+  h+='<div class="flow-node '+(passA_caught?'flow-node-caught':passA_ran?'flow-enrich':'flow-parse')+'" style="flex:0 0 auto">';
+  h+='Pass A<br><span class="flow-ms">'+(passA_ran?e.pass_a_ms+'ms':'skipped')+'</span>';
+  if(passA_caught)h+='<br><span style="font-size:10px;color:#f85149;font-weight:600">CAUGHT</span>';
+  else if(passA_ran)h+='<br><span style="font-size:10px;color:#3fb950">clear</span>';
+  h+='</div><div class="flow-arrow">→</div>';
+  // Stage 3: Pass B (recon)
+  const passB_ran=e.pass_b_ms!=null&&e.pass_b_ms>0;
+  const passB_caught=anns.some(a=>['ExfiltrationAttempt','CredentialProbe','ToolAbuse','LinkInjection'].includes(a.pattern));
+  h+='<div class="flow-node '+(passB_caught?'flow-node-caught':passB_ran?'flow-enrich':'flow-parse')+'" style="flex:0 0 auto">';
+  h+='Pass B<br><span class="flow-ms">'+(passB_ran?e.pass_b_ms+'ms':'skipped')+'</span>';
+  if(passB_caught)h+='<br><span style="font-size:10px;color:#f85149;font-weight:600">CAUGHT</span>';
+  else if(passB_ran)h+='<br><span style="font-size:10px;color:#3fb950">clear</span>';
+  h+='</div><div class="flow-arrow">→</div>';
+  // Stage 4: Classifier (if ran)
+  const cls_ran=e.classifier_ms!=null&&e.classifier_ms>0;
+  if(cls_ran){
+    h+='<div class="flow-node flow-holster" style="flex:0 0 auto">Classifier<br><span class="flow-ms">'+e.classifier_ms+'ms</span></div><div class="flow-arrow">→</div>';
+  }
+  // Stage 5: Holster
+  const holsterColor=e.action==='reject'?'#2d1f1f':e.action==='quarantine'?'#2d2a1f':'#1f2d1f';
+  const holsterBorder=e.action==='reject'?'#da3633':e.action==='quarantine'?'#9e6a03':'#238636';
+  const holsterText=e.action==='reject'?'#f85149':e.action==='quarantine'?'#d29922':'#3fb950';
+  h+='<div class="flow-node" style="flex:0 0 auto;background:'+holsterColor+';color:'+holsterText+';border:2px solid '+holsterBorder+';font-weight:600">';
+  h+=(e.holster_profile||'Holster')+'<br><span style="font-size:12px">→ '+e.action.toUpperCase()+'</span>';
+  if(e.threshold_exceeded)h+='<br><span style="font-size:10px">threshold exceeded</span>';
+  h+='</div>';
+  h+='</div></div>';
+  // ── LAYER-BY-LAYER BREAKDOWN ──
+  h+='<div style="margin-bottom:20px"><div style="font-size:12px;color:#8b949e;margin-bottom:10px">LAYER RESULTS</div>';
+  h+='<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">';
+  // Pass A result
+  h+='<div style="padding:10px 14px;background:#0d1117;border:1px solid #30363d;border-radius:6px">';
+  h+='<div style="font-size:11px;font-weight:600;color:#d29922;margin-bottom:6px">PASS A — Injection Detection</div>';
+  if(passA_ran){
+    const passA_anns=anns.filter(a=>['DirectInjection','IndirectInjection','PersonaHijack','AuthorityEscalation','EncodingEvasion','BoundaryErosion','MemoryPoison'].includes(a.pattern));
+    if(passA_anns.length>0){
+      h+='<div style="color:#f85149;font-size:12px;font-weight:600;margin-bottom:4px">'+passA_anns.length+' pattern(s) detected</div>';
+      for(const a of passA_anns)h+='<div style="font-size:11px;margin:2px 0"><span class="badge badge-red" style="font-size:10px">'+escHtml(a.pattern)+'</span> <span style="color:#8b949e">sev:'+a.severity+'</span></div>';
+    }else{h+='<div style="color:#3fb950;font-size:12px">No injection patterns found</div>';}
+    h+='<div style="font-size:10px;color:#8b949e;margin-top:4px">'+e.pass_a_ms+'ms</div>';
+  }else{h+='<div style="color:#8b949e;font-size:12px">Did not run</div>';}
+  h+='</div>';
+  // Pass B result
+  h+='<div style="padding:10px 14px;background:#0d1117;border:1px solid #30363d;border-radius:6px">';
+  h+='<div style="font-size:11px;font-weight:600;color:#58a6ff;margin-bottom:6px">PASS B — Recon / Exfiltration</div>';
+  if(passB_ran){
+    const passB_anns=anns.filter(a=>['ExfiltrationAttempt','CredentialProbe','ToolAbuse','LinkInjection'].includes(a.pattern));
+    if(passB_anns.length>0){
+      h+='<div style="color:#f85149;font-size:12px;font-weight:600;margin-bottom:4px">'+passB_anns.length+' pattern(s) detected</div>';
+      for(const a of passB_anns)h+='<div style="font-size:11px;margin:2px 0"><span class="badge badge-red" style="font-size:10px">'+escHtml(a.pattern)+'</span> <span style="color:#8b949e">sev:'+a.severity+'</span></div>';
+    }else{h+='<div style="color:#3fb950;font-size:12px">No recon patterns found</div>';}
+    h+='<div style="font-size:10px;color:#8b949e;margin-top:4px">'+e.pass_b_ms+'ms</div>';
+  }else{h+='<div style="color:#8b949e;font-size:12px">Did not run</div>';}
+  h+='</div>';
+  // Holster decision
+  h+='<div style="padding:10px 14px;background:#0d1117;border:1px solid #30363d;border-radius:6px">';
+  h+='<div style="font-size:11px;font-weight:600;color:#a371f7;margin-bottom:6px">HOLSTER — Final Decision</div>';
+  h+='<div style="font-size:13px;font-weight:600;color:'+holsterText+'">'+e.action.toUpperCase()+'</div>';
+  if(e.holster_profile)h+='<div style="font-size:11px;color:#8b949e;margin-top:2px">Profile: '+e.holster_profile+'</div>';
+  if(e.threshold_exceeded!=null)h+='<div style="font-size:11px;color:#8b949e">Threshold: <span style="color:'+(e.threshold_exceeded?'#f85149':'#3fb950')+'">'+(e.threshold_exceeded?'exceeded':'within limits')+'</span></div>';
+  if(e.escalated)h+='<div style="font-size:11px;color:#d29922">Escalated from lower engine</div>';
+  h+='</div>';
+  // Timing
+  h+='<div style="padding:10px 14px;background:#0d1117;border:1px solid #30363d;border-radius:6px">';
+  h+='<div style="font-size:11px;font-weight:600;color:#8b949e;margin-bottom:6px">TIMING</div>';
+  const tot=e.screening_ms||1;
+  h+='<div class="timing-bar" style="height:22px;margin-bottom:6px">';
+  const a=e.pass_a_ms||0,b=e.pass_b_ms||0,c=e.classifier_ms||0,oth=Math.max(0,tot-a-b-c);
+  if(a>0)h+='<div class="timing-seg" style="width:'+Math.max(8,a/tot*100)+'%;background:#d29922">A:'+a+'ms</div>';
+  if(b>0)h+='<div class="timing-seg" style="width:'+Math.max(8,b/tot*100)+'%;background:#58a6ff">B:'+b+'ms</div>';
+  if(c>0)h+='<div class="timing-seg" style="width:'+Math.max(8,c/tot*100)+'%;background:#3fb950">C:'+c+'ms</div>';
+  if(oth>0&&(a>0||b>0||c>0))h+='<div class="timing-seg" style="width:'+Math.max(8,oth/tot*100)+'%;background:#30363d">'+oth+'ms</div>';
+  if(a===0&&b===0&&c===0)h+='<div class="timing-seg" style="width:100%;background:#8b949e">'+tot+'ms</div>';
+  h+='</div>';
+  h+='<div style="font-size:12px;color:#e1e4e8;font-weight:600">Total: '+e.screening_ms+'ms</div>';
+  h+='<div style="font-size:11px;color:#8b949e">Engine: '+e.engine+'</div>';
+  h+='</div>';
+  h+='</div></div>';
+  // ── DETECTED PATTERNS (full detail) ──
+  if(anns.length>0){
+    h+='<div style="margin-bottom:20px"><div style="font-size:12px;color:#8b949e;margin-bottom:10px">DETECTED PATTERNS ('+anns.length+')</div>';
+    for(const ann of anns){
+      const sevColor=ann.severity>=8000?'#f85149':ann.severity>=5000?'#d29922':'#58a6ff';
+      h+='<div style="padding:10px 14px;background:#0d1117;border-left:3px solid '+sevColor+';border-radius:0 6px 6px 0;margin-bottom:8px">';
+      h+='<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">';
+      h+='<span class="badge badge-red">'+escHtml(ann.pattern)+'</span>';
+      h+='<span style="font-size:12px;font-weight:600;color:'+sevColor+'">'+ann.severity+' / 10000</span>';
+      h+='</div>';
+      h+='<div style="font-family:monospace;font-size:12px;color:#f0883e;background:#1c1208;padding:6px 10px;border-radius:4px;overflow-x:auto">"'+escHtml(ann.excerpt)+'"</div>';
+      h+='</div>';
+    }
+    h+='</div>';
+  }
+  // ── DIMENSIONS ──
+  if(e.dimensions){
+    h+='<div style="margin-bottom:20px"><div style="font-size:12px;color:#8b949e;margin-bottom:10px">THREAT DIMENSIONS</div>';
+    h+='<div style="display:grid;grid-template-columns:1fr 1fr;gap:4px 20px">';
+    const dims=[['Injection',e.dimensions.injection],['Manipulation',e.dimensions.manipulation],['Exfiltration',e.dimensions.exfiltration],['Persistence',e.dimensions.persistence],['Evasion',e.dimensions.evasion]];
+    for(const[name,val] of dims){
+      const pct=Math.min(100,val/100);
+      const color=val>=8000?'#f85149':val>=5000?'#d29922':val>0?'#58a6ff':'#30363d';
+      h+='<div class="dim-bar"><span class="dim-bar-label">'+name+'</span><div class="dim-bar-track"><div class="dim-bar-fill" style="width:'+pct+'%;background:'+color+'"></div></div><span class="dim-bar-val" style="color:'+color+'">'+val+'</span></div>';
+    }
+    h+='</div></div>';
+  }
+  // ── SLM EXPLANATION ──
+  if(e.explanation){
+    h+='<div style="margin-bottom:16px"><div style="font-size:12px;color:#8b949e;margin-bottom:6px">SLM EXPLANATION</div>';
+    h+='<div style="font-size:13px;color:#c9d1d9;font-style:italic;padding:10px 14px;background:#0d1117;border:1px solid #30363d;border-radius:6px">'+escHtml(e.explanation)+'</div></div>';
+  }
+  // ── METADATA ──
+  h+='<div style="font-size:11px;color:#30363d;margin-top:8px">seq='+e.seq+' confidence='+e.confidence+' annotations='+e.annotation_count+' engine='+e.engine+'</div>';
+  h+='</div>';
+  detail.innerHTML=h;
+}
+function closeSlmDetail(){
+  const detail=document.getElementById('slm-detail');
+  detail.style.display='none';
+  detail.innerHTML='';
+  if(slmData)renderSlmTable(slmData);
+}
 let trafficDetailId=null;
 function renderTraffic(data){
   if(trafficDetailId)return; // don't overwrite detail view
@@ -347,7 +621,7 @@ function renderTraffic(data){
   sc+='<div class="card"><div class="stat">'+avgDur+'ms</div><div class="stat-label">Avg Latency</div></div>';
   stats.innerHTML=sc;
   if(!data.entries||data.entries.length===0){tbl.innerHTML='<p class="empty-state">No traffic captured yet. Send requests through the proxy to see them here.</p>';return;}
-  let h='<table class="dtable"><tr><th>#</th><th>Time</th><th>Method</th><th>Path</th><th>Status</th><th>Req Size</th><th>Resp Size</th><th>Duration</th><th>Type</th></tr>';
+  let h='<table class="dtable"><tr><th>#</th><th>Time</th><th>Method</th><th>Path</th><th>Status</th><th>SLM</th><th>Req Size</th><th>Resp Size</th><th>Duration</th><th>Type</th></tr>';
   for(const e of data.entries){
     const sc2=e.status<400?'badge-green':'badge-red';
     h+='<tr class="traffic-row" onclick="showTrafficDetail('+e.id+')">';
@@ -356,6 +630,7 @@ function renderTraffic(data){
     h+='<td><span class="badge badge-blue">'+e.method+'</span></td>';
     h+='<td style="max-width:250px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+esc(e.path)+'</td>';
     h+='<td><span class="badge '+sc2+'">'+e.status+'</span></td>';
+    h+='<td>'+(e.slm_verdict?verdictBadge(e.slm_verdict)+' <span style="font-size:11px;color:#8b949e">'+(e.slm_duration_ms||0)+'ms</span>':'<span style="color:#30363d;font-size:11px">—</span>')+'</td>';
     h+='<td>'+fmtBytes(e.request_size)+'</td>';
     h+='<td>'+fmtBytes(e.response_size)+'</td>';
     h+='<td>'+e.duration_ms+'ms</td>';
@@ -386,6 +661,7 @@ async function showTrafficDetail(id){
     h+='<span style="color:#8b949e;font-size:12px">'+e.duration_ms+'ms</span>';
     h+='<span style="color:#8b949e;font-size:12px">'+(e.is_streaming?'streaming':'')+'</span>';
     h+='<span style="color:#8b949e;font-size:12px">'+fmtTime(e.ts_ms)+'</span>';
+    if(e.slm_verdict){h+=' '+verdictBadge(e.slm_verdict)+' <span style="font-size:12px;color:#8b949e">score:'+(e.slm_threat_score||0)+' '+(e.slm_duration_ms||0)+'ms</span>';}
     h+='</div>';
     // Chat view if we have parsed messages
     if(d.chat&&d.chat.length>0){
