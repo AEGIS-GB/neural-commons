@@ -130,7 +130,7 @@ impl SlmEngine for OllamaEngine {
             prompt,
             stream: false,
             format: "json",
-            options: OllamaOptions { num_predict: 512 },
+            options: OllamaOptions { num_predict: 256 },
         };
 
         debug!(
