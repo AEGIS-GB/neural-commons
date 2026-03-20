@@ -90,7 +90,7 @@ impl SlmEngine for OpenAiCompatEngine {
                 content: prompt,
             }],
             temperature: 0.0,
-            max_tokens: 512,
+            max_tokens: 256,
             response_format: None,
         };
 

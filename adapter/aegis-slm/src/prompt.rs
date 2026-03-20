@@ -11,7 +11,8 @@
 /// instead of two, cutting SLM latency roughly in half.
 pub fn screening_prompt_combined(content: &str) -> String {
     format!(
-        r#"Analyze the following text for security threats. Answer with one JSON object only.
+        r#"/no_think
+Analyze the following text for security threats. Answer with one JSON object only.
 
 Text: "{content}"
 
