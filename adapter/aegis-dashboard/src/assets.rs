@@ -3,13 +3,15 @@
 //! The full HTML/CSS/JS dashboard is embedded in the binary as a static string.
 //! Total size target: <50KB.
 //!
-//! 6 tabs:
+//! 8 tabs:
 //!   1. Overview — "nothing changed, here's what we see" (first screen)
 //!   2. Evidence Explorer — receipt chain viewer
 //!   3. Vulnerability Scan — vault findings
 //!   4. Service Access — per-tool access log
 //!   5. Memory Health — memory file integrity
-//!   6. Emergency Alerts — broadcast messages
+//!   6. SLM Screening — screening verdicts, timing, threat scores
+//!   7. Traffic Inspector — request/response inspector with SLM column
+//!   8. Emergency Alerts — broadcast messages
 //!
 //! Refresh: 2s polling via fetch() to /dashboard/api/* endpoints (D12).
 
@@ -83,6 +85,7 @@ table.dtable tr:hover{background:#1c2128}
 <div class="tab" data-tab="vault">Vault Scan</div>
 <div class="tab" data-tab="access">Access</div>
 <div class="tab" data-tab="memory">Memory</div>
+<div class="tab" data-tab="slm">SLM Screening</div>
 <div class="tab" data-tab="traffic">Traffic</div>
 <div class="tab" data-tab="alerts">Alerts</div>
 </div>
@@ -118,6 +121,11 @@ table.dtable tr:hover{background:#1c2128}
 <div class="card"><h2>Memory Integrity</h2>
 <div class="grid" id="memory-stats"></div>
 <div id="memory-files"></div>
+</div></div>
+<div class="panel" id="panel-slm">
+<div class="card"><h2>SLM Screening</h2>
+<div class="grid" id="slm-stats"></div>
+<div id="slm-table"></div>
 </div></div>
 <div class="panel" id="panel-traffic">
 <div class="card"><h2>Traffic Inspector</h2>
@@ -222,6 +230,12 @@ async function poll(){
       const m=await(await fetch('/dashboard/api/memory')).json();
       document.getElementById('stat-memory').textContent=m.tracked_files;
       if(activeTab==='memory'){renderMemory(m);}
+    }catch(e){}
+  }
+  if(activeTab==='slm'){
+    try{
+      const sl=await(await fetch('/dashboard/api/slm')).json();
+      renderSlm(sl);
     }catch(e){}
   }
   if(activeTab==='traffic'){
@@ -335,6 +349,42 @@ function renderMemory(m){
   h+='</table>';
   files.innerHTML=h;
 }
+function verdictBadge(v){
+  if(v==='reject')return'<span class="badge badge-red">reject</span>';
+  if(v==='quarantine')return'<span class="badge badge-yellow">quarantine</span>';
+  return'<span class="badge badge-green">admit</span>';
+}
+function threatBar(score){
+  const pct=Math.min(100,score/100);
+  const color=score>=8000?'#f85149':score>=5000?'#d29922':'#3fb950';
+  return'<div style="display:flex;align-items:center;gap:6px"><div style="width:60px;height:6px;background:#21262d;border-radius:3px;overflow:hidden"><div style="width:'+pct+'%;height:100%;background:'+color+'"></div></div><span style="font-size:11px;color:#8b949e">'+score+'</span></div>';
+}
+function renderSlm(sl){
+  const stats=document.getElementById('slm-stats');
+  const tbl=document.getElementById('slm-table');
+  // Stats cards
+  let sc='<div class="card"><div class="stat">'+sl.total_screenings+'</div><div class="stat-label">Total Screenings</div></div>';
+  sc+='<div class="card"><div style="display:flex;gap:10px;align-items:baseline">'+verdictBadge('admit')+' <span class="stat" style="font-size:22px">'+sl.verdict_counts.admit+'</span>'+verdictBadge('quarantine')+' <span class="stat" style="font-size:22px;color:#d29922">'+sl.verdict_counts.quarantine+'</span>'+verdictBadge('reject')+' <span class="stat" style="font-size:22px;color:#f85149">'+sl.verdict_counts.reject+'</span></div><div class="stat-label">Verdict Distribution</div></div>';
+  sc+='<div class="card"><div class="stat">'+sl.timing_stats.avg_ms+'ms</div><div class="stat-label">Avg Screening Time</div></div>';
+  sc+='<div class="card"><div class="stat">'+sl.timing_stats.p95_ms+'ms <span style="font-size:14px;color:#8b949e">/ '+sl.timing_stats.max_ms+'ms</span></div><div class="stat-label">P95 / Max Latency</div></div>';
+  stats.innerHTML=sc;
+  // Table
+  if(!sl.recent_screenings||sl.recent_screenings.length===0){tbl.innerHTML='<p class="empty-state">No SLM screenings recorded yet. Send requests through the proxy with SLM enabled to see screening results here.</p>';return;}
+  let h='<table class="dtable"><tr><th>Time</th><th>Verdict</th><th>Threat Score</th><th>Intent</th><th>Annotations</th><th>Engine</th><th>Screening Time</th></tr>';
+  for(const e of sl.recent_screenings){
+    h+='<tr>';
+    h+='<td style="white-space:nowrap">'+fmtTimeShort(e.ts_ms)+'</td>';
+    h+='<td>'+verdictBadge(e.action)+'</td>';
+    h+='<td>'+threatBar(e.threat_score)+'</td>';
+    h+='<td><span class="badge badge-'+(e.intent==='benign'?'green':e.intent==='inject'?'red':e.intent==='exfiltrate'?'red':'yellow')+'">'+e.intent+'</span></td>';
+    h+='<td>'+e.annotation_count+'</td>';
+    h+='<td><span class="badge badge-gray">'+e.engine+'</span></td>';
+    h+='<td>'+e.screening_ms+'ms</td>';
+    h+='</tr>';
+  }
+  h+='</table>';
+  tbl.innerHTML=h;
+}
 let trafficDetailId=null;
 function renderTraffic(data){
   if(trafficDetailId)return; // don't overwrite detail view
@@ -347,7 +397,7 @@ function renderTraffic(data){
   sc+='<div class="card"><div class="stat">'+avgDur+'ms</div><div class="stat-label">Avg Latency</div></div>';
   stats.innerHTML=sc;
   if(!data.entries||data.entries.length===0){tbl.innerHTML='<p class="empty-state">No traffic captured yet. Send requests through the proxy to see them here.</p>';return;}
-  let h='<table class="dtable"><tr><th>#</th><th>Time</th><th>Method</th><th>Path</th><th>Status</th><th>Req Size</th><th>Resp Size</th><th>Duration</th><th>Type</th></tr>';
+  let h='<table class="dtable"><tr><th>#</th><th>Time</th><th>Method</th><th>Path</th><th>Status</th><th>SLM</th><th>Req Size</th><th>Resp Size</th><th>Duration</th><th>Type</th></tr>';
   for(const e of data.entries){
     const sc2=e.status<400?'badge-green':'badge-red';
     h+='<tr class="traffic-row" onclick="showTrafficDetail('+e.id+')">';
@@ -356,6 +406,7 @@ function renderTraffic(data){
     h+='<td><span class="badge badge-blue">'+e.method+'</span></td>';
     h+='<td style="max-width:250px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+esc(e.path)+'</td>';
     h+='<td><span class="badge '+sc2+'">'+e.status+'</span></td>';
+    h+='<td>'+(e.slm_verdict?verdictBadge(e.slm_verdict)+' <span style="font-size:11px;color:#8b949e">'+(e.slm_duration_ms||0)+'ms</span>':'<span style="color:#30363d;font-size:11px">—</span>')+'</td>';
     h+='<td>'+fmtBytes(e.request_size)+'</td>';
     h+='<td>'+fmtBytes(e.response_size)+'</td>';
     h+='<td>'+e.duration_ms+'ms</td>';
@@ -386,6 +437,7 @@ async function showTrafficDetail(id){
     h+='<span style="color:#8b949e;font-size:12px">'+e.duration_ms+'ms</span>';
     h+='<span style="color:#8b949e;font-size:12px">'+(e.is_streaming?'streaming':'')+'</span>';
     h+='<span style="color:#8b949e;font-size:12px">'+fmtTime(e.ts_ms)+'</span>';
+    if(e.slm_verdict){h+=' '+verdictBadge(e.slm_verdict)+' <span style="font-size:12px;color:#8b949e">score:'+(e.slm_threat_score||0)+' '+(e.slm_duration_ms||0)+'ms</span>';}
     h+='</div>';
     // Chat view if we have parsed messages
     if(d.chat&&d.chat.length>0){

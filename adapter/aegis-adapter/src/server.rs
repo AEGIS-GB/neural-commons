@@ -438,8 +438,12 @@ pub async fn start(
 
     let traffic_recorder: Arc<aegis_proxy::proxy::TrafficRecorder> = {
         let ts = traffic_store.clone();
-        Arc::new(move |method: &str, path: &str, status: u16, req: &[u8], resp: &[u8], dur: u64, streaming: bool| {
-            ts.record(method, path, status, req, resp, dur, streaming);
+        Arc::new(move |method: &str, path: &str, status: u16, req: &[u8], resp: &[u8], dur: u64, streaming: bool, slm_verdict: Option<&aegis_proxy::middleware::SlmVerdict>| {
+            let (slm_dur, slm_action, slm_score) = match slm_verdict {
+                Some(v) => (Some(v.screening_ms), Some(v.action.as_str()), Some(v.threat_score)),
+                None => (None, None, None),
+            };
+            ts.record(method, path, status, req, resp, dur, streaming, slm_dur, slm_action, slm_score);
         })
     };
 
@@ -492,7 +496,11 @@ fn create_middleware_hooks(
                     fallback = slm_config.fallback_to_heuristics,
                     "middleware hooks: evidence=yes vault=yes barrier=real slm=real"
                 );
-                Some(Arc::new(SlmHookImpl { config: slm_config }))
+                Some(Arc::new(SlmHookImpl {
+                    config: slm_config,
+                    recorder: recorder.clone(),
+                    alert_tx: alert_tx.clone(),
+                }))
             } else {
                 info!("middleware hooks: evidence=yes vault=yes barrier=real slm=disabled");
                 None

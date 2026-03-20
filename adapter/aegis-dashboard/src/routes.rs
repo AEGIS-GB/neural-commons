@@ -85,6 +85,7 @@ pub fn routes(state: Arc<DashboardSharedState>) -> Router {
         .route("/api/access", get(api_access))
         .route("/api/alerts", get(api_alerts))
         .route("/api/alerts/stream", get(api_alerts_stream))
+        .route("/api/slm", get(api_slm))
         .route("/api/traffic", get(api_traffic))
         .route("/api/traffic/{id}", get(api_traffic_detail))
         .with_state(state)
@@ -174,6 +175,42 @@ struct AccessEntry {
     path: String,
     status: Option<u16>,
     duration_ms: Option<u64>,
+}
+
+// ── SLM response types ──────────────────────────────────────────────────────
+
+#[derive(Debug, Serialize)]
+struct SlmOverview {
+    total_screenings: u64,
+    verdict_counts: VerdictCounts,
+    timing_stats: TimingStats,
+    recent_screenings: Vec<SlmScreeningEntry>,
+}
+
+#[derive(Debug, Serialize)]
+struct VerdictCounts {
+    admit: u64,
+    quarantine: u64,
+    reject: u64,
+}
+
+#[derive(Debug, Serialize)]
+struct TimingStats {
+    avg_ms: u64,
+    p95_ms: u64,
+    max_ms: u64,
+}
+
+#[derive(Debug, Serialize)]
+struct SlmScreeningEntry {
+    seq: u64,
+    ts_ms: i64,
+    action: String,
+    threat_score: u32,
+    intent: String,
+    screening_ms: u64,
+    engine: String,
+    annotation_count: u32,
 }
 
 // ── Handlers ─────────────────────────────────────────────────────────────────
@@ -441,6 +478,18 @@ async fn api_alerts(
             let kind = match receipt.core.receipt_type {
                 aegis_schemas::ReceiptType::WriteBarrier => "structural_write",
                 aegis_schemas::ReceiptType::MemoryIntegrity => "memory_injection",
+                aegis_schemas::ReceiptType::SlmAnalysis => {
+                    // Only include quarantine/reject as alerts
+                    let action = receipt.context.detail.as_ref()
+                        .and_then(|d| d.get("action"))
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("admit");
+                    match action {
+                        "quarantine" => "slm_quarantine",
+                        "reject" => "slm_reject",
+                        _ => continue,
+                    }
+                }
                 _ => continue,
             };
 
@@ -468,6 +517,100 @@ async fn api_alerts(
     Json(serde_json::json!({ "alerts": alerts, "total": total }))
 }
 
+/// GET /dashboard/api/slm — SLM screening overview.
+///
+/// Returns screening statistics, verdict distribution, timing stats,
+/// and recent screening entries from the evidence chain.
+async fn api_slm(
+    State(state): State<Arc<DashboardSharedState>>,
+) -> Json<SlmOverview> {
+    let chain_head = state.evidence.chain_head();
+    let mut entries = Vec::new();
+    let mut timing_values = Vec::new();
+    let mut counts = VerdictCounts { admit: 0, quarantine: 0, reject: 0 };
+
+    let start_seq = chain_head.head_seq.saturating_sub(500).max(1);
+    if let Ok(receipts) = state.evidence.export(Some(start_seq), None) {
+        for receipt in receipts.iter().rev() {
+            if receipt.core.receipt_type != aegis_schemas::ReceiptType::SlmAnalysis {
+                continue;
+            }
+
+            let detail = receipt.context.detail.as_ref();
+            let action = detail
+                .and_then(|d| d.get("action"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("admit")
+                .to_string();
+            let threat_score = detail
+                .and_then(|d| d.get("threat_score"))
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0) as u32;
+            let intent = detail
+                .and_then(|d| d.get("intent"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("benign")
+                .to_string();
+            let screening_ms = detail
+                .and_then(|d| d.get("screening_ms"))
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0);
+            let engine = detail
+                .and_then(|d| d.get("engine"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown")
+                .to_string();
+            let annotation_count = detail
+                .and_then(|d| d.get("annotation_count"))
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0) as u32;
+
+            match action.as_str() {
+                "admit" => counts.admit += 1,
+                "quarantine" => counts.quarantine += 1,
+                "reject" => counts.reject += 1,
+                _ => counts.admit += 1,
+            }
+
+            timing_values.push(screening_ms);
+
+            if entries.len() < 50 {
+                entries.push(SlmScreeningEntry {
+                    seq: receipt.core.seq,
+                    ts_ms: receipt.core.ts_ms,
+                    action: action.clone(),
+                    threat_score,
+                    intent,
+                    screening_ms,
+                    engine,
+                    annotation_count,
+                });
+            }
+        }
+    }
+
+    let total = counts.admit + counts.quarantine + counts.reject;
+
+    // Compute timing stats
+    let timing_stats = if timing_values.is_empty() {
+        TimingStats { avg_ms: 0, p95_ms: 0, max_ms: 0 }
+    } else {
+        timing_values.sort_unstable();
+        let avg = timing_values.iter().sum::<u64>() / timing_values.len() as u64;
+        let p95_idx = (timing_values.len() as f64 * 0.95) as usize;
+        let p95 = timing_values.get(p95_idx.min(timing_values.len() - 1)).copied().unwrap_or(0);
+        let max = timing_values.last().copied().unwrap_or(0);
+        TimingStats { avg_ms: avg, p95_ms: p95, max_ms: max }
+    };
+
+    Json(SlmOverview {
+        total_screenings: total,
+        verdict_counts: counts,
+        timing_stats,
+        recent_screenings: entries,
+    })
+}
+
 /// GET /dashboard/api/traffic — recent traffic entries (summary, no bodies).
 async fn api_traffic(
     State(state): State<Arc<DashboardSharedState>>,
@@ -484,6 +627,9 @@ async fn api_traffic(
             "response_size": e.response_size,
             "duration_ms": e.duration_ms,
             "is_streaming": e.is_streaming,
+            "slm_duration_ms": e.slm_duration_ms,
+            "slm_verdict": e.slm_verdict,
+            "slm_threat_score": e.slm_threat_score,
         })
     }).collect();
 

@@ -51,20 +51,73 @@ pub enum ScreeningDecision {
     Reject(String),
 }
 
+/// Rich screening result — carries timing, enrichment, and holster data
+/// alongside the decision. Used by the dashboard for full transparency.
+#[derive(Debug, Clone)]
+pub struct ScreeningResult {
+    /// The final screening decision (Admit/Quarantine/Reject).
+    pub decision: ScreeningDecision,
+    /// Enriched analysis with threat scores, intent, dimensions (None on early exit).
+    pub enriched: Option<EnrichedAnalysis>,
+    /// Holster policy decision (None on early exit).
+    pub holster: Option<HolsterDecision>,
+    /// Timing breakdown for each pipeline stage.
+    pub timing: ScreeningTiming,
+}
+
+/// Timing breakdown for the screening pipeline.
+#[derive(Debug, Clone, Default)]
+pub struct ScreeningTiming {
+    /// Total screening wall-clock time in milliseconds.
+    pub total_ms: u64,
+    /// Pass A (injection) inference time in ms (None if not run).
+    pub pass_a_ms: Option<u64>,
+    /// Pass B (recon) inference time in ms (None if not run).
+    pub pass_b_ms: Option<u64>,
+    /// Prompt Guard classifier time in ms (None if not run).
+    pub classifier_ms: Option<u64>,
+    /// Engine used: "ollama", "openai", or "heuristic".
+    pub engine: String,
+}
+
 /// Run the full screening pipeline on the given content.
 ///
 /// Returns a `ScreeningDecision` indicating whether the content should be
 /// admitted, quarantined, or rejected.
 pub fn screen_content(config: &LoopbackConfig, content: &str) -> ScreeningDecision {
+    screen_content_rich(config, content).decision
+}
+
+/// Run the full screening pipeline, returning rich results with timing,
+/// enrichment data, and holster decisions for dashboard transparency.
+pub fn screen_content_rich(config: &LoopbackConfig, content: &str) -> ScreeningResult {
+    use std::time::Instant;
+    let pipeline_start = Instant::now();
+
     if content.is_empty() {
-        return ScreeningDecision::Admit;
+        return ScreeningResult {
+            decision: ScreeningDecision::Admit,
+            enriched: None,
+            holster: None,
+            timing: ScreeningTiming {
+                total_ms: 0,
+                engine: config.engine.clone(),
+                ..Default::default()
+            },
+        };
     }
 
     // 0. Run Prompt Guard classifier if available (~5ms, high-confidence pre-filter)
+    let classifier_start = Instant::now();
     #[cfg(feature = "prompt-guard")]
     let classifier_signal = run_prompt_guard(config, content);
     #[cfg(not(feature = "prompt-guard"))]
     let classifier_signal: Option<(bool, f32)> = None;
+    let classifier_ms = if classifier_signal.is_some() {
+        Some(classifier_start.elapsed().as_millis() as u64)
+    } else {
+        None
+    };
 
     // If classifier says MALICIOUS with very high confidence (>95%), fast-path reject
     if let Some((true, prob)) = classifier_signal {
@@ -73,9 +126,19 @@ pub fn screen_content(config: &LoopbackConfig, content: &str) -> ScreeningDecisi
                 prob,
                 "Prompt Guard classifier: high-confidence MALICIOUS, fast-path quarantine"
             );
-            return ScreeningDecision::Quarantine(format!(
-                "prompt_guard: MALICIOUS (prob={prob:.4})"
-            ));
+            return ScreeningResult {
+                decision: ScreeningDecision::Quarantine(format!(
+                    "prompt_guard: MALICIOUS (prob={prob:.4})"
+                )),
+                enriched: None,
+                holster: None,
+                timing: ScreeningTiming {
+                    total_ms: pipeline_start.elapsed().as_millis() as u64,
+                    classifier_ms,
+                    engine: "prompt-guard".to_string(),
+                    ..Default::default()
+                },
+            };
         }
     }
 
@@ -89,24 +152,47 @@ pub fn screen_content(config: &LoopbackConfig, content: &str) -> ScreeningDecisi
         _ => Box::new(OllamaEngine::new(&config.server_url, &config.model)),
     };
 
-    let (raw_a, raw_b) = match (engine.generate(&prompt_a), engine.generate(&prompt_b)) {
+    let pass_a_start = Instant::now();
+    let result_a = engine.generate(&prompt_a);
+    let pass_a_ms = pass_a_start.elapsed().as_millis() as u64;
+
+    let pass_b_start = Instant::now();
+    let result_b = engine.generate(&prompt_b);
+    let pass_b_ms = pass_b_start.elapsed().as_millis() as u64;
+
+    let engine_name = config.engine.clone();
+
+    let (raw_a, raw_b, pass_a_time, pass_b_time, actual_engine) = match (result_a, result_b) {
         (Ok(a), Ok(b)) => {
             debug!(engine = %config.engine, "SLM 2-pass completed");
-            (a, b)
+            (a, b, Some(pass_a_ms), Some(pass_b_ms), engine_name)
         }
         (Err(e), _) | (_, Err(e)) => {
             warn!(engine = %config.engine, "SLM engine failed: {e}");
             if config.fallback_to_heuristics {
                 info!("falling back to heuristic engine");
                 let heuristic = HeuristicEngine::new();
+                let heuristic_start = Instant::now();
                 match heuristic.generate(content) {
                     Ok(output) => {
+                        let heuristic_ms = heuristic_start.elapsed().as_millis() as u64;
                         // Heuristic returns a single output — use it directly
                         let slm_output = match parse_slm_output(&output, &EngineProfile::Loopback) {
                             Ok(o) => o,
                             Err(e) => {
                                 warn!("heuristic parse failed: {e}");
-                                return ScreeningDecision::Quarantine(format!("parse_failure: {e}"));
+                                return ScreeningResult {
+                                    decision: ScreeningDecision::Quarantine(format!("parse_failure: {e}")),
+                                    enriched: None,
+                                    holster: None,
+                                    timing: ScreeningTiming {
+                                        total_ms: pipeline_start.elapsed().as_millis() as u64,
+                                        pass_a_ms: Some(heuristic_ms),
+                                        classifier_ms,
+                                        engine: "heuristic".to_string(),
+                                        ..Default::default()
+                                    },
+                                };
                             }
                         };
                         let enriched = enrich(&slm_output, content.as_bytes());
@@ -117,7 +203,7 @@ pub fn screen_content(config: &LoopbackConfig, content: &str) -> ScreeningDecisi
                             &EngineProfile::Loopback,
                             false,
                         );
-                        return match holster_result.action {
+                        let decision = match holster_result.action {
                             HolsterAction::Admit => ScreeningDecision::Admit,
                             HolsterAction::Quarantine => ScreeningDecision::Quarantine(format!(
                                 "threat_score={} intent={:?}", enriched.threat_score, enriched.intent
@@ -126,14 +212,46 @@ pub fn screen_content(config: &LoopbackConfig, content: &str) -> ScreeningDecisi
                                 "threat_score={} intent={:?}", enriched.threat_score, enriched.intent
                             )),
                         };
+                        return ScreeningResult {
+                            decision,
+                            enriched: Some(enriched),
+                            holster: Some(holster_result),
+                            timing: ScreeningTiming {
+                                total_ms: pipeline_start.elapsed().as_millis() as u64,
+                                pass_a_ms: Some(heuristic_ms),
+                                classifier_ms,
+                                engine: "heuristic".to_string(),
+                                ..Default::default()
+                            },
+                        };
                     }
                     Err(e) => {
                         warn!("heuristic engine also failed: {e}");
-                        return ScreeningDecision::Admit; // fail open
+                        return ScreeningResult {
+                            decision: ScreeningDecision::Admit,
+                            enriched: None,
+                            holster: None,
+                            timing: ScreeningTiming {
+                                total_ms: pipeline_start.elapsed().as_millis() as u64,
+                                classifier_ms,
+                                engine: "heuristic".to_string(),
+                                ..Default::default()
+                            },
+                        };
                     }
                 }
             } else {
-                return ScreeningDecision::Admit; // fail open
+                return ScreeningResult {
+                    decision: ScreeningDecision::Admit,
+                    enriched: None,
+                    holster: None,
+                    timing: ScreeningTiming {
+                        total_ms: pipeline_start.elapsed().as_millis() as u64,
+                        classifier_ms,
+                        engine: engine_name,
+                        ..Default::default()
+                    },
+                };
             }
         }
     };
@@ -168,7 +286,18 @@ pub fn screen_content(config: &LoopbackConfig, content: &str) -> ScreeningDecisi
         }
         (Err(ea), Err(eb)) => {
             warn!("Both passes parse failed: A={ea}, B={eb}");
-            return ScreeningDecision::Quarantine(format!("parse_failure: A={ea}, B={eb}"));
+            return ScreeningResult {
+                decision: ScreeningDecision::Quarantine(format!("parse_failure: A={ea}, B={eb}")),
+                enriched: None,
+                holster: None,
+                timing: ScreeningTiming {
+                    total_ms: pipeline_start.elapsed().as_millis() as u64,
+                    pass_a_ms: pass_a_time,
+                    pass_b_ms: pass_b_time,
+                    classifier_ms,
+                    engine: actual_engine,
+                },
+            };
         }
     };
 
@@ -199,7 +328,7 @@ pub fn screen_content(config: &LoopbackConfig, content: &str) -> ScreeningDecisi
     );
 
     // 6. Map holster action to screening decision
-    match holster_result.action {
+    let decision = match holster_result.action {
         HolsterAction::Admit => ScreeningDecision::Admit,
         HolsterAction::Quarantine => {
             let reason = format!(
@@ -219,6 +348,19 @@ pub fn screen_content(config: &LoopbackConfig, content: &str) -> ScreeningDecisi
             );
             ScreeningDecision::Reject(reason)
         }
+    };
+
+    ScreeningResult {
+        decision,
+        enriched: Some(enriched),
+        holster: Some(holster_result),
+        timing: ScreeningTiming {
+            total_ms: pipeline_start.elapsed().as_millis() as u64,
+            pass_a_ms: pass_a_time,
+            pass_b_ms: pass_b_time,
+            classifier_ms,
+            engine: actual_engine,
+        },
     }
 }
 

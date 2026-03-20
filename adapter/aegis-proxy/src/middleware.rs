@@ -135,16 +135,55 @@ pub enum SlmDecision {
     Reject(String),
 }
 
+/// Rich SLM screening verdict — provider-agnostic, carries timing and scores
+/// for dashboard transparency. Only primitive types (no aegis-slm dependency).
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct SlmVerdict {
+    /// Action taken: "admit", "quarantine", or "reject".
+    pub action: String,
+    /// Threat score in basis points (0–10000).
+    pub threat_score: u32,
+    /// Intent classification: "benign", "inject", "manipulate", "exfiltrate", "probe".
+    pub intent: String,
+    /// Model confidence in basis points (0–10000).
+    pub confidence: u32,
+    /// Engine used: "ollama", "openai", or "heuristic".
+    pub engine: String,
+    /// Total screening time in milliseconds.
+    pub screening_ms: u64,
+    /// Pass A (injection) inference time in ms.
+    pub pass_a_ms: Option<u64>,
+    /// Pass B (recon) inference time in ms.
+    pub pass_b_ms: Option<u64>,
+    /// Prompt Guard classifier time in ms.
+    pub classifier_ms: Option<u64>,
+    /// Number of annotations (detected patterns).
+    pub annotation_count: u32,
+    /// Threat dimension breakdown (optional, Phase 1 summary).
+    pub dimensions: Option<SlmDimensions>,
+}
+
+/// Five-axis threat dimension scores (basis points 0–10000 each).
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct SlmDimensions {
+    pub injection: u32,
+    pub manipulation: u32,
+    pub exfiltration: u32,
+    pub persistence: u32,
+    pub evasion: u32,
+}
+
 /// Hook for SLM (small language model) content screening.
 ///
 /// Screens request/response content for policy violations, prompt injection,
 /// sensitive data leakage, etc.
 pub trait SlmHook: Send + Sync {
     /// Screen the given content string.
+    /// Returns the decision and an optional rich verdict for dashboard transparency.
     fn screen<'a>(
         &'a self,
         content: &'a str,
-    ) -> Pin<Box<dyn Future<Output = SlmDecision> + Send + 'a>>;
+    ) -> Pin<Box<dyn Future<Output = (SlmDecision, Option<SlmVerdict>)> + Send + 'a>>;
 }
 
 // ---------------------------------------------------------------------------
@@ -269,8 +308,8 @@ impl SlmHook for NoopSlmHook {
     fn screen<'a>(
         &'a self,
         _content: &'a str,
-    ) -> Pin<Box<dyn Future<Output = SlmDecision> + Send + 'a>> {
-        Box::pin(async { SlmDecision::Admit })
+    ) -> Pin<Box<dyn Future<Output = (SlmDecision, Option<SlmVerdict>)> + Send + 'a>> {
+        Box::pin(async { (SlmDecision::Admit, None) })
     }
 }
 
@@ -429,7 +468,9 @@ mod tests {
     #[tokio::test]
     async fn noop_slm_hook() {
         let hook = NoopSlmHook;
-        assert_eq!(hook.screen("some content").await, SlmDecision::Admit);
+        let (decision, verdict) = hook.screen("some content").await;
+        assert_eq!(decision, SlmDecision::Admit);
+        assert!(verdict.is_none());
     }
 
     #[tokio::test]
