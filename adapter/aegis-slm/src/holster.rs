@@ -10,6 +10,19 @@
 
 use crate::types::*;
 
+/// Map a trust level to the appropriate holster profile.
+/// Higher trust → more permissive thresholds.
+/// Unknown maps to Balanced for backward compatibility (no cert = same as before).
+pub fn trust_to_profile(trust: &aegis_schemas::TrustLevel) -> HolsterProfile {
+    match trust {
+        aegis_schemas::TrustLevel::Full => HolsterProfile::Permissive,
+        aegis_schemas::TrustLevel::Trusted => HolsterProfile::Balanced,
+        aegis_schemas::TrustLevel::Public => HolsterProfile::Aggressive,
+        aegis_schemas::TrustLevel::Restricted => HolsterProfile::Aggressive,
+        aegis_schemas::TrustLevel::Unknown => HolsterProfile::Balanced, // backward compat
+    }
+}
+
 /// Apply holster policy to an enriched analysis.
 /// Returns a HolsterDecision.
 pub fn apply_holster(
@@ -160,5 +173,31 @@ mod tests {
         );
 
         assert_eq!(decision.compute_cost_bp, 300); // 100 + 200
+    }
+
+    #[test]
+    fn trust_full_maps_to_permissive() {
+        assert_eq!(trust_to_profile(&aegis_schemas::TrustLevel::Full), HolsterProfile::Permissive);
+    }
+
+    #[test]
+    fn trust_trusted_maps_to_balanced() {
+        assert_eq!(trust_to_profile(&aegis_schemas::TrustLevel::Trusted), HolsterProfile::Balanced);
+    }
+
+    #[test]
+    fn trust_public_maps_to_aggressive() {
+        assert_eq!(trust_to_profile(&aegis_schemas::TrustLevel::Public), HolsterProfile::Aggressive);
+    }
+
+    #[test]
+    fn trust_restricted_maps_to_aggressive() {
+        assert_eq!(trust_to_profile(&aegis_schemas::TrustLevel::Restricted), HolsterProfile::Aggressive);
+    }
+
+    #[test]
+    fn trust_unknown_maps_to_balanced() {
+        // Backward compat: no cert = same as before
+        assert_eq!(trust_to_profile(&aegis_schemas::TrustLevel::Unknown), HolsterProfile::Balanced);
     }
 }

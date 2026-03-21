@@ -93,7 +93,7 @@ pub fn screen_content(config: &LoopbackConfig, content: &str) -> ScreeningDecisi
 /// Run only the fast layers: heuristic + ProtectAI classifier (<10ms).
 /// Returns Some(result) if a threat was caught, None if content is clean
 /// and needs deep SLM analysis.
-pub fn screen_fast_layers(config: &LoopbackConfig, content: &str) -> Option<ScreeningResult> {
+pub fn screen_fast_layers(config: &LoopbackConfig, content: &str, holster_profile: Option<&HolsterProfile>) -> Option<ScreeningResult> {
     use std::time::Instant;
     let pipeline_start = Instant::now();
 
@@ -153,7 +153,7 @@ pub fn screen_fast_layers(config: &LoopbackConfig, content: &str) -> Option<Scre
                     let enriched = enrich(&slm_output, content.as_bytes());
                     let holster_result = apply_holster(
                         &enriched,
-                        &HolsterProfile::default(),
+                        &holster_profile.cloned().unwrap_or_default(),
                         &Namespace::Inbound,
                         &EngineProfile::Loopback,
                         false,
@@ -189,7 +189,7 @@ pub fn screen_fast_layers(config: &LoopbackConfig, content: &str) -> Option<Scre
 }
 
 /// Run only the deep SLM layer (2-3s). Call only after screen_fast_layers returns None.
-pub fn screen_deep_slm(config: &LoopbackConfig, content: &str) -> ScreeningResult {
+pub fn screen_deep_slm(config: &LoopbackConfig, content: &str, holster_profile: Option<&HolsterProfile>) -> ScreeningResult {
     use std::time::Instant;
     let pipeline_start = Instant::now();
 
@@ -250,7 +250,7 @@ pub fn screen_deep_slm(config: &LoopbackConfig, content: &str) -> ScreeningResul
     let enriched = enrich(&slm_output, content.as_bytes());
     let holster_result = apply_holster(
         &enriched,
-        &HolsterProfile::default(),
+        &holster_profile.cloned().unwrap_or_default(),
         &Namespace::Inbound,
         &EngineProfile::Loopback,
         false,
@@ -284,6 +284,7 @@ pub fn screen_deep_slm(config: &LoopbackConfig, content: &str) -> ScreeningResul
 
 /// Full screening pipeline (fast + deep combined). Used for non-async path.
 pub fn screen_content_rich(config: &LoopbackConfig, content: &str) -> ScreeningResult {
+    let holster_profile: Option<&HolsterProfile> = None; // default for legacy path
     use std::time::Instant;
     let pipeline_start = Instant::now();
 
@@ -351,7 +352,7 @@ pub fn screen_content_rich(config: &LoopbackConfig, content: &str) -> ScreeningR
                     let enriched = enrich(&slm_output, content.as_bytes());
                     let holster_result = apply_holster(
                         &enriched,
-                        &HolsterProfile::default(),
+                        &holster_profile.cloned().unwrap_or_default(),
                         &Namespace::Inbound,
                         &EngineProfile::Loopback,
                         false,
@@ -458,7 +459,7 @@ pub fn screen_content_rich(config: &LoopbackConfig, content: &str) -> ScreeningR
     // 5. Apply holster policy
     let holster_result = apply_holster(
         &enriched,
-        &HolsterProfile::default(), // Balanced
+        &holster_profile.cloned().unwrap_or_default(), // Balanced
         &Namespace::Inbound,
         &EngineProfile::Loopback,
         false, // not escalated

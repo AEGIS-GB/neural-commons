@@ -472,7 +472,7 @@ impl SlmHook for SlmHookImpl {
             let config_clone = self.config.clone();
             let content_owned = content.to_string();
             let result = tokio::task::spawn_blocking(move || {
-                aegis_slm::loopback::screen_fast_layers(&config_clone, &content_owned)
+                aegis_slm::loopback::screen_fast_layers(&config_clone, &content_owned, None)
             })
             .await;
 
@@ -497,7 +497,7 @@ impl SlmHook for SlmHookImpl {
             let config_clone = self.config.clone();
             let content_owned = content.to_string();
             let result = tokio::task::spawn_blocking(move || {
-                aegis_slm::loopback::screen_deep_slm(&config_clone, &content_owned)
+                aegis_slm::loopback::screen_deep_slm(&config_clone, &content_owned, None)
             })
             .await;
 
