@@ -1,0 +1,25 @@
+{
+  "name": "aegis-channel-trust",
+  "version": "1.0.0",
+  "description": "Registers channel context with Aegis for trust-based security screening",
+  "author": "Neural Commons",
+  "license": "AGPL-3.0-or-later",
+  "keywords": ["aegis", "security", "trust", "channel", "screening"],
+  "moltbot": {
+    "emoji": "\ud83d\udee1\ufe0f",
+    "category": "security",
+    "api_base": "http://127.0.0.1:3141/aegis",
+    "files": {
+      "SKILL.md": "local"
+    },
+    "requires": {
+      "bins": ["curl"]
+    },
+    "triggers": [
+      "aegis channel",
+      "register channel",
+      "security context",
+      "trust level"
+    ]
+  }
+}

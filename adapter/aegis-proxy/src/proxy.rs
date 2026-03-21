@@ -116,7 +116,7 @@ pub async fn start(
     hooks: MiddlewareHooks,
     dashboard: Option<(String, Router)>,
 ) -> Result<(), ProxyError> {
-    start_with_traffic(config, hooks, dashboard, None).await
+    start_with_traffic(config, hooks, dashboard, None, None).await
 }
 
 /// Start the proxy server with an optional traffic recorder for the dashboard inspector.
@@ -125,6 +125,7 @@ pub async fn start_with_traffic(
     hooks: MiddlewareHooks,
     dashboard: Option<(String, Router)>,
     traffic_recorder: Option<Arc<TrafficRecorder>>,
+    trust_config: Option<crate::channel_trust::TrustConfig>,
 ) -> Result<(), ProxyError> {
     let client = Client::builder()
         .timeout(std::time::Duration::from_secs(300)) // 5 min for long LLM responses
@@ -147,7 +148,7 @@ pub async fn start_with_traffic(
         identity_fingerprint: None,
         rate_limiter,
         traffic_recorder,
-        trust_config: None,
+        trust_config,
     };
 
     let app = build_router(state, dashboard);
@@ -262,7 +263,9 @@ async fn forward_request(
                 aegis_schemas::ChannelTrust::default()
             }
         } else {
-            aegis_schemas::ChannelTrust::default()
+            // No header — check if channel context was registered via cognitive bridge
+            crate::cognitive_bridge::get_registered_channel_trust()
+                .unwrap_or_default()
         }
     };
 

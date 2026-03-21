@@ -489,11 +489,28 @@ pub async fn start(
         })
     };
 
+    // Build trust config from adapter config
+    let trust_config = {
+        use aegis_proxy::channel_trust::{TrustConfig, parse_trust_level};
+        let tc = &config.trust;
+        let channels: Vec<(String, aegis_schemas::TrustLevel)> = tc.channels.iter()
+            .map(|cp| (cp.pattern.clone(), parse_trust_level(&cp.level)))
+            .collect();
+        let signing_pubkey = tc.signing_pubkey.as_ref()
+            .and_then(|hex_str| hex::decode(hex_str).ok());
+        TrustConfig {
+            default_level: parse_trust_level(&tc.default_level),
+            signing_pubkey,
+            channels,
+        }
+    };
+
     aegis_proxy::proxy::start_with_traffic(
         proxy_config,
         hooks,
         Some((dashboard_path, dashboard_router)),
         Some(traffic_recorder),
+        Some(trust_config),
     )
         .await
         .map_err(|e| StartupError::Proxy(format!("{e}")))?;
