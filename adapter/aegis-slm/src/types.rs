@@ -187,7 +187,7 @@ pub struct PeerReceiptRef {
 // Enums
 // ═══════════════════════════════════════════════════════════════════
 
-/// Pattern taxonomy (D4) — 14 patterns
+/// Pattern taxonomy (D4) — 15 patterns
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "snake_case")]
 pub enum Pattern {
@@ -204,6 +204,7 @@ pub enum Pattern {
     LinkInjection,
     Other,
     BoundaryErosion,
+    SsrfAttempt,
     Benign,
 }
 

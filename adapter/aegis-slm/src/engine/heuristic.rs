@@ -105,6 +105,12 @@ const HEURISTIC_RULES: &[(&str, Pattern, &str)] = &[
         Pattern::AuthorityEscalation,
         "false identity claim",
     ),
+    // --- SSRF / internal network probing ---
+    (
+        r"(?i)(fetch|get|query|request|call|hit|access|connect\s+to|navigate\s+to|browse)\s+(https?://)?(169\.254\.\d+\.\d+|10\.\d+\.\d+\.\d+|192\.168\.\d+\.\d+|172\.(1[6-9]|2\d|3[01])\.\d+\.\d+|localhost|127\.0\.0\.\d+|0\.0\.0\.0|\[::1\]|metadata\.google\.internal|metadata\.azure\.com|169\.254\.169\.254|100\.100\.100\.200)",
+        Pattern::SsrfAttempt,
+        "internal network / cloud metadata access attempt",
+    ),
 ];
 
 /// Normalize leet-speak and common character substitutions.

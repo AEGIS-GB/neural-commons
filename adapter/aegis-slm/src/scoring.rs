@@ -25,6 +25,7 @@ pub fn pattern_severity(pattern: &Pattern) -> u32 {
         Pattern::LinkInjection => 5000,
         Pattern::Other => 4000,
         Pattern::BoundaryErosion => 3000,
+        Pattern::SsrfAttempt => 7500,
         Pattern::Benign => 0,
     }
 }
@@ -38,7 +39,7 @@ pub fn pattern_dimension(pattern: &Pattern) -> Option<Dimension> {
         Pattern::PersonaHijack | Pattern::AuthorityEscalation | Pattern::BoundaryErosion => {
             Some(Dimension::Manipulation)
         }
-        Pattern::CredentialProbe | Pattern::ExfiltrationAttempt | Pattern::LinkInjection => {
+        Pattern::CredentialProbe | Pattern::ExfiltrationAttempt | Pattern::LinkInjection | Pattern::SsrfAttempt => {
             Some(Dimension::Exfiltration)
         }
         Pattern::MemoryPoison => Some(Dimension::Persistence),
