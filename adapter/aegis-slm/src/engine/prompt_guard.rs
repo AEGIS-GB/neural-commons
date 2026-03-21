@@ -59,14 +59,18 @@ impl PromptGuardEngine {
             ));
         }
 
+        // Use half the available cores for ONNX inference (leave the rest for proxy/SLM work)
+        let num_threads = (std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4) / 2).max(2);
         let session = Session::builder()
             .map_err(|e| format!("failed to create session builder: {e}"))?
             .with_optimization_level(ort::session::builder::GraphOptimizationLevel::Level3)
             .map_err(|e| format!("failed to set optimization level: {e}"))?
-            .with_intra_threads(2)
+            .with_intra_threads(num_threads)
             .map_err(|e| format!("failed to set thread count: {e}"))?
             .commit_from_file(&model_path)
             .map_err(|e| format!("failed to load ONNX model: {e}"))?;
+
+        debug!(num_threads, "ONNX classifier using {} threads", num_threads);
 
         let tokenizer = Tokenizer::from_file(&tokenizer_path)
             .map_err(|e| format!("failed to load tokenizer: {e}"))?;

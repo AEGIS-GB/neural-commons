@@ -131,16 +131,21 @@ fn normalize_leet(input: &str) -> String {
 }
 
 /// Heuristic engine — regex-based prompt injection detection.
+/// Uses a cached RegexSet compiled once (OnceLock), not per-request.
 pub struct HeuristicEngine {
-    regex_set: RegexSet,
+    regex_set: &'static RegexSet,
 }
 
+/// Compiled regex patterns — cached for the lifetime of the process.
+static HEURISTIC_REGEX_SET: std::sync::OnceLock<RegexSet> = std::sync::OnceLock::new();
+
 impl HeuristicEngine {
-    /// Create a new heuristic engine with compiled regex patterns.
+    /// Create a heuristic engine using the cached compiled regex patterns.
     pub fn new() -> Self {
-        let patterns: Vec<&str> = HEURISTIC_RULES.iter().map(|(p, _, _)| *p).collect();
-        let regex_set =
-            RegexSet::new(&patterns).expect("heuristic regex patterns must compile");
+        let regex_set = HEURISTIC_REGEX_SET.get_or_init(|| {
+            let patterns: Vec<&str> = HEURISTIC_RULES.iter().map(|(p, _, _)| *p).collect();
+            RegexSet::new(&patterns).expect("heuristic regex patterns must compile")
+        });
         Self { regex_set }
     }
 }
