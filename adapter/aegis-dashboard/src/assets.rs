@@ -93,6 +93,12 @@ table.dtable tr:hover{background:#1c2128}
 @media(max-width:700px){.slm-detail-grid{grid-template-columns:1fr}}
 table.dtable .screening-row{cursor:pointer}
 table.dtable .screening-row:hover{background:#1c2128}
+.trust-badge{display:inline-block;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:500}
+.trust-full{background:#1f2d1f;color:#3fb950;border:1px solid #238636}
+.trust-trusted{background:#1f2d3d;color:#58a6ff;border:1px solid #1f6feb}
+.trust-public{background:#2d2a1f;color:#d29922;border:1px solid #9e6a03}
+.trust-restricted{background:#2d1f1f;color:#f85149;border:1px solid #da3633}
+.trust-unknown{background:#21262d;color:#8b949e;border:1px solid #30363d}
 </style>
 </head>
 <body>
@@ -267,7 +273,9 @@ async function poll(){
   if(activeTab==='slm'){
     try{
       const sl=await(await fetch('/dashboard/api/slm')).json();
-      renderSlm(sl);
+      let channelCtx=null;
+      try{channelCtx=await(await fetch('/aegis/channel-context')).json();}catch(e){}
+      renderSlm(sl,channelCtx);
     }catch(e){}
   }
   if(activeTab==='traffic'){
@@ -386,6 +394,10 @@ function verdictBadge(v){
   if(v==='quarantine')return'<span class="badge badge-yellow">quarantine</span>';
   return'<span class="badge badge-green">admit</span>';
 }
+function trustBadge(t){
+  if(!t)return'';
+  return'<span class="trust-badge trust-'+t+'">'+t+'</span>';
+}
 function threatBar(score){
   const pct=Math.min(100,score/100);
   const color=score>=8000?'#f85149':score>=5000?'#d29922':'#3fb950';
@@ -398,11 +410,22 @@ function slmFilter(f){
   document.querySelectorAll('.filter-btn').forEach(b=>{b.classList.toggle('filter-active',b.dataset.filter===f);});
   if(slmData)renderSlmTable(slmData);
 }
-function renderSlm(sl){
+function renderSlm(sl,channelCtx){
   slmData=sl;
   const stats=document.getElementById('slm-stats');
-  // Stats cards — 5 cards: total, verdicts, avg, p95/max, engine mix
-  let sc='<div class="card"><div class="stat">'+sl.total_screenings+'</div><div class="stat-label">Total Screenings</div></div>';
+  // Channel trust card (if registered)
+  let sc='';
+  if(channelCtx&&channelCtx.registered){
+    sc+='<div class="card" style="grid-column:1/-1"><div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap">';
+    sc+='<div><div style="font-size:11px;color:#8b949e;margin-bottom:4px">ACTIVE CHANNEL</div>';
+    sc+='<span class="badge badge-gray" style="font-size:13px">'+(channelCtx.channel||'unknown')+'</span></div>';
+    if(channelCtx.user){sc+='<div><div style="font-size:11px;color:#8b949e;margin-bottom:4px">USER</div><span style="font-size:13px;color:#e1e4e8">'+channelCtx.user+'</span></div>';}
+    sc+='<div><div style="font-size:11px;color:#8b949e;margin-bottom:4px">TRUST LEVEL</div>'+trustBadge(channelCtx.trust_level)+'</div>';
+    sc+='<div><div style="font-size:11px;color:#8b949e;margin-bottom:4px">SSRF</div><span style="font-size:13px;color:'+(channelCtx.ssrf_allowed?'#3fb950':'#f85149')+'">'+(channelCtx.ssrf_allowed?'allowed':'blocked')+'</span></div>';
+    sc+='</div></div>';
+  }
+  // Stats cards
+  sc+='<div class="card"><div class="stat">'+sl.total_screenings+'</div><div class="stat-label">Total Screenings</div></div>';
   const total=sl.total_screenings||1;
   const aPct=Math.round(sl.verdict_counts.admit/total*100);
   const qPct=Math.round(sl.verdict_counts.quarantine/total*100);
@@ -425,13 +448,14 @@ function renderSlmTable(sl){
   if(detail.style.display!=='none')return; // don't overwrite detail view
   if(!sl.recent_screenings||sl.recent_screenings.length===0){tbl.innerHTML='<p class="empty-state">No SLM screenings recorded yet.</p>';return;}
   const filtered=slmFilterVal==='all'?sl.recent_screenings:sl.recent_screenings.filter(e=>e.action===slmFilterVal);
-  let h='<table class="dtable"><tr><th>Time</th><th>Verdict</th><th>Threat Score</th><th>Intent</th><th>Timing</th><th>Engine</th><th></th></tr>';
+  let h='<table class="dtable"><tr><th>Time</th><th>Verdict</th><th>Threat Score</th><th>Intent</th><th>Channel</th><th>Timing</th><th>Engine</th><th></th></tr>';
   for(const e of filtered){
     h+='<tr class="screening-row" onclick="showSlmDetail('+e.seq+')">';
     h+='<td style="white-space:nowrap">'+fmtTimeShort(e.ts_ms)+'</td>';
     h+='<td>'+verdictBadge(e.action)+'</td>';
     h+='<td>'+threatBar(e.threat_score)+'</td>';
     h+='<td><span class="badge badge-'+(e.intent==='benign'?'green':e.intent==='inject'||e.intent==='exfiltrate'?'red':'yellow')+'">'+e.intent+'</span></td>';
+    h+='<td>'+(e.channel_trust_level?trustBadge(e.channel_trust_level):'<span style="color:#30363d;font-size:11px">—</span>')+'</td>';
     // Mini timing breakdown
     h+='<td style="white-space:nowrap"><div class="timing-bar" style="width:100px;height:14px">';
     const tot=e.screening_ms||1;
@@ -466,6 +490,15 @@ function showSlmDetail(seq){
   let h='<div class="slm-detail-card">';
   h+='<span class="detail-back" onclick="closeSlmDetail()">← Back to screening list</span>';
   h+='<h2 style="font-size:16px;margin:12px 0 16px">Screening #'+e.seq+' — '+verdictBadge(e.action)+' <span style="font-size:13px;color:#8b949e">'+new Date(e.ts_ms).toLocaleString()+'</span></h2>';
+  // ── CHANNEL TRUST CONTEXT ──
+  if(e.channel||e.channel_trust_level){
+    h+='<div style="margin-bottom:16px;padding:10px 14px;background:#0d1117;border:1px solid #30363d;border-radius:6px;display:flex;gap:16px;align-items:center;flex-wrap:wrap">';
+    h+='<div style="font-size:11px;color:#8b949e">CHANNEL</div>';
+    if(e.channel)h+='<span class="badge badge-gray" style="font-size:12px">'+escHtml(e.channel)+'</span>';
+    if(e.channel_user)h+='<span style="font-size:11px;color:#8b949e">user: '+escHtml(e.channel_user)+'</span>';
+    if(e.channel_trust_level)h+='<span class="trust-badge trust-'+e.channel_trust_level+'">'+e.channel_trust_level+'</span>';
+    h+='</div>';
+  }
   // ── SCREENED TEXT ──
   if(e.screened_text){
     h+='<div style="margin-bottom:16px"><div style="font-size:12px;color:#8b949e;margin-bottom:6px">SCREENED TEXT</div>';

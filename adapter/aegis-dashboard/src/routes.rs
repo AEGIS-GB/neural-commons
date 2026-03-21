@@ -224,6 +224,9 @@ struct SlmScreeningEntry {
     holster_action: Option<String>,
     threshold_exceeded: Option<bool>,
     escalated: Option<bool>,
+    channel: Option<String>,
+    channel_user: Option<String>,
+    channel_trust_level: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -668,6 +671,18 @@ async fn api_slm(
                 let escalated = detail
                     .and_then(|d| d.get("escalated"))
                     .and_then(|v| v.as_bool());
+                let channel = detail
+                    .and_then(|d| d.get("channel"))
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string());
+                let channel_user = detail
+                    .and_then(|d| d.get("channel_user"))
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string());
+                let channel_trust_level = detail
+                    .and_then(|d| d.get("channel_trust_level"))
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string());
                 entries.push(SlmScreeningEntry {
                     seq: receipt.core.seq,
                     ts_ms: receipt.core.ts_ms,
@@ -690,6 +705,9 @@ async fn api_slm(
                     holster_action,
                     threshold_exceeded,
                     escalated,
+                    channel,
+                    channel_user,
+                    channel_trust_level,
                 });
             }
         }
