@@ -1,0 +1,11 @@
+{
+  "name": "@aegis/channel-trust",
+  "version": "1.0.0",
+  "description": "Registers channel context with Aegis for trust-based security screening",
+  "license": "AGPL-3.0-or-later",
+  "type": "module",
+  "main": "index.js",
+  "openclaw": {
+    "extensions": ["./index.ts"]
+  }
+}

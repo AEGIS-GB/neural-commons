@@ -1,0 +1,13 @@
+{
+  "id": "aegis-channel-trust",
+  "configSchema": {
+    "type": "object",
+    "properties": {
+      "aegisUrl": {
+        "type": "string",
+        "default": "http://127.0.0.1:3141",
+        "description": "Aegis proxy URL"
+      }
+    }
+  }
+}
