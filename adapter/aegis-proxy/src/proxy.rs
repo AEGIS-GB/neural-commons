@@ -78,6 +78,8 @@ pub struct AppState {
     pub rate_limiter: Option<Arc<crate::rate_limit::RateLimiter>>,
     /// Optional traffic recorder for the dashboard traffic inspector.
     pub traffic_recorder: Option<Arc<TrafficRecorder>>,
+    /// Channel trust configuration for resolving X-Aegis-Channel-Cert.
+    pub trust_config: Option<crate::channel_trust::TrustConfig>,
 }
 
 /// Build the axum router for the proxy server.
@@ -145,6 +147,7 @@ pub async fn start_with_traffic(
         identity_fingerprint: None,
         rate_limiter,
         traffic_recorder,
+        trust_config: None,
     };
 
     let app = build_router(state, dashboard);
@@ -238,6 +241,31 @@ async fn forward_request(
         None
     };
 
+    // --- Channel trust resolution ---
+    let channel_trust = {
+        let cert_header = headers.get("x-aegis-channel-cert");
+        if let Some(cert_value) = cert_header {
+            let cert = crate::channel_trust::parse_channel_cert(cert_value);
+            if let Some(ref cert) = cert {
+                let verified = if let Some(ref trust_config) = state.trust_config {
+                    if let Some(ref pubkey) = trust_config.signing_pubkey {
+                        crate::channel_trust::verify_cert(cert, pubkey)
+                    } else {
+                        false
+                    }
+                } else {
+                    false
+                };
+                let config = state.trust_config.as_ref().cloned().unwrap_or_default();
+                crate::channel_trust::resolve_trust(Some(cert), verified, &config)
+            } else {
+                aegis_schemas::ChannelTrust::default()
+            }
+        } else {
+            aegis_schemas::ChannelTrust::default()
+        }
+    };
+
     let req_info = RequestInfo {
         method: method.to_string(),
         path: path.clone(),
@@ -247,6 +275,7 @@ async fn forward_request(
         source_ip: rate_limit_key,
         timestamp_ms: middleware::now_ms(),
         body_text,
+        channel_trust,
     };
 
     // --- Parse Anthropic request for SLM screening (BUG 5 fix) ---
@@ -410,7 +439,7 @@ async fn forward_request(
     // Forward relevant headers, skipping hop-by-hop headers.
     // `host` is stripped because the original value is the proxy address (127.0.0.1:AEGIS_PORT).
     // reqwest automatically sets `Host: api.anthropic.com` from the upstream URL — this is correct.
-    let skip_headers = ["host", "connection", "transfer-encoding", "content-length"];
+    let skip_headers = ["host", "connection", "transfer-encoding", "content-length", "x-aegis-channel-cert"];
     let mut upstream_req = upstream_req;
     for (key, value) in &headers {
         if !skip_headers.contains(&key.as_str()) {
@@ -646,6 +675,7 @@ mod tests {
             identity_fingerprint: None,
             rate_limiter: None,
             traffic_recorder: None,
+            trust_config: None,
         };
         let _router = build_router(state, None);
         // If it doesn't panic, it works
@@ -660,6 +690,7 @@ mod tests {
             identity_fingerprint: Some("abc123def456".to_string()),
             rate_limiter: None,
             traffic_recorder: None,
+            trust_config: None,
         };
         assert_eq!(state.identity_fingerprint.as_deref(), Some("abc123def456"));
     }

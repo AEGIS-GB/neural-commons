@@ -16,3 +16,4 @@ pub mod cognitive_bridge;
 pub mod config;
 pub mod error;
 pub mod rate_limit;
+pub mod channel_trust;

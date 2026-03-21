@@ -47,6 +47,9 @@ pub struct RequestInfo {
     /// Request body as UTF-8 text (for barrier body inspection).
     /// None if body is empty or not valid UTF-8.
     pub body_text: Option<String>,
+    /// Channel trust context (from X-Aegis-Channel-Cert header).
+    /// Default: TrustLevel::Unknown (backward compatible).
+    pub channel_trust: aegis_schemas::ChannelTrust,
 }
 
 /// Information captured from the upstream response.
@@ -185,6 +188,15 @@ pub struct SlmVerdict {
     /// Whether this was escalated from a lower engine.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub escalated: Option<bool>,
+    /// Channel that sent this request (from X-Aegis-Channel-Cert).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub channel: Option<String>,
+    /// User that sent this request.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub channel_user: Option<String>,
+    /// Resolved trust level for this request.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub channel_trust_level: Option<String>,
 }
 
 /// A detected pattern annotation with excerpt.
@@ -498,6 +510,7 @@ mod tests {
             source_ip: "127.0.0.1".into(),
             timestamp_ms: now_ms(),
             body_text: None,
+            channel_trust: aegis_schemas::ChannelTrust::default(),
         };
         assert!(hook.on_request(&info).await.is_ok());
         let resp = ResponseInfo {
@@ -521,6 +534,7 @@ mod tests {
             source_ip: "10.0.0.1".into(),
             timestamp_ms: now_ms(),
             body_text: None,
+            channel_trust: aegis_schemas::ChannelTrust::default(),
         };
         assert_eq!(hook.check_write(&info).await, BarrierDecision::Allow);
     }

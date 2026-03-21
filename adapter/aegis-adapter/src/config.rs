@@ -47,7 +47,47 @@ pub struct AdapterConfig {
     /// Data directory for SQLite databases and state
     #[serde(default = "default_data_dir")]
     pub data_dir: PathBuf,
+
+    /// Channel trust configuration
+    #[serde(default)]
+    pub trust: TrustSection,
 }
+
+/// Channel trust configuration — maps channel patterns to trust levels.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TrustSection {
+    /// Default trust level when no channel cert or no pattern match
+    #[serde(default = "default_trust_level")]
+    pub default_level: String,
+
+    /// Ed25519 public key (hex) for verifying channel certs from OpenClaw
+    #[serde(default)]
+    pub signing_pubkey: Option<String>,
+
+    /// Channel pattern → trust level mappings
+    #[serde(default)]
+    pub channels: Vec<ChannelPattern>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChannelPattern {
+    /// Glob pattern (e.g. "telegram:dm:owner", "telegram:group:*")
+    pub pattern: String,
+    /// Trust level: "full", "trusted", "public", "restricted"
+    pub level: String,
+}
+
+impl Default for TrustSection {
+    fn default() -> Self {
+        Self {
+            default_level: default_trust_level(),
+            signing_pubkey: None,
+            channels: Vec::new(),
+        }
+    }
+}
+
+fn default_trust_level() -> String { "unknown".to_string() }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -216,6 +256,7 @@ impl Default for AdapterConfig {
             enforcement: EnforcementConfig::observe_default(),
             rate_limit: RateLimitConfig::default(),
             data_dir: default_data_dir(),
+            trust: TrustSection::default(),
         }
     }
 }

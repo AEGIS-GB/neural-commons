@@ -393,6 +393,9 @@ impl SlmHookImpl {
             holster_action,
             threshold_exceeded,
             escalated,
+            channel: None,
+            channel_user: None,
+            channel_trust_level: None,
         }
     }
 }
@@ -552,6 +555,7 @@ mod tests {
             source_ip: "127.0.0.1".into(),
             timestamp_ms: now_ms(),
             body_text: None,
+            channel_trust: aegis_schemas::ChannelTrust::default(),
         }
     }
 
