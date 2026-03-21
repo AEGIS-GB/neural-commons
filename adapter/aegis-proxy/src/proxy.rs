@@ -326,6 +326,10 @@ async fn forward_request(
                             warn!(path = %path, reason = %reason, "SLM fast-layer rejected request");
                             return Ok((StatusCode::FORBIDDEN, format!("rejected: {reason}")).into_response());
                         }
+                        middleware::SlmDecision::Quarantine(reason) if state.config.mode == ProxyMode::Enforce => {
+                            warn!(path = %path, reason = %reason, "SLM fast-layer quarantined — blocking in enforce mode");
+                            return Ok((StatusCode::FORBIDDEN, format!("blocked: {reason}")).into_response());
+                        }
                         middleware::SlmDecision::Quarantine(reason) => {
                             info!(path = %path, reason = %reason, "SLM fast-layer quarantine");
                         }
@@ -407,6 +411,10 @@ async fn forward_request(
                     middleware::SlmDecision::Reject(reason) if state.config.mode == ProxyMode::Enforce => {
                         warn!(path = %path, reason = %reason, "SLM deep-layer rejected (blocking response)");
                         return Ok((StatusCode::FORBIDDEN, format!("rejected: {reason}")).into_response());
+                    }
+                    middleware::SlmDecision::Quarantine(reason) if state.config.mode == ProxyMode::Enforce => {
+                        warn!(path = %path, reason = %reason, "SLM deep-layer quarantined — blocking in enforce mode");
+                        return Ok((StatusCode::FORBIDDEN, format!("blocked: {reason}")).into_response());
                     }
                     middleware::SlmDecision::Quarantine(reason) => {
                         info!(path = %path, reason = %reason, "SLM deep-layer quarantine");
