@@ -483,6 +483,9 @@ function showSlmDetail(seq){
   const e=slmData.recent_screenings.find(s=>s.seq===seq);
   if(!e)return;
   const detail=document.getElementById('slm-detail');
+  // Hide the table card, show the detail view
+  const tblCard=document.getElementById('slm-table').parentElement;
+  tblCard.style.display='none';
   detail.style.display='block';
   const anns=e.annotations||[];
   const hasPatterns=anns.length>0;
@@ -674,6 +677,9 @@ function closeSlmDetail(){
   const detail=document.getElementById('slm-detail');
   detail.style.display='none';
   detail.innerHTML='';
+  // Show the table card again
+  const tblCard=document.getElementById('slm-table').parentElement;
+  tblCard.style.display='';
   if(slmData)renderSlmTable(slmData);
 }
 let trafficDetailId=null;
