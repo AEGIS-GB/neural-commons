@@ -542,15 +542,14 @@ function showSlmDetail(seq){
   // Stage 4: SLM Pass A (injection) — only if heuristic+classifier were clean
   const passA_ran=e.pass_a_ms!=null&&e.pass_a_ms>0;
   const passA_caught=anns.some(a=>['DirectInjection','IndirectInjection','PersonaHijack','AuthorityEscalation','EncodingEvasion','BoundaryErosion','MemoryPoison'].includes(a.pattern));
+  const passB_ran=e.pass_b_ms!=null&&e.pass_b_ms>0;
+  const passB_caught=anns.some(a=>['ExfiltrationAttempt','CredentialProbe','ToolAbuse','LinkInjection'].includes(a.pattern));
   if(!heur_caught&&!cls_caught){
     h+='<div class="flow-node '+(passA_caught?'flow-node-caught':passA_ran?'flow-enrich':'flow-parse')+'" style="flex:0 0 auto">';
     h+='SLM Pass A<br><span class="flow-ms">'+(passA_ran?e.pass_a_ms+'ms':'skipped')+'</span>';
     if(passA_caught)h+='<br><span style="font-size:10px;color:#f85149;font-weight:600">CAUGHT</span>';
     else if(passA_ran)h+='<br><span style="font-size:10px;color:#3fb950">clear</span>';
     h+='</div><div class="flow-arrow">→</div>';
-    // Stage 5: SLM Pass B (recon)
-    const passB_ran=e.pass_b_ms!=null&&e.pass_b_ms>0;
-    const passB_caught=anns.some(a=>['ExfiltrationAttempt','CredentialProbe','ToolAbuse','LinkInjection'].includes(a.pattern));
     h+='<div class="flow-node '+(passB_caught?'flow-node-caught':passB_ran?'flow-enrich':'flow-parse')+'" style="flex:0 0 auto">';
     h+='SLM Pass B<br><span class="flow-ms">'+(passB_ran?e.pass_b_ms+'ms':'skipped')+'</span>';
     if(passB_caught)h+='<br><span style="font-size:10px;color:#f85149;font-weight:600">CAUGHT</span>';
