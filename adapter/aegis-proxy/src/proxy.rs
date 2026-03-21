@@ -260,6 +260,7 @@ async fn forward_request(
 
     // SLM verdict — populated by the SLM hook below, used by traffic recorder
     let mut slm_verdict: Option<middleware::SlmVerdict> = None;
+    let mut slm_deep_handle: Option<tokio::task::JoinHandle<(middleware::SlmDecision, Option<middleware::SlmVerdict>)>> = None;
 
     // Run pre-request middleware (skip in pass-through mode)
     if state.config.mode != ProxyMode::PassThrough {
@@ -304,34 +305,43 @@ async fn forward_request(
             }
         }
 
-        // SLM hook: screen parsed Anthropic message content (not raw body)
+        // SLM hook: fast layers block (heuristic + classifier, <10ms),
+        // deep SLM runs async in parallel with LLM forwarding.
         if let Some(ref slm) = state.hooks.slm {
             let screen_content = if let Some(ref parsed) = anthropic_req {
-                // Extract actual conversation content for SLM analysis
                 let payload = anthropic::extract_screen_payload(parsed);
                 anthropic::screen_payload_to_string(&payload)
             } else if let Ok(s) = std::str::from_utf8(&body_bytes) {
-                // Fallback: use raw body if parsing failed
                 s.to_string()
             } else {
                 String::new()
             };
 
             if !screen_content.is_empty() {
-                let (decision, verdict) = slm.screen(&screen_content).await;
-                slm_verdict = verdict;
-                match decision {
-                    middleware::SlmDecision::Reject(reason) if state.config.mode == ProxyMode::Enforce => {
-                        warn!(path = %path, reason = %reason, "SLM rejected request");
-                        return Ok((StatusCode::FORBIDDEN, format!("rejected: {reason}")).into_response());
+                // Phase 1: Fast layers (heuristic + classifier) — blocking, <10ms
+                if let Some((decision, verdict)) = slm.screen_fast(&screen_content).await {
+                    slm_verdict = verdict;
+                    match decision {
+                        middleware::SlmDecision::Reject(reason) if state.config.mode == ProxyMode::Enforce => {
+                            warn!(path = %path, reason = %reason, "SLM fast-layer rejected request");
+                            return Ok((StatusCode::FORBIDDEN, format!("rejected: {reason}")).into_response());
+                        }
+                        middleware::SlmDecision::Quarantine(reason) => {
+                            info!(path = %path, reason = %reason, "SLM fast-layer quarantine");
+                        }
+                        middleware::SlmDecision::Reject(reason) => {
+                            info!(path = %path, reason = %reason, "SLM fast-layer would reject (observe-only)");
+                        }
+                        middleware::SlmDecision::Admit => {}
                     }
-                    middleware::SlmDecision::Quarantine(reason) => {
-                        info!(path = %path, reason = %reason, "SLM quarantine");
-                    }
-                    middleware::SlmDecision::Reject(reason) => {
-                        info!(path = %path, reason = %reason, "SLM would reject (observe-only)");
-                    }
-                    middleware::SlmDecision::Admit => {}
+                } else {
+                    // Phase 2: Fast layers clean — spawn deep SLM in parallel with LLM
+                    let slm_clone: Arc<dyn middleware::SlmHook> = Arc::clone(slm);
+                    let content_for_deep = screen_content.clone();
+                    slm_deep_handle = Some(tokio::spawn(async move {
+                        slm_clone.screen_deep(&content_for_deep).await
+                    }));
+                    debug!(path = %path, "SLM deep analysis started in parallel with LLM");
                 }
             }
         }
@@ -387,6 +397,31 @@ async fn forward_request(
 
     let resp_status = upstream_resp.status().as_u16();
     let resp_headers = upstream_resp.headers().clone();
+
+    // --- Await deep SLM verdict (P1: ran in parallel with LLM) ---
+    if let Some(handle) = slm_deep_handle {
+        match handle.await {
+            Ok((decision, verdict)) => {
+                slm_verdict = verdict;
+                match decision {
+                    middleware::SlmDecision::Reject(reason) if state.config.mode == ProxyMode::Enforce => {
+                        warn!(path = %path, reason = %reason, "SLM deep-layer rejected (blocking response)");
+                        return Ok((StatusCode::FORBIDDEN, format!("rejected: {reason}")).into_response());
+                    }
+                    middleware::SlmDecision::Quarantine(reason) => {
+                        info!(path = %path, reason = %reason, "SLM deep-layer quarantine");
+                    }
+                    middleware::SlmDecision::Reject(reason) => {
+                        info!(path = %path, reason = %reason, "SLM deep-layer would reject (observe-only)");
+                    }
+                    middleware::SlmDecision::Admit => {}
+                }
+            }
+            Err(e) => {
+                warn!("SLM deep screening task failed: {e}");
+            }
+        }
+    }
 
     // --- SSE streaming passthrough (BUG 1 fix) ---
     // Detect SSE via Content-Type or chunked Transfer-Encoding.

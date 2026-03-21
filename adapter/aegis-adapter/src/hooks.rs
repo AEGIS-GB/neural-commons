@@ -397,13 +397,122 @@ impl SlmHookImpl {
     }
 }
 
+impl SlmHookImpl {
+    /// Record a screening result as an evidence receipt and push alerts.
+    fn record_and_alert(&self, screening_result: &aegis_slm::loopback::ScreeningResult, content: &str) -> (SlmDecision, Option<SlmVerdict>) {
+        let verdict = Self::build_verdict(screening_result, content);
+
+        // Record SlmAnalysis receipt
+        let detail = serde_json::to_value(&verdict).ok();
+        let action_str = format!("slm_screen {}", verdict.engine);
+        let outcome_str = format!(
+            "action={} threat_score={} intent={}",
+            verdict.action, verdict.threat_score, verdict.intent
+        );
+        let context = aegis_schemas::ReceiptContext {
+            blinding_nonce: aegis_schemas::receipt::generate_blinding_nonce(),
+            enforcement_mode: None,
+            action: Some(action_str),
+            subject: None,
+            trigger: Some("proxy_request".to_string()),
+            outcome: Some(outcome_str),
+            detail,
+            enterprise: None,
+        };
+        if let Err(e) = self.recorder.record(ReceiptType::SlmAnalysis, context) {
+            tracing::warn!("failed to record SlmAnalysis receipt: {e}");
+        }
+
+        // Push alert on quarantine/reject
+        let decision = match screening_result.decision {
+            aegis_slm::loopback::ScreeningDecision::Admit => SlmDecision::Admit,
+            aegis_slm::loopback::ScreeningDecision::Quarantine(ref reason) => {
+                info!(reason = %reason, "SLM screening: quarantine");
+                let alert = aegis_dashboard::DashboardAlert {
+                    ts_ms: std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_millis() as u64,
+                    kind: "slm_quarantine".to_string(),
+                    message: format!("SLM quarantine: threat_score={} intent={}", verdict.threat_score, verdict.intent),
+                    receipt_seq: self.recorder.chain_head().head_seq,
+                };
+                let _ = self.alert_tx.send(alert);
+                SlmDecision::Quarantine(reason.clone())
+            }
+            aegis_slm::loopback::ScreeningDecision::Reject(ref reason) => {
+                info!(reason = %reason, "SLM screening: reject");
+                let alert = aegis_dashboard::DashboardAlert {
+                    ts_ms: std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_millis() as u64,
+                    kind: "slm_reject".to_string(),
+                    message: format!("SLM reject: threat_score={} intent={}", verdict.threat_score, verdict.intent),
+                    receipt_seq: self.recorder.chain_head().head_seq,
+                };
+                let _ = self.alert_tx.send(alert);
+                SlmDecision::Reject(reason.clone())
+            }
+        };
+
+        (decision, Some(verdict))
+    }
+}
+
 impl SlmHook for SlmHookImpl {
+    fn screen_fast<'a>(
+        &'a self,
+        content: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Option<(SlmDecision, Option<SlmVerdict>)>> + Send + 'a>> {
+        Box::pin(async move {
+            let config_clone = self.config.clone();
+            let content_owned = content.to_string();
+            let result = tokio::task::spawn_blocking(move || {
+                aegis_slm::loopback::screen_fast_layers(&config_clone, &content_owned)
+            })
+            .await;
+
+            match result {
+                Ok(Some(screening_result)) => {
+                    Some(self.record_and_alert(&screening_result, content))
+                }
+                Ok(None) => None, // fast layers clean, needs deep SLM
+                Err(e) => {
+                    tracing::warn!("fast screening task panicked: {e}");
+                    None
+                }
+            }
+        })
+    }
+
+    fn screen_deep<'a>(
+        &'a self,
+        content: &'a str,
+    ) -> Pin<Box<dyn Future<Output = (SlmDecision, Option<SlmVerdict>)> + Send + 'a>> {
+        Box::pin(async move {
+            let config_clone = self.config.clone();
+            let content_owned = content.to_string();
+            let result = tokio::task::spawn_blocking(move || {
+                aegis_slm::loopback::screen_deep_slm(&config_clone, &content_owned)
+            })
+            .await;
+
+            match result {
+                Ok(screening_result) => self.record_and_alert(&screening_result, content),
+                Err(e) => {
+                    tracing::warn!("deep SLM screening task panicked: {e}");
+                    (SlmDecision::Admit, None)
+                }
+            }
+        })
+    }
+
     fn screen<'a>(
         &'a self,
         content: &'a str,
     ) -> Pin<Box<dyn Future<Output = (SlmDecision, Option<SlmVerdict>)> + Send + 'a>> {
         Box::pin(async move {
-            // Run in blocking thread since Ollama uses blocking reqwest
             let config_clone = self.config.clone();
             let content_owned = content.to_string();
             let result = tokio::task::spawn_blocking(move || {
@@ -412,71 +521,10 @@ impl SlmHook for SlmHookImpl {
             .await;
 
             match result {
-                Ok(screening_result) => {
-                    let verdict = Self::build_verdict(&screening_result, content);
-
-                    // Record SlmAnalysis receipt
-                    let detail = serde_json::to_value(&verdict).ok();
-                    let action_str = format!("slm_screen {}", verdict.engine);
-                    let outcome_str = format!(
-                        "action={} threat_score={} intent={}",
-                        verdict.action, verdict.threat_score, verdict.intent
-                    );
-                    let context = aegis_schemas::ReceiptContext {
-                        blinding_nonce: aegis_schemas::receipt::generate_blinding_nonce(),
-                        enforcement_mode: None,
-                        action: Some(action_str),
-                        subject: None,
-                        trigger: Some("proxy_request".to_string()),
-                        outcome: Some(outcome_str),
-                        detail,
-                        enterprise: None,
-                    };
-                    if let Err(e) = self.recorder.record(
-                        ReceiptType::SlmAnalysis,
-                        context,
-                    ) {
-                        tracing::warn!("failed to record SlmAnalysis receipt: {e}");
-                    }
-
-                    // Push alert on quarantine/reject
-                    let decision = match screening_result.decision {
-                        aegis_slm::loopback::ScreeningDecision::Admit => SlmDecision::Admit,
-                        aegis_slm::loopback::ScreeningDecision::Quarantine(ref reason) => {
-                            info!(reason = %reason, "SLM screening: quarantine");
-                            let alert = aegis_dashboard::DashboardAlert {
-                                ts_ms: std::time::SystemTime::now()
-                                    .duration_since(std::time::UNIX_EPOCH)
-                                    .unwrap_or_default()
-                                    .as_millis() as u64,
-                                kind: "slm_quarantine".to_string(),
-                                message: format!("SLM quarantine: threat_score={} intent={}", verdict.threat_score, verdict.intent),
-                                receipt_seq: self.recorder.chain_head().head_seq,
-                            };
-                            let _ = self.alert_tx.send(alert);
-                            SlmDecision::Quarantine(reason.clone())
-                        }
-                        aegis_slm::loopback::ScreeningDecision::Reject(ref reason) => {
-                            info!(reason = %reason, "SLM screening: reject");
-                            let alert = aegis_dashboard::DashboardAlert {
-                                ts_ms: std::time::SystemTime::now()
-                                    .duration_since(std::time::UNIX_EPOCH)
-                                    .unwrap_or_default()
-                                    .as_millis() as u64,
-                                kind: "slm_reject".to_string(),
-                                message: format!("SLM reject: threat_score={} intent={}", verdict.threat_score, verdict.intent),
-                                receipt_seq: self.recorder.chain_head().head_seq,
-                            };
-                            let _ = self.alert_tx.send(alert);
-                            SlmDecision::Reject(reason.clone())
-                        }
-                    };
-
-                    (decision, Some(verdict))
-                }
+                Ok(screening_result) => self.record_and_alert(&screening_result, content),
                 Err(e) => {
                     tracing::warn!("SLM screening task panicked: {e}");
-                    (SlmDecision::Admit, None) // fail open
+                    (SlmDecision::Admit, None)
                 }
             }
         })

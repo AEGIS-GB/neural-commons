@@ -213,8 +213,21 @@ pub struct SlmDimensions {
 /// Screens request/response content for policy violations, prompt injection,
 /// sensitive data leakage, etc.
 pub trait SlmHook: Send + Sync {
-    /// Screen the given content string.
-    /// Returns the decision and an optional rich verdict for dashboard transparency.
+    /// Fast screening: heuristic + classifier only (<10ms).
+    /// Returns the decision if caught, or None if content needs deep SLM analysis.
+    fn screen_fast<'a>(
+        &'a self,
+        content: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Option<(SlmDecision, Option<SlmVerdict>)>> + Send + 'a>>;
+
+    /// Deep SLM screening: runs the 30B model (~2-3s).
+    /// Only called when screen_fast returns None (content passed fast layers).
+    fn screen_deep<'a>(
+        &'a self,
+        content: &'a str,
+    ) -> Pin<Box<dyn Future<Output = (SlmDecision, Option<SlmVerdict>)> + Send + 'a>>;
+
+    /// Full screening: fast + deep combined (legacy, blocking).
     fn screen<'a>(
         &'a self,
         content: &'a str,
@@ -340,6 +353,18 @@ impl BarrierHook for NoopBarrierHook {
 pub struct NoopSlmHook;
 
 impl SlmHook for NoopSlmHook {
+    fn screen_fast<'a>(
+        &'a self,
+        _content: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Option<(SlmDecision, Option<SlmVerdict>)>> + Send + 'a>> {
+        Box::pin(async { None })
+    }
+    fn screen_deep<'a>(
+        &'a self,
+        _content: &'a str,
+    ) -> Pin<Box<dyn Future<Output = (SlmDecision, Option<SlmVerdict>)> + Send + 'a>> {
+        Box::pin(async { (SlmDecision::Admit, None) })
+    }
     fn screen<'a>(
         &'a self,
         _content: &'a str,
