@@ -90,6 +90,199 @@ pub fn screen_content(config: &LoopbackConfig, content: &str) -> ScreeningDecisi
 
 /// Run the full screening pipeline, returning rich results with timing,
 /// enrichment data, and holster decisions for dashboard transparency.
+/// Run only the fast layers: heuristic + ProtectAI classifier (<10ms).
+/// Returns Some(result) if a threat was caught, None if content is clean
+/// and needs deep SLM analysis.
+pub fn screen_fast_layers(config: &LoopbackConfig, content: &str) -> Option<ScreeningResult> {
+    use std::time::Instant;
+    let pipeline_start = Instant::now();
+
+    if content.is_empty() {
+        return Some(ScreeningResult {
+            decision: ScreeningDecision::Admit,
+            enriched: None,
+            holster: None,
+            timing: ScreeningTiming {
+                total_ms: 0,
+                engine: config.engine.clone(),
+                ..Default::default()
+            },
+        });
+    }
+
+    // Classifier pre-filter
+    let classifier_start = Instant::now();
+    let classifier_signal = run_prompt_guard(config, content);
+    let classifier_ms = if classifier_signal.is_some() {
+        Some(classifier_start.elapsed().as_millis() as u64)
+    } else {
+        None
+    };
+
+    if let Some((true, prob)) = classifier_signal {
+        if prob > 0.5 {
+            info!(prob, "ProtectAI classifier: MALICIOUS, fast-path quarantine");
+            return Some(ScreeningResult {
+                decision: ScreeningDecision::Quarantine(format!(
+                    "prompt_guard: MALICIOUS (prob={prob:.4})"
+                )),
+                enriched: None,
+                holster: None,
+                timing: ScreeningTiming {
+                    total_ms: pipeline_start.elapsed().as_millis() as u64,
+                    classifier_ms,
+                    engine: "prompt-guard".to_string(),
+                    ..Default::default()
+                },
+            });
+        }
+    }
+
+    // Heuristic pre-filter
+    if config.fallback_to_heuristics {
+        let heuristic = HeuristicEngine::new();
+        let heuristic_start = Instant::now();
+        if let Ok(output) = heuristic.generate(content) {
+            let heuristic_ms = heuristic_start.elapsed().as_millis() as u64;
+            if let Ok(slm_output) = parse_slm_output(&output, &EngineProfile::Loopback) {
+                if !slm_output.annotations.is_empty() {
+                    info!(
+                        patterns = slm_output.annotations.len(),
+                        "heuristic pre-filter: threat detected"
+                    );
+                    let enriched = enrich(&slm_output, content.as_bytes());
+                    let holster_result = apply_holster(
+                        &enriched,
+                        &HolsterProfile::default(),
+                        &Namespace::Inbound,
+                        &EngineProfile::Loopback,
+                        false,
+                    );
+                    let decision = match holster_result.action {
+                        HolsterAction::Admit => ScreeningDecision::Admit,
+                        HolsterAction::Quarantine => ScreeningDecision::Quarantine(format!(
+                            "threat_score={} intent={:?}", enriched.threat_score, enriched.intent
+                        )),
+                        HolsterAction::Reject => ScreeningDecision::Reject(format!(
+                            "threat_score={} intent={:?}", enriched.threat_score, enriched.intent
+                        )),
+                    };
+                    return Some(ScreeningResult {
+                        decision,
+                        enriched: Some(enriched),
+                        holster: Some(holster_result),
+                        timing: ScreeningTiming {
+                            total_ms: pipeline_start.elapsed().as_millis() as u64,
+                            pass_a_ms: Some(heuristic_ms),
+                            classifier_ms,
+                            engine: "heuristic".to_string(),
+                            ..Default::default()
+                        },
+                    });
+                }
+            }
+        }
+    }
+
+    // Both fast layers clean — needs deep SLM analysis
+    None
+}
+
+/// Run only the deep SLM layer (2-3s). Call only after screen_fast_layers returns None.
+pub fn screen_deep_slm(config: &LoopbackConfig, content: &str) -> ScreeningResult {
+    use std::time::Instant;
+    let pipeline_start = Instant::now();
+
+    let prompt = screening_prompt_combined(content);
+
+    let engine: Box<dyn SlmEngine> = match config.engine.as_str() {
+        "openai" => Box::new(OpenAiCompatEngine::new(&config.server_url, &config.model)),
+        _ => Box::new(OllamaEngine::new(&config.server_url, &config.model)),
+    };
+
+    let pass_a_start = Instant::now();
+    let result = engine.generate(&prompt);
+    let pass_a_ms = pass_a_start.elapsed().as_millis() as u64;
+    let engine_name = config.engine.clone();
+
+    let raw_output = match result {
+        Ok(raw) => {
+            debug!(engine = %config.engine, ms = pass_a_ms, "SLM single-pass completed");
+            raw
+        }
+        Err(e) => {
+            warn!(engine = %config.engine, "SLM engine failed: {e} — quarantining (unscreened)");
+            return ScreeningResult {
+                decision: ScreeningDecision::Quarantine(format!(
+                    "slm_timeout: {e} (heuristic pre-filter clean, SLM unscreened)"
+                )),
+                enriched: None,
+                holster: None,
+                timing: ScreeningTiming {
+                    total_ms: pipeline_start.elapsed().as_millis() as u64,
+                    engine: engine_name,
+                    ..Default::default()
+                },
+            };
+        }
+    };
+
+    let slm_output = match parse_slm_output(&raw_output, &EngineProfile::Loopback) {
+        Ok(output) => output,
+        Err(e) => {
+            warn!("SLM parse failed: {e} — quarantining (unscreened)");
+            return ScreeningResult {
+                decision: ScreeningDecision::Quarantine(format!(
+                    "slm_parse_failure: {e} (heuristic pre-filter clean, SLM unscreened)"
+                )),
+                enriched: None,
+                holster: None,
+                timing: ScreeningTiming {
+                    total_ms: pipeline_start.elapsed().as_millis() as u64,
+                    pass_a_ms: Some(pass_a_ms),
+                    engine: engine_name,
+                    ..Default::default()
+                },
+            };
+        }
+    };
+
+    let enriched = enrich(&slm_output, content.as_bytes());
+    let holster_result = apply_holster(
+        &enriched,
+        &HolsterProfile::default(),
+        &Namespace::Inbound,
+        &EngineProfile::Loopback,
+        false,
+    );
+
+    let decision = match holster_result.action {
+        HolsterAction::Admit => ScreeningDecision::Admit,
+        HolsterAction::Quarantine => ScreeningDecision::Quarantine(format!(
+            "threat_score={} intent={:?} annotations={}",
+            enriched.threat_score, enriched.intent, enriched.annotations.len()
+        )),
+        HolsterAction::Reject => ScreeningDecision::Reject(format!(
+            "threat_score={} intent={:?} annotations={}",
+            enriched.threat_score, enriched.intent, enriched.annotations.len()
+        )),
+    };
+
+    ScreeningResult {
+        decision,
+        enriched: Some(enriched),
+        holster: Some(holster_result),
+        timing: ScreeningTiming {
+            total_ms: pipeline_start.elapsed().as_millis() as u64,
+            pass_a_ms: Some(pass_a_ms),
+            pass_b_ms: None,
+            classifier_ms: None,
+            engine: engine_name,
+        },
+    }
+}
+
+/// Full screening pipeline (fast + deep combined). Used for non-async path.
 pub fn screen_content_rich(config: &LoopbackConfig, content: &str) -> ScreeningResult {
     use std::time::Instant;
     let pipeline_start = Instant::now();
@@ -315,32 +508,44 @@ pub fn screen_content_rich(config: &LoopbackConfig, content: &str) -> ScreeningR
     }
 }
 
-/// Run Prompt Guard classifier if configured.
-/// Returns Some((is_malicious, probability)) or None if not available.
-fn run_prompt_guard(config: &LoopbackConfig, content: &str) -> Option<(bool, f32)> {
-    use crate::engine::prompt_guard::PromptGuardEngine;
-    use std::path::Path;
+/// Cached ProtectAI classifier — loaded once, reused for every request.
+/// Loading the ONNX model from disk takes ~950ms; classifying takes ~5ms.
+static PROMPT_GUARD_ENGINE: std::sync::OnceLock<Option<crate::engine::prompt_guard::PromptGuardEngine>> = std::sync::OnceLock::new();
 
-    let model_dir = config.prompt_guard_model_dir.as_ref()?;
-    let path = Path::new(model_dir);
-
-    match PromptGuardEngine::load(path) {
-        Ok(engine) => match engine.classify(content) {
-            Ok(result) => {
-                debug!(
-                    is_malicious = result.0,
-                    probability = result.1,
-                    "Prompt Guard pre-filter result"
-                );
-                Some(result)
+/// Initialize the cached classifier. Call once at startup.
+pub fn init_prompt_guard(model_dir: Option<&str>) {
+    PROMPT_GUARD_ENGINE.get_or_init(|| {
+        let dir = model_dir?;
+        let path = std::path::Path::new(dir);
+        match crate::engine::prompt_guard::PromptGuardEngine::load(path) {
+            Ok(engine) => {
+                info!("ProtectAI classifier loaded and cached");
+                Some(engine)
             }
             Err(e) => {
-                warn!("Prompt Guard classify failed: {e}");
+                warn!("ProtectAI classifier load failed: {e}");
                 None
             }
-        },
+        }
+    });
+}
+
+/// Run Prompt Guard classifier using the cached model.
+/// Returns Some((is_malicious, probability)) or None if not available.
+fn run_prompt_guard(_config: &LoopbackConfig, content: &str) -> Option<(bool, f32)> {
+    let engine = PROMPT_GUARD_ENGINE.get()?.as_ref()?;
+
+    match engine.classify(content) {
+        Ok(result) => {
+            debug!(
+                is_malicious = result.0,
+                probability = result.1,
+                "Prompt Guard pre-filter result"
+            );
+            Some(result)
+        }
         Err(e) => {
-            warn!("Prompt Guard model load failed: {e}");
+            warn!("Prompt Guard classify failed: {e}");
             None
         }
     }

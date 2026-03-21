@@ -424,12 +424,15 @@ pub async fn start(
     }
 
     // 7. Create middleware hooks
+    let prompt_guard_dir = detect_prompt_guard_model();
+    // P0: Cache the ProtectAI classifier at startup (~950ms once, ~5ms per-request)
+    aegis_slm::loopback::init_prompt_guard(prompt_guard_dir.as_deref());
     let slm_config = aegis_slm::loopback::LoopbackConfig {
         engine: config.slm.engine.clone(),
         server_url: config.slm.ollama_url.clone(),
         model: config.slm.model.clone(),
         fallback_to_heuristics: config.slm.fallback_to_heuristics,
-        prompt_guard_model_dir: detect_prompt_guard_model(),
+        prompt_guard_model_dir: prompt_guard_dir,
     };
     let slm_enabled = config.slm.enabled;
     let hooks = create_middleware_hooks(recorder.clone(), mode, alert_tx.clone(), slm_config, slm_enabled);
