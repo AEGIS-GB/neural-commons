@@ -123,15 +123,48 @@ struct ChannelContextResponse {
     registered: bool,
 }
 
-/// Global channel context — set by register-channel, read by proxy for trust.
-/// Uses a simple RwLock since registration is rare and reads are frequent.
-static CHANNEL_CONTEXT: std::sync::RwLock<Option<aegis_schemas::ChannelTrust>> =
+/// Channel registry — tracks all channels seen, with last request and stats.
+static CHANNEL_REGISTRY: std::sync::RwLock<ChannelRegistry> =
+    std::sync::RwLock::new(ChannelRegistry::new());
+
+/// Active channel — the most recently registered channel (used for proxy trust resolution).
+static ACTIVE_CHANNEL: std::sync::RwLock<Option<aegis_schemas::ChannelTrust>> =
     std::sync::RwLock::new(None);
 
-/// Get the current registered channel trust context.
-/// Called by the proxy to resolve trust when no X-Aegis-Channel-Cert header is present.
+/// Registry of all channels that have registered with Aegis.
+#[derive(Debug, Clone, Serialize)]
+pub struct ChannelRegistry {
+    pub channels: Vec<ChannelRecord>,
+}
+
+impl ChannelRegistry {
+    const fn new() -> Self {
+        Self { channels: Vec::new() }
+    }
+}
+
+/// A record of a single channel in the registry.
+#[derive(Debug, Clone, Serialize)]
+pub struct ChannelRecord {
+    pub channel: String,
+    pub user: String,
+    pub trust_level: String,
+    pub ssrf_allowed: bool,
+    pub first_seen_ms: i64,
+    pub last_seen_ms: i64,
+    pub request_count: u64,
+}
+
+/// Get the current active channel trust context.
 pub fn get_registered_channel_trust() -> Option<aegis_schemas::ChannelTrust> {
-    CHANNEL_CONTEXT.read().ok()?.clone()
+    ACTIVE_CHANNEL.read().ok()?.clone()
+}
+
+/// Get the full channel registry for the dashboard.
+pub fn get_channel_registry() -> Vec<ChannelRecord> {
+    CHANNEL_REGISTRY.read().ok()
+        .map(|r| r.channels.clone())
+        .unwrap_or_default()
 }
 
 /// POST /aegis/register-channel — agent registers its current channel context.
@@ -177,33 +210,53 @@ async fn register_channel_handler(
         registered: true,
     };
 
-    // Store the context globally
-    if let Ok(mut ctx) = CHANNEL_CONTEXT.write() {
+    // Store as active channel
+    if let Ok(mut ctx) = ACTIVE_CHANNEL.write() {
         *ctx = Some(trust);
+    }
+
+    // Update channel registry
+    let now_ms = crate::middleware::now_ms();
+    if let Ok(mut registry) = CHANNEL_REGISTRY.write() {
+        if let Some(existing) = registry.channels.iter_mut().find(|r| r.channel == req.channel) {
+            existing.last_seen_ms = now_ms;
+            existing.request_count += 1;
+            existing.user = req.user.clone().unwrap_or_default();
+            existing.trust_level = response.trust_level.clone();
+        } else {
+            registry.channels.push(ChannelRecord {
+                channel: req.channel.clone(),
+                user: req.user.clone().unwrap_or_default(),
+                trust_level: response.trust_level.clone(),
+                ssrf_allowed: response.ssrf_allowed,
+                first_seen_ms: now_ms,
+                last_seen_ms: now_ms,
+                request_count: 1,
+            });
+        }
     }
 
     Json(response)
 }
 
-/// GET /aegis/channel-context — return current registered channel trust.
-async fn channel_context_handler() -> Json<ChannelContextResponse> {
-    let ctx = CHANNEL_CONTEXT.read().ok().and_then(|c| c.clone());
-    match ctx {
-        Some(trust) => Json(ChannelContextResponse {
-            channel: trust.channel,
-            user: trust.user,
-            trust_level: format!("{:?}", trust.trust_level).to_lowercase(),
-            ssrf_allowed: trust.ssrf_allowed,
-            registered: true,
-        }),
-        None => Json(ChannelContextResponse {
-            channel: None,
-            user: None,
-            trust_level: "unknown".to_string(),
-            ssrf_allowed: false,
-            registered: false,
-        }),
-    }
+/// GET /aegis/channel-context — return current active channel + full registry.
+async fn channel_context_handler() -> Json<serde_json::Value> {
+    let active = ACTIVE_CHANNEL.read().ok().and_then(|c| c.clone());
+    let registry = get_channel_registry();
+
+    let active_json = active.map(|trust| serde_json::json!({
+        "channel": trust.channel,
+        "user": trust.user,
+        "trust_level": format!("{:?}", trust.trust_level).to_lowercase(),
+        "ssrf_allowed": trust.ssrf_allowed,
+        "cert_verified": trust.cert_verified,
+    }));
+
+    Json(serde_json::json!({
+        "active": active_json,
+        "registered": active_json.is_some(),
+        "channels": registry,
+    }))
 }
 
 #[cfg(test)]
