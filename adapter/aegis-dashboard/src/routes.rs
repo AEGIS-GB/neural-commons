@@ -88,6 +88,7 @@ pub fn routes(state: Arc<DashboardSharedState>) -> Router {
         .route("/api/slm", get(api_slm))
         .route("/api/traffic", get(api_traffic))
         .route("/api/traffic/{id}", get(api_traffic_detail))
+        .route("/api/trust", get(api_trust))
         .with_state(state)
 }
 
@@ -977,4 +978,35 @@ async fn api_alerts_stream(
             .interval(std::time::Duration::from_secs(15))
             .text("keepalive"),
     )
+}
+
+/// GET /dashboard/api/trust — channel trust overview.
+/// Channel context is fetched by the JS from /aegis/channel-context directly.
+async fn api_trust(
+    State(state): State<Arc<DashboardSharedState>>,
+) -> Json<serde_json::Value> {
+    // Count screenings by trust level from recent evidence
+    let chain_head = state.evidence.chain_head();
+    let mut trust_counts: std::collections::HashMap<String, u64> = std::collections::HashMap::new();
+    let mut total_screened: u64 = 0;
+
+    let start_seq = chain_head.head_seq.saturating_sub(500).max(1);
+    if let Ok(receipts) = state.evidence.export(Some(start_seq), None) {
+        for receipt in receipts.iter().rev() {
+            if receipt.core.receipt_type != aegis_schemas::ReceiptType::SlmAnalysis {
+                continue;
+            }
+            total_screened += 1;
+            let trust_level = receipt.context.detail.as_ref()
+                .and_then(|d| d.get("channel_trust_level"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown");
+            *trust_counts.entry(trust_level.to_string()).or_insert(0) += 1;
+        }
+    }
+
+    Json(serde_json::json!({
+        "screening_by_trust": trust_counts,
+        "total_screened": total_screened,
+    }))
 }
