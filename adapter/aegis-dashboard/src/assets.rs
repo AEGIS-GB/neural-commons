@@ -168,12 +168,10 @@ table.dtable .screening-row:hover{background:#1c2128}
 </div>
 <div class="panel" id="panel-trust">
 <div class="grid" id="trust-stats"></div>
-<div class="card"><h2>Channel Trust Configuration</h2>
+<div class="card"><h2>Channel Registry</h2>
 <div id="trust-config"></div>
 </div>
-<div class="card"><h2>Screenings by Trust Level</h2>
-<div id="trust-breakdown"></div>
-</div>
+<div id="trust-breakdown" style="padding:0 16px"></div>
 </div>
 <div class="panel" id="panel-traffic">
 <div class="card"><h2>Traffic Inspector</h2>
@@ -293,11 +291,10 @@ async function poll(){
       const tr=await(await fetch('/dashboard/api/trust')).json();
       let channelCtx=null;
       try{channelCtx=await(await fetch('/aegis/channel-context')).json();}catch(e){}
-      if(channelCtx&&channelCtx.registered){
-        tr.active_channel=channelCtx;
-        tr.trust_registered=true;
-      }else{
-        tr.trust_registered=false;
+      if(channelCtx){
+        tr.active_channel=channelCtx.active;
+        tr.trust_registered=channelCtx.registered;
+        tr.channel_registry=channelCtx.channels||[];
       }
       renderTrust(tr);
     }catch(e){}
@@ -313,62 +310,61 @@ function renderTrust(tr){
   const stats=document.getElementById('trust-stats');
   const config=document.getElementById('trust-config');
   const breakdown=document.getElementById('trust-breakdown');
-  // Stats cards
-  let sc='';
-  if(tr.active_channel){
-    const ac=tr.active_channel;
-    sc+='<div class="card" style="grid-column:1/-1"><div style="display:flex;align-items:center;gap:20px;flex-wrap:wrap">';
-    sc+='<div><div style="font-size:11px;color:#8b949e;margin-bottom:4px">ACTIVE CHANNEL</div><span class="badge badge-gray" style="font-size:14px">'+(ac.channel||'none')+'</span></div>';
-    if(ac.user)sc+='<div><div style="font-size:11px;color:#8b949e;margin-bottom:4px">USER</div><span style="font-size:14px;color:#e1e4e8">'+(ac.user||'')+'</span></div>';
-    sc+='<div><div style="font-size:11px;color:#8b949e;margin-bottom:4px">TRUST LEVEL</div><span class="trust-badge trust-'+ac.trust_level+'" style="font-size:14px;padding:4px 12px">'+ac.trust_level+'</span></div>';
-    sc+='<div><div style="font-size:11px;color:#8b949e;margin-bottom:4px">SSRF POLICY</div><span style="font-size:14px;font-weight:600;color:'+(ac.ssrf_allowed?'#3fb950':'#f85149')+'">'+(ac.ssrf_allowed?'Internal URLs allowed':'Internal URLs blocked')+'</span></div>';
-    sc+='<div><div style="font-size:11px;color:#8b949e;margin-bottom:4px">CERT VERIFIED</div><span style="font-size:14px;color:'+(ac.cert_verified?'#3fb950':'#8b949e')+'">'+(ac.cert_verified?'Yes':'No (config-based)')+'</span></div>';
-    sc+='</div></div>';
-  }else{
-    sc+='<div class="card" style="grid-column:1/-1"><div style="color:#8b949e;font-size:14px">No channel registered. Install the <strong>aegis-channel-trust</strong> OpenClaw plugin or call <code>POST /aegis/register-channel</code> to register.</div></div>';
-  }
-  sc+='<div class="card"><div class="stat">'+tr.total_screened+'</div><div class="stat-label">Screenings with Trust Context</div></div>';
-  sc+='<div class="card"><div class="stat">'+(tr.trust_registered?'<span class="status-ok">Active</span>':'<span class="status-warn">None</span>')+'</div><div class="stat-label">Channel Registration</div></div>';
-  stats.innerHTML=sc;
-  // Trust level explanation
-  let ch='<table class="dtable"><tr><th>Trust Level</th><th>Holster Profile</th><th>SSRF Policy</th><th>Description</th></tr>';
-  const levels=[
-    ['full','Permissive','Allowed','Owner/admin — highest trust, internal URLs accessible'],
-    ['trusted','Balanced','Blocked','Explicitly trusted user or group'],
-    ['public','Aggressive','Blocked','Public channel, anyone can message — strict screening'],
-    ['restricted','Aggressive','Blocked','Explicitly restricted — strictest screening'],
-    ['unknown','Balanced','Blocked','Default — no channel registered or unmatched pattern'],
-  ];
-  for(const[level,holster,ssrf,desc] of levels){
-    const isActive=tr.active_channel&&tr.active_channel.trust_level===level;
-    ch+='<tr style="'+(isActive?'background:#1c2128;border-left:3px solid #58a6ff':'')+'">';
-    ch+='<td><span class="trust-badge trust-'+level+'">'+level+'</span>'+(isActive?' <span style="font-size:10px;color:#58a6ff">active</span>':'')+'</td>';
-    ch+='<td><span class="badge badge-gray">'+holster+'</span></td>';
-    ch+='<td style="color:'+(ssrf==='Allowed'?'#3fb950':'#f85149')+'">'+ssrf+'</td>';
-    ch+='<td style="color:#8b949e;font-size:12px">'+desc+'</td></tr>';
-  }
-  ch+='</table>';
-  config.innerHTML=ch;
-  // Screening breakdown by trust level
+  const channels=tr.channel_registry||[];
   const counts=tr.screening_by_trust||{};
-  const total=tr.total_screened||1;
-  if(Object.keys(counts).length===0){
-    breakdown.innerHTML='<p class="empty-state">No screenings with trust context yet. Send requests through the proxy to see trust-level distribution.</p>';
-    return;
-  }
-  let bh='<div style="display:flex;height:24px;border-radius:6px;overflow:hidden;background:#21262d;margin-bottom:12px">';
+  const total=tr.total_screened||0;
   const colors={full:'#3fb950',trusted:'#58a6ff',public:'#d29922',restricted:'#f85149',unknown:'#8b949e'};
-  for(const[level,count] of Object.entries(counts)){
-    const pct=Math.max(3,count/total*100);
-    bh+='<div style="width:'+pct+'%;background:'+(colors[level]||'#8b949e')+';display:flex;align-items:center;justify-content:center;font-size:10px;color:#fff" title="'+level+': '+count+'">'+count+'</div>';
+  // ── Stats cards ──
+  let sc='';
+  sc+='<div class="card"><div class="stat">'+channels.length+'</div><div class="stat-label">Channels Seen</div></div>';
+  sc+='<div class="card"><div class="stat">'+total+'</div><div class="stat-label">Total Screenings</div></div>';
+  sc+='<div class="card"><div class="stat">'+(tr.trust_registered?'<span class="status-ok">Active</span>':'<span class="status-warn">None</span>')+'</div><div class="stat-label">Registration</div></div>';
+  // Screening distribution bar
+  if(total>0&&Object.keys(counts).length>0){
+    sc+='<div class="card"><div style="font-size:11px;color:#8b949e;margin-bottom:6px">SCREENINGS BY TRUST</div>';
+    sc+='<div style="display:flex;height:20px;border-radius:4px;overflow:hidden;background:#21262d;margin-bottom:6px">';
+    for(const[level,count] of Object.entries(counts)){
+      const pct=Math.max(3,count/total*100);
+      sc+='<div style="width:'+pct+'%;background:'+(colors[level]||'#8b949e')+';display:flex;align-items:center;justify-content:center;font-size:9px;color:#fff" title="'+level+': '+count+'">'+count+'</div>';
+    }
+    sc+='</div>';
+    sc+='<div style="display:flex;gap:10px;flex-wrap:wrap">';
+    for(const[level,count] of Object.entries(counts)){sc+='<span style="font-size:11px"><span class="trust-badge trust-'+level+'">'+level+'</span> '+count+'</span>';}
+    sc+='</div></div>';
   }
-  bh+='</div>';
-  bh+='<div style="display:flex;gap:16px;flex-wrap:wrap">';
-  for(const[level,count] of Object.entries(counts)){
-    bh+='<div><span class="trust-badge trust-'+level+'">'+level+'</span> <span style="font-size:14px;font-weight:600;color:#e1e4e8">'+count+'</span></div>';
+  stats.innerHTML=sc;
+  // ── Channel registry table (full history) ──
+  if(channels.length===0){
+    config.innerHTML='<p class="empty-state">No channels registered yet. Install the <strong>aegis-channel-trust</strong> OpenClaw plugin or call <code>POST /aegis/register-channel</code>.</p>';
+  }else{
+    const activeChannel=tr.active_channel?tr.active_channel.channel:null;
+    let ch='<table class="dtable"><tr><th>Channel</th><th>User</th><th>Trust</th><th>SSRF</th><th>Requests</th><th>First Seen</th><th>Last Seen</th></tr>';
+    for(const c of channels){
+      const isActive=c.channel===activeChannel;
+      ch+='<tr style="'+(isActive?'background:#1c2128;border-left:3px solid #58a6ff':'')+'">';
+      ch+='<td><span class="badge badge-gray" style="font-size:12px">'+c.channel+'</span>';
+      if(isActive)ch+=' <span style="font-size:9px;color:#58a6ff;font-weight:600">ACTIVE</span>';
+      ch+='</td>';
+      ch+='<td style="font-size:12px;color:#8b949e">'+c.user+'</td>';
+      ch+='<td><span class="trust-badge trust-'+c.trust_level+'">'+c.trust_level+'</span></td>';
+      ch+='<td style="color:'+(c.ssrf_allowed?'#3fb950':'#f85149')+';font-size:12px">'+(c.ssrf_allowed?'allowed':'blocked')+'</td>';
+      ch+='<td style="font-weight:600">'+c.request_count+'</td>';
+      ch+='<td style="font-size:11px;color:#8b949e">'+fmtTime(c.first_seen_ms)+'</td>';
+      ch+='<td style="font-size:11px;color:#8b949e">'+fmtTime(c.last_seen_ms)+'</td>';
+      ch+='</tr>';
+    }
+    ch+='</table>';
+    config.innerHTML=ch;
   }
-  bh+='</div>';
-  breakdown.innerHTML=bh;
+  // ── Trust level reference (compact) ──
+  let ref='<div style="margin-top:8px;font-size:11px;color:#8b949e">Trust levels: ';
+  ref+='<span class="trust-badge trust-full">full</span> Permissive, SSRF allowed · ';
+  ref+='<span class="trust-badge trust-trusted">trusted</span> Balanced · ';
+  ref+='<span class="trust-badge trust-public">public</span> Aggressive · ';
+  ref+='<span class="trust-badge trust-restricted">restricted</span> Aggressive · ';
+  ref+='<span class="trust-badge trust-unknown">unknown</span> Balanced (default)';
+  ref+='</div>';
+  breakdown.innerHTML=ref;
 }
 function typeBadge(t){
   const colors={WriteBarrier:'red',MemoryIntegrity:'yellow',ApiCall:'blue',ModeChange:'green',VaultDetection:'red',SlmAnalysis:'yellow',SlmParseFailure:'red'};
