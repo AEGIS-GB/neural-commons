@@ -373,7 +373,7 @@ impl SlmHookImpl {
                 (action.to_string(), 0, "benign".to_string(), 0, 0, None, None, None)
             };
 
-        SlmVerdict {
+        let mut v = SlmVerdict {
             action,
             threat_score,
             intent,
@@ -396,7 +396,16 @@ impl SlmHookImpl {
             channel: None,
             channel_user: None,
             channel_trust_level: None,
+        };
+
+        // Stamp channel trust from registered context (cognitive bridge)
+        if let Some(trust) = aegis_proxy::cognitive_bridge::get_registered_channel_trust() {
+            v.channel = trust.channel;
+            v.channel_user = trust.user;
+            v.channel_trust_level = Some(format!("{:?}", trust.trust_level).to_lowercase());
         }
+
+        v
     }
 }
 

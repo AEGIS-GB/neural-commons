@@ -350,9 +350,19 @@ async fn forward_request(
             };
 
             if !screen_content.is_empty() {
+                // Stamp channel trust onto any SLM verdict
+                let stamp_trust = |v: &mut Option<middleware::SlmVerdict>| {
+                    if let Some(verdict) = v.as_mut() {
+                        verdict.channel = req_info.channel_trust.channel.clone();
+                        verdict.channel_user = req_info.channel_trust.user.clone();
+                        verdict.channel_trust_level = Some(format!("{:?}", req_info.channel_trust.trust_level).to_lowercase());
+                    }
+                };
+
                 // Phase 1: Fast layers (heuristic + classifier) — blocking, <10ms
                 if let Some((decision, verdict)) = slm.screen_fast(&screen_content).await {
                     slm_verdict = verdict;
+                    stamp_trust(&mut slm_verdict);
                     match decision {
                         middleware::SlmDecision::Reject(reason) if state.config.mode == ProxyMode::Enforce => {
                             warn!(path = %path, reason = %reason, "SLM fast-layer rejected request");
@@ -463,6 +473,12 @@ async fn forward_request(
         match handle.await {
             Ok((decision, verdict)) => {
                 slm_verdict = verdict;
+                // Stamp channel trust onto deep SLM verdict
+                if let Some(v) = slm_verdict.as_mut() {
+                    v.channel = req_info.channel_trust.channel.clone();
+                    v.channel_user = req_info.channel_trust.user.clone();
+                    v.channel_trust_level = Some(format!("{:?}", req_info.channel_trust.trust_level).to_lowercase());
+                }
                 match decision {
                     middleware::SlmDecision::Reject(reason) if state.config.mode == ProxyMode::Enforce => {
                         warn!(path = %path, reason = %reason, "SLM deep-layer rejected (blocking response)");
