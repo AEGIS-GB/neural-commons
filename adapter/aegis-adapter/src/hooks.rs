@@ -480,8 +480,19 @@ impl SlmHook for SlmHookImpl {
         Box::pin(async move {
             let config_clone = self.config.clone();
             let content_owned = content.to_string();
+            // Determine if classifier should block based on channel trust.
+            // Trusted/Full channels: classifier is advisory (don't block on false positives).
+            // Public/Unknown channels: classifier blocks (strict screening).
+            let classifier_blocking = {
+                let trust = aegis_proxy::cognitive_bridge::get_registered_channel_trust();
+                match trust.as_ref().map(|t| &t.trust_level) {
+                    Some(aegis_schemas::TrustLevel::Full) |
+                    Some(aegis_schemas::TrustLevel::Trusted) => false, // advisory
+                    _ => true, // blocking for public/unknown/restricted
+                }
+            };
             let result = tokio::task::spawn_blocking(move || {
-                aegis_slm::loopback::screen_fast_layers(&config_clone, &content_owned, None)
+                aegis_slm::loopback::screen_fast_layers(&config_clone, &content_owned, None, classifier_blocking)
             })
             .await;
 
