@@ -39,8 +39,26 @@ const plugin: OpenClawPluginDefinition = {
       const conversationId = ctx.conversationId || "default";
       const from = event.from || "unknown";
 
-      // Build channel identifier: platform:conversation_type:id
-      const channel = `${channelId}:${conversationId}`;
+      // Detect conversation type from ID patterns:
+      // Telegram: positive IDs = DM, negative IDs = group
+      // Discord: channels have specific formats
+      // Default: use "chat" as generic type
+      let chatType = "chat";
+      const convNum = parseInt(conversationId, 10);
+      if (channelId === "telegram") {
+        chatType = (convNum < 0 || conversationId.startsWith("-")) ? "group" : "dm";
+      } else if (channelId === "discord") {
+        chatType = "channel";
+      } else if (channelId === "whatsapp") {
+        chatType = conversationId.includes("@g.us") ? "group" : "dm";
+      }
+
+      // Build channel identifier: platform:type:id
+      // Strip platform prefix from conversationId if present (e.g. "telegram:123" → "123")
+      const cleanConvId = conversationId.startsWith(`${channelId}:`)
+        ? conversationId.slice(channelId.length + 1)
+        : conversationId;
+      const channel = `${channelId}:${chatType}:${cleanConvId}`;
       const user = `${channelId}:user:${from}`;
 
       // Skip if same channel already registered (avoid redundant calls)
