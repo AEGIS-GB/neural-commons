@@ -97,12 +97,15 @@ pub fn screen_content(config: &LoopbackConfig, content: &str) -> ScreeningDecisi
 /// (returns None to let the SLM handle it) instead of quarantining.
 /// Set to false for trusted channels where the classifier may false-positive
 /// on legitimate orchestration text.
-pub fn screen_fast_layers(config: &LoopbackConfig, content: &str, holster_profile: Option<&HolsterProfile>, classifier_blocking: bool) -> Option<ScreeningResult> {
+/// Returns (screening_result, classifier_advisory).
+/// - screening_result: Some if a fast layer caught a threat, None if clean/advisory
+/// - classifier_advisory: Some("prob=0.98") if classifier flagged but was in advisory mode
+pub fn screen_fast_layers(config: &LoopbackConfig, content: &str, holster_profile: Option<&HolsterProfile>, classifier_blocking: bool) -> (Option<ScreeningResult>, Option<String>) {
     use std::time::Instant;
     let pipeline_start = Instant::now();
 
     if content.is_empty() {
-        return Some(ScreeningResult {
+        return (Some(ScreeningResult {
             decision: ScreeningDecision::Admit,
             enriched: None,
             holster: None,
@@ -111,7 +114,7 @@ pub fn screen_fast_layers(config: &LoopbackConfig, content: &str, holster_profil
                 engine: config.engine.clone(),
                 ..Default::default()
             },
-        });
+        }), None);
     }
 
     // Classifier pre-filter
@@ -123,11 +126,13 @@ pub fn screen_fast_layers(config: &LoopbackConfig, content: &str, holster_profil
         None
     };
 
+    let mut classifier_advisory: Option<String> = None;
+
     if let Some((true, prob)) = classifier_signal {
         if prob > 0.5 {
             if classifier_blocking {
                 info!(prob, "ProtectAI classifier: MALICIOUS, fast-path quarantine");
-                return Some(ScreeningResult {
+                return (Some(ScreeningResult {
                     decision: ScreeningDecision::Quarantine(format!(
                         "prompt_guard: MALICIOUS (prob={prob:.4})"
                     )),
@@ -139,11 +144,12 @@ pub fn screen_fast_layers(config: &LoopbackConfig, content: &str, holster_profil
                         engine: "prompt-guard".to_string(),
                         ..Default::default()
                     },
-                });
+                }), None);
             } else {
                 // Advisory mode: classifier flagged it but trust level says don't block.
                 // Log and let the SLM make the final decision.
                 info!(prob, "ProtectAI classifier: suspicious (advisory, trusted channel — forwarding to SLM)");
+                classifier_advisory = Some(format!("prompt_guard: MALICIOUS (prob={prob:.4}) — advisory, trusted channel"));
             }
         }
     }
@@ -177,7 +183,7 @@ pub fn screen_fast_layers(config: &LoopbackConfig, content: &str, holster_profil
                             "threat_score={} intent={:?}", enriched.threat_score, enriched.intent
                         )),
                     };
-                    return Some(ScreeningResult {
+                    return (Some(ScreeningResult {
                         decision,
                         enriched: Some(enriched),
                         holster: Some(holster_result),
@@ -188,14 +194,14 @@ pub fn screen_fast_layers(config: &LoopbackConfig, content: &str, holster_profil
                             engine: "heuristic".to_string(),
                             ..Default::default()
                         },
-                    });
+                    }), classifier_advisory);
                 }
             }
         }
     }
 
-    // Both fast layers clean — needs deep SLM analysis
-    None
+    // Fast layers clean (or advisory only) — needs deep SLM analysis
+    (None, classifier_advisory)
 }
 
 /// Run only the deep SLM layer (2-3s). Call only after screen_fast_layers returns None.

@@ -197,6 +197,10 @@ pub struct SlmVerdict {
     /// Resolved trust level for this request.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub channel_trust_level: Option<String>,
+    /// Classifier advisory: classifier flagged but trust level was advisory (not blocking).
+    /// Shows what the classifier detected even though the final decision was admit.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub classifier_advisory: Option<String>,
 }
 
 /// A detected pattern annotation with excerpt.
