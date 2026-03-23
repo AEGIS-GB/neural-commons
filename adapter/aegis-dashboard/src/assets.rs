@@ -653,11 +653,18 @@ function buildScreeningHtml(e){
     if(anns.length>0){for(const ann of anns){const ex=escHtml(ann.excerpt);if(ex&&stxt.includes(ex)){stxt=stxt.replace(ex,'<mark style="background:#5c2d0e;color:#f0883e;padding:1px 2px;border-radius:2px">'+ex+'</mark>');}}}
     h+='<div class="body-pre" style="max-height:120px">'+stxt+'</div></div>';
   }
-  // Reason banner
+  // Reason banner — distinguish security verdicts from SLM errors
   if(e.reason&&isDangerous){
-    h+='<div style="margin-bottom:12px;padding:8px 12px;background:'+(e.action==='reject'?'rgba(248,81,73,0.1);border:1px solid #da3633':'rgba(210,153,34,0.1);border:1px solid #9e6a03')+';border-radius:6px">';
-    h+='<div style="font-size:10px;font-weight:600;text-transform:uppercase;color:'+(e.action==='reject'?'#f85149':'#d29922')+'">'+(e.action==='reject'?'BLOCKED':'QUARANTINED')+'</div>';
-    h+='<div style="font-size:12px;color:#e1e4e8">'+escHtml(e.reason)+'</div></div>';
+    const isSlmError=e.reason.includes('slm_timeout')||e.reason.includes('slm_parse_failure')||e.reason.includes('400 Bad Request')||e.reason.includes('unscreened');
+    if(isSlmError){
+      h+='<div style="margin-bottom:12px;padding:8px 12px;background:rgba(210,153,34,0.1);border:1px solid #9e6a03;border-radius:6px">';
+      h+='<div style="font-size:10px;font-weight:600;text-transform:uppercase;color:#d29922">SLM SCREENING ERROR — QUARANTINED AS UNSCREENED</div>';
+      h+='<div style="font-family:monospace;font-size:11px;color:#e1e4e8;margin-top:4px;background:#0d1117;padding:6px 10px;border-radius:4px;overflow-x:auto;white-space:pre-wrap;word-break:break-word">'+escHtml(e.reason)+'</div></div>';
+    }else{
+      h+='<div style="margin-bottom:12px;padding:8px 12px;background:'+(e.action==='reject'?'rgba(248,81,73,0.1);border:1px solid #da3633':'rgba(210,153,34,0.1);border:1px solid #9e6a03')+';border-radius:6px">';
+      h+='<div style="font-size:10px;font-weight:600;text-transform:uppercase;color:'+(e.action==='reject'?'#f85149':'#d29922')+'">'+(e.action==='reject'?'BLOCKED':'QUARANTINED')+'</div>';
+      h+='<div style="font-size:12px;color:#e1e4e8">'+escHtml(e.reason)+'</div></div>';
+    }
   }
   // Pipeline flow
   h+='<div style="margin-bottom:12px"><div style="font-size:11px;color:#8b949e;margin-bottom:6px">SCREENING PIPELINE</div>';
@@ -960,17 +967,20 @@ function renderTraffic(data){
   if(trafficDetailId)return; // don't overwrite detail view
   const stats=document.getElementById('traffic-stats');
   const tbl=document.getElementById('traffic-table');
-  let sc='<div class="card"><div class="stat">'+data.total+'</div><div class="stat-label">Captured Requests</div></div>';
+  const errors=data.entries?data.entries.filter(e=>e.status>=400).length:0;
   const streaming=data.entries?data.entries.filter(e=>e.is_streaming).length:0;
-  sc+='<div class="card"><div class="stat">'+streaming+'</div><div class="stat-label">Streaming (SSE)</div></div>';
   const avgDur=data.entries&&data.entries.length>0?Math.round(data.entries.reduce((s,e)=>s+e.duration_ms,0)/data.entries.length):0;
+  let sc='<div class="card"><div class="stat">'+data.total+'</div><div class="stat-label">Captured Requests</div></div>';
+  sc+='<div class="card"><div class="stat'+(errors>0?' status-error':'')+'">'+errors+'</div><div class="stat-label">Errors (4xx/5xx)</div></div>';
+  sc+='<div class="card"><div class="stat">'+streaming+'</div><div class="stat-label">Streaming (SSE)</div></div>';
   sc+='<div class="card"><div class="stat">'+avgDur+'ms</div><div class="stat-label">Avg Latency</div></div>';
   stats.innerHTML=sc;
   if(!data.entries||data.entries.length===0){tbl.innerHTML='<p class="empty-state">No traffic captured yet. Send requests through the proxy to see them here.</p>';return;}
   let h='<table class="dtable"><tr><th>#</th><th>Time</th><th>Method</th><th>Path</th><th>Status</th><th>SLM</th><th>Req Size</th><th>Resp Size</th><th>Duration</th><th>Type</th></tr>';
   for(const e of data.entries){
     const sc2=e.status<400?'badge-green':'badge-red';
-    h+='<tr class="traffic-row" onclick="showTrafficDetail('+e.id+')">';
+    const isErr=e.status>=400;
+    h+='<tr class="traffic-row" style="'+(isErr?'background:rgba(248,81,73,0.08);border-left:3px solid #da3633':'')+'" onclick="showTrafficDetail('+e.id+')">';
     h+='<td>'+e.id+'</td>';
     h+='<td style="white-space:nowrap">'+fmtTimeShort(e.ts_ms)+'</td>';
     h+='<td><span class="badge badge-blue">'+e.method+'</span></td>';
@@ -1011,6 +1021,17 @@ async function showTrafficDetail(id){
     h+='<span style="color:#8b949e;font-size:12px">'+fmtTime(e.ts_ms)+'</span>';
     if(e.slm_verdict){h+=' '+verdictBadge(e.slm_verdict)+' <span style="font-size:12px;color:#8b949e">score:'+(e.slm_threat_score||0)+' '+(e.slm_duration_ms||0)+'ms</span>';}
     h+='</div>';
+    // ── Error banner for 4xx/5xx responses ──
+    if(e.status>=400){
+      h+='<div style="margin-bottom:16px;padding:12px 16px;background:rgba(248,81,73,0.1);border:1px solid #da3633;border-radius:6px">';
+      h+='<div style="font-size:12px;font-weight:600;color:#f85149;margin-bottom:6px">UPSTREAM ERROR — HTTP '+e.status+'</div>';
+      // Try to extract error message from response body
+      let errMsg='';
+      try{const rb=JSON.parse(e.response_body);errMsg=rb.error?.message||rb.error||rb.message||'';}catch(ex){errMsg=e.response_body?.substring(0,500)||'';}
+      if(typeof errMsg==='object')errMsg=JSON.stringify(errMsg);
+      if(errMsg)h+='<div style="font-family:monospace;font-size:12px;color:#e1e4e8;background:#0d1117;padding:8px 12px;border-radius:4px;overflow-x:auto;white-space:pre-wrap;word-break:break-word">'+escHtml(errMsg)+'</div>';
+      h+='</div>';
+    }
     // ── Unified: Full SLM Screening Detail (same as SLM tab) ──
     let matchedSlm=null;
     if(slmData&&slmData.recent_screenings){
