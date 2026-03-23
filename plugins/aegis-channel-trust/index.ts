@@ -175,8 +175,16 @@ const plugin: OpenClawPluginDefinition = {
         chatType = numId < 0 ? "group" : "dm";
       }
 
-      const channel = `${channelId}:${chatType}:${cleanConvId}`;
-      const user = `${channelId}:user:${senderId}`;
+      // Normalize platform name: "web" and "openclaw" both map to "openclaw"
+      // so channel matches config pattern "openclaw:web:*"
+      let platform = channelId;
+      if (channelId === "web" || channelId === "openclaw") {
+        platform = "openclaw";
+        chatType = "web";
+      }
+
+      const channel = `${platform}:${chatType}:${cleanConvId}`;
+      const user = `${platform}:user:${senderId}`;
 
       await registerChannel(channel, user);
     });
