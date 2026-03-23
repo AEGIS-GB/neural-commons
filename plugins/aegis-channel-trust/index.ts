@@ -26,7 +26,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 const DEFAULT_AEGIS_URL = "http://127.0.0.1:3141";
-const DEFAULT_KEY_PATH = ".aegis/identity.key";
+const DEFAULT_KEY_PATH = "/home/aegis/aegis/neural-commons/.aegis/identity.key";
 
 /**
  * Sign a channel registration payload with Ed25519.
@@ -64,6 +64,9 @@ const plugin: OpenClawPluginDefinition = {
   name: "Aegis Channel Trust",
 
   register(api) {
+    console.log("[aegis-channel-trust] plugin register() called");
+    console.log("[aegis-channel-trust] api.on type:", typeof api.on);
+    console.log("[aegis-channel-trust] api keys:", Object.keys(api).join(", "));
     const aegisUrl =
       api.config?.plugins?.entries?.["aegis-channel-trust"]?.aegisUrl ??
       DEFAULT_AEGIS_URL;
@@ -74,26 +77,32 @@ const plugin: OpenClawPluginDefinition = {
     let lastRegistered = "";
     let secretKey: Buffer | null = null;
 
-    // Try to load the identity key for signing
-    try {
-      const resolvedPath = path.resolve(process.cwd(), keyPath);
-      if (fs.existsSync(resolvedPath)) {
-        secretKey = fs.readFileSync(resolvedPath);
-        if (secretKey.length === 32) {
-          api.log?.info?.(`Aegis: loaded identity key from ${resolvedPath}`);
-        } else {
-          api.log?.warn?.(
-            `Aegis: identity key at ${resolvedPath} is ${secretKey.length} bytes (expected 32)`
-          );
-          secretKey = null;
+    // Try to load the identity key for signing — search multiple paths
+    const searchPaths = [
+      keyPath,
+      path.join(process.cwd(), ".aegis", "identity.key"),
+      path.join(process.env.HOME || "", ".aegis", "data", "identity.key"),
+      path.join(process.env.HOME || "", "aegis", "neural-commons", ".aegis", "identity.key"),
+    ];
+    console.log("[aegis-channel-trust] searching for identity key:", searchPaths.map(p => path.resolve(p)).join(", "));
+    for (const candidate of searchPaths) {
+      try {
+        const resolvedPath = path.resolve(candidate);
+        if (fs.existsSync(resolvedPath)) {
+          const key = fs.readFileSync(resolvedPath);
+          console.log(`[aegis-channel-trust] found key at ${resolvedPath}: ${key.length} bytes`);
+          if (key.length === 32) {
+            secretKey = key;
+            console.log(`[aegis-channel-trust] identity key loaded OK`);
+            break;
+          }
         }
-      } else {
-        api.log?.debug?.(
-          `Aegis: no identity key at ${resolvedPath} — registrations will be unsigned`
-        );
+      } catch (err) {
+        console.log(`[aegis-channel-trust] key search error: ${err}`);
       }
-    } catch (err) {
-      api.log?.debug?.(`Aegis: could not load identity key: ${err}`);
+    }
+    if (!secretKey) {
+      console.log("[aegis-channel-trust] WARNING: identity key not found — registrations will be unsigned");
     }
 
     async function registerChannel(channel: string, user: string) {
@@ -140,40 +149,35 @@ const plugin: OpenClawPluginDefinition = {
       }
     }
 
-    // Register channel context on every incoming message
-    api.on("message_received", async (event, ctx) => {
+    // Register channel on message_received — fires when a real message arrives
+    api.on("message_received", async (event: any, ctx: any) => {
       const channelId = ctx.channelId || "unknown";
       const conversationId = ctx.conversationId || "default";
-      const from = event.from || "unknown";
+      // event.metadata.senderId has the clean numeric ID
+      const senderId = event?.metadata?.senderId || event?.from || "unknown";
 
-      // Detect conversation type
+      // Detect conversation type (refined after stripping prefix)
       let chatType = "chat";
-      const convNum = parseInt(conversationId, 10);
-      if (channelId === "telegram") {
-        chatType =
-          convNum < 0 || conversationId.startsWith("-") ? "group" : "dm";
-      } else if (channelId === "discord") {
+      if (channelId === "discord") {
         chatType = "channel";
       } else if (channelId === "whatsapp") {
         chatType = conversationId.includes("@g.us") ? "group" : "dm";
       }
 
-      // Strip platform prefix from conversationId
+      // Strip platform prefix from conversationId (e.g. "telegram:7965174951" → "7965174951")
       const cleanConvId = conversationId.startsWith(`${channelId}:`)
         ? conversationId.slice(channelId.length + 1)
         : conversationId;
 
+      // For DM/group detection, use the clean numeric ID
+      const numId = parseInt(cleanConvId, 10);
+      if (channelId === "telegram" && !isNaN(numId)) {
+        chatType = numId < 0 ? "group" : "dm";
+      }
+
       const channel = `${channelId}:${chatType}:${cleanConvId}`;
-      const user = `${channelId}:user:${from}`;
+      const user = `${channelId}:user:${senderId}`;
 
-      await registerChannel(channel, user);
-    });
-
-    // Also register on session start
-    api.on("session_start", async (_event, ctx) => {
-      const channelId = ctx.channelId || "unknown";
-      const channel = `${channelId}:session:${ctx.sessionId || "default"}`;
-      const user = `${channelId}:agent:${ctx.agentId || "default"}`;
       await registerChannel(channel, user);
     });
   },
