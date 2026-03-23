@@ -646,6 +646,19 @@ function buildScreeningHtml(e){
     if(e.channel_trust_level)h+='<span class="trust-badge trust-'+e.channel_trust_level+'">'+e.channel_trust_level+'</span>';
     h+='</div>';
   }
+  // Trust admission explanation — when layers flagged but final decision is admit
+  const hasAdvisory=e.classifier_advisory||false;
+  const hasFindings=(e.threat_score>0)||(anns.length>0);
+  if(e.action==='admit'&&(hasAdvisory||hasFindings)&&e.channel_trust_level){
+    h+='<div style="margin-bottom:12px;padding:10px 14px;background:rgba(56,139,253,0.08);border:1px solid #1f6feb;border-radius:6px">';
+    h+='<div style="font-size:11px;font-weight:600;color:#58a6ff;margin-bottom:4px">ADMITTED — TRUST TIER OVERRIDE</div>';
+    h+='<div style="font-size:12px;color:#c9d1d9">';
+    if(hasAdvisory)h+='The ProtectAI classifier flagged this content as suspicious, but the channel trust level <b>'+escHtml(e.channel_trust_level)+'</b> sets the classifier to <b>advisory mode</b> (log only, don\'t block). ';
+    if(hasFindings&&!hasAdvisory)h+='Screening detected '+anns.length+' pattern(s) with threat score '+e.threat_score+', but ';
+    if(hasFindings)h+='The holster profile <b>'+(e.holster_profile||'default')+'</b> admitted this request'+(e.threshold_exceeded===false?' (below threshold).':'.');
+    else h+='No patterns reached the blocking threshold for this trust level.';
+    h+='</div></div>';
+  }
   // Screened text with highlighted excerpts
   if(e.screened_text){
     h+='<div style="margin-bottom:12px"><div style="font-size:11px;color:#8b949e;margin-bottom:4px">SCREENED TEXT</div>';
@@ -710,6 +723,12 @@ function buildScreeningHtml(e){
   h+='<div style="padding:8px 12px;background:#0d1117;border:1px solid '+((passA_caught||passB_caught)?'#da3633':'#30363d')+';border-radius:6px">';
   h+='<div style="font-size:10px;font-weight:600;color:#d29922;margin-bottom:4px">LAYER 3 — SLM</div>';
   h+=((heur_caught||cls_caught)?'<div style="color:#8b949e;font-size:11px">Skipped</div>':(passA_caught||passB_caught)?'<div style="color:#f85149;font-size:11px;font-weight:600">CAUGHT '+anns.length+' pattern(s)</div>':passA_ran?'<div style="color:#3fb950;font-size:11px">Clear ('+e.pass_a_ms+'ms)</div>':'<div style="color:#8b949e;font-size:11px">Did not run</div>');
+  h+='</div>';
+  // Layer 4: Holster Policy
+  h+='<div style="padding:8px 12px;background:#0d1117;border:1px solid '+(e.action!=='admit'?'#da3633':'#30363d')+';border-radius:6px">';
+  h+='<div style="font-size:10px;font-weight:600;color:#8b949e;margin-bottom:4px">HOLSTER — '+(e.holster_profile||'Default')+'</div>';
+  if(e.holster_action){h+='<div style="font-size:11px;color:'+(e.action==='admit'?'#3fb950':e.action==='quarantine'?'#d29922':'#f85149')+'">'+e.holster_action+'</div>';}
+  if(e.threat_score>0)h+='<div style="font-size:10px;color:#8b949e;margin-top:2px">score: '+e.threat_score+(e.threshold_exceeded?' (threshold exceeded)':' (below threshold)')+'</div>';
   h+='</div>';
   // Timing
   h+='<div style="padding:8px 12px;background:#0d1117;border:1px solid #30363d;border-radius:6px">';
@@ -898,9 +917,11 @@ function showSlmDetail(seq){
   h+='<div style="padding:10px 14px;background:#0d1117;border:1px solid #30363d;border-radius:6px;grid-column:1/-1">';
   h+='<div style="font-size:11px;font-weight:600;color:#e1e4e8;margin-bottom:6px">FINAL DECISION</div>';
   h+='<div style="font-size:13px;font-weight:600;color:'+holsterText+'">'+e.action.toUpperCase()+'</div>';
-  if(e.holster_profile)h+='<div style="font-size:11px;color:#8b949e;margin-top:2px">Profile: '+e.holster_profile+'</div>';
+  if(e.holster_profile)h+='<div style="font-size:11px;color:#8b949e;margin-top:2px">Holster: '+e.holster_profile+(e.holster_action?' \u2192 '+e.holster_action:'')+'</div>';
+  if(e.threat_score>0)h+='<div style="font-size:11px;color:#8b949e">Threat score: '+e.threat_score+' bp</div>';
   if(e.threshold_exceeded!=null)h+='<div style="font-size:11px;color:#8b949e">Threshold: <span style="color:'+(e.threshold_exceeded?'#f85149':'#3fb950')+'">'+(e.threshold_exceeded?'exceeded':'within limits')+'</span></div>';
   if(e.escalated)h+='<div style="font-size:11px;color:#d29922">Escalated from lower engine</div>';
+  if(e.channel_trust_level&&e.action==='admit'&&(hasAdvisory||hasFindings)){h+='<div style="font-size:11px;color:#58a6ff;margin-top:4px">Trust tier <b>'+e.channel_trust_level+'</b> '+(hasAdvisory?'\u2192 classifier advisory (log only)':'\u2192 within holster threshold')+'</div>';}
   h+='</div>';
   // Timing
   h+='<div style="padding:10px 14px;background:#0d1117;border:1px solid #30363d;border-radius:6px">';
