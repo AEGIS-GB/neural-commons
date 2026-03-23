@@ -866,6 +866,8 @@ async function showTrafficDetail(id){
   detail.style.display='block';
   tbl.style.display='none';
   detail.innerHTML='<p style="color:#8b949e">Loading...</p>';
+  // Ensure SLM data is loaded for the unified view
+  if(!slmData){try{slmData=(await(await fetch('/dashboard/api/slm')).json());}catch(e){}}
   try{
     const d=await(await fetch('/dashboard/api/traffic/'+id)).json();
     if(d.error){detail.innerHTML='<p class="empty-state">Entry not found (expired from ring buffer).</p>';return;}
@@ -881,6 +883,67 @@ async function showTrafficDetail(id){
     h+='<span style="color:#8b949e;font-size:12px">'+fmtTime(e.ts_ms)+'</span>';
     if(e.slm_verdict){h+=' '+verdictBadge(e.slm_verdict)+' <span style="font-size:12px;color:#8b949e">score:'+(e.slm_threat_score||0)+' '+(e.slm_duration_ms||0)+'ms</span>';}
     h+='</div>';
+    // ── Unified: Channel Trust + Screening Pipeline ──
+    // Match SLM screening entry by closest timestamp
+    let matchedSlm=null;
+    if(slmData&&slmData.recent_screenings){
+      let bestDiff=Infinity;
+      for(const s of slmData.recent_screenings){
+        const diff=Math.abs(s.ts_ms-e.ts_ms);
+        if(diff<bestDiff&&diff<10000){bestDiff=diff;matchedSlm=s;}
+      }
+    }
+    if(matchedSlm){
+      const s=matchedSlm;
+      // Channel Trust
+      if(s.channel||s.channel_trust_level){
+        h+='<div style="padding:10px 14px;background:#0d1117;border:1px solid #30363d;border-radius:6px;margin-bottom:12px;display:flex;gap:16px;align-items:center;flex-wrap:wrap">';
+        h+='<span style="font-size:11px;color:#8b949e">CHANNEL</span>';
+        if(s.channel)h+='<span class="badge badge-gray">'+s.channel+'</span>';
+        if(s.channel_user)h+='<span style="font-size:11px;color:#8b949e">'+s.channel_user+'</span>';
+        if(s.channel_trust_level)h+='<span class="trust-badge trust-'+s.channel_trust_level+'">'+s.channel_trust_level+'</span>';
+        h+='</div>';
+      }
+      // Screening Pipeline
+      const stoppedAt=s.engine;
+      const heur_caught=stoppedAt==='heuristic';
+      const cls_caught=stoppedAt==='prompt-guard';
+      const anns=s.annotations||[];
+      h+='<div style="margin-bottom:12px"><div style="font-size:11px;color:#8b949e;margin-bottom:6px">SCREENING PIPELINE</div>';
+      h+='<div style="display:flex;flex-wrap:wrap;gap:0;align-items:center">';
+      h+='<div class="flow-node flow-in" style="padding:4px 10px;font-size:11px">Input</div><div class="flow-arrow" style="font-size:14px">\u2192</div>';
+      h+='<div class="flow-node '+(heur_caught?'flow-node-caught':'flow-holster')+'" style="padding:4px 10px;font-size:11px">Heuristic'+(heur_caught?' \u26D4':'')+'</div><div class="flow-arrow" style="font-size:14px">\u2192</div>';
+      if(!heur_caught){
+        h+='<div class="flow-node '+(cls_caught?'flow-node-caught':'flow-enrich')+'" style="padding:4px 10px;font-size:11px">Classifier'+(cls_caught?' \u26D4':'')+'</div><div class="flow-arrow" style="font-size:14px">\u2192</div>';
+      }
+      if(!heur_caught&&!cls_caught){
+        const slm_ran=s.pass_a_ms!=null&&s.pass_a_ms>0;
+        h+='<div class="flow-node '+(slm_ran?'flow-enrich':'flow-parse')+'" style="padding:4px 10px;font-size:11px">SLM '+(slm_ran?s.pass_a_ms+'ms':'skip')+'</div><div class="flow-arrow" style="font-size:14px">\u2192</div>';
+      }
+      const vc=s.action==='reject'?'#f85149':s.action==='quarantine'?'#d29922':'#3fb950';
+      h+='<div style="padding:4px 10px;font-size:11px;font-weight:600;background:'+(s.action==='reject'?'#2d1f1f':s.action==='quarantine'?'#2d2a1f':'#1f2d1f')+';color:'+vc+';border:2px solid '+vc+';border-radius:8px">'+s.action.toUpperCase()+'</div>';
+      h+='</div></div>';
+      // Patterns
+      if(anns.length>0){
+        h+='<div style="margin-bottom:12px"><div style="font-size:11px;color:#8b949e;margin-bottom:4px">DETECTED PATTERNS</div>';
+        for(const a of anns){
+          const sevColor=a.severity>=8000?'#f85149':a.severity>=5000?'#d29922':'#58a6ff';
+          h+='<div style="display:inline-flex;align-items:center;gap:6px;margin:2px 4px 2px 0;padding:3px 8px;background:#0d1117;border-left:3px solid '+sevColor+';border-radius:0 4px 4px 0;font-size:11px">';
+          h+='<span class="badge badge-red" style="font-size:10px">'+a.pattern+'</span>';
+          h+='<span style="color:#f0883e;font-family:monospace">"'+escHtml(a.excerpt)+'"</span>';
+          h+='<span style="color:#8b949e">sev:'+a.severity+'</span></div>';
+        }
+        h+='</div>';
+      }
+      // SLM explanation
+      if(s.explanation){
+        h+='<div style="margin-bottom:12px;font-size:12px;color:#8b949e;font-style:italic;padding:6px 10px;background:#0d1117;border:1px solid #30363d;border-radius:4px">'+escHtml(s.explanation)+'</div>';
+      }
+      // Timing + engine
+      h+='<div style="font-size:11px;color:#8b949e;margin-bottom:12px">Engine: <span class="badge badge-gray">'+s.engine+'</span> '+s.screening_ms+'ms';
+      if(s.holster_profile)h+=' \u00B7 Holster: '+s.holster_profile;
+      h+='</div>';
+    }
     // Chat view if we have parsed messages
     if(d.chat&&d.chat.length>0){
       h+='<h3 style="color:#8b949e;font-size:12px;text-transform:uppercase;margin-bottom:8px">Chat View</h3>';
