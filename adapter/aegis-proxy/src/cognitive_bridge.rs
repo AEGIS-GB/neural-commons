@@ -111,6 +111,12 @@ struct RegisterChannelRequest {
     /// User identifier (e.g. "telegram:user:67890")
     #[serde(default)]
     user: Option<String>,
+    /// Unix epoch milliseconds when this registration was created
+    #[serde(default)]
+    ts: Option<i64>,
+    /// Ed25519 signature (hex) over canonical JSON of {channel, ts, user}
+    #[serde(default)]
+    sig: Option<String>,
 }
 
 /// Response for channel registration and context queries.
@@ -176,22 +182,68 @@ pub fn get_channel_registry() -> Vec<ChannelRecord> {
 async fn register_channel_handler(
     State(state): State<crate::proxy::AppState>,
     Json(req): Json<RegisterChannelRequest>,
-) -> Json<ChannelContextResponse> {
-    // Resolve trust from config based on channel pattern
+) -> (axum::http::StatusCode, Json<ChannelContextResponse>) {
     let trust_config = state.trust_config.as_ref().cloned().unwrap_or_default();
 
-    // Build a minimal cert for trust resolution
+    // Verify signature if signing_pubkey is configured
+    let sig_verified = if let Some(ref pubkey_bytes) = trust_config.signing_pubkey {
+        // Signing pubkey is set — require valid signature
+        match (&req.ts, &req.sig) {
+            (Some(ts), Some(sig)) => {
+                // Check timestamp freshness (15 second window)
+                let now = crate::middleware::now_ms();
+                let age_ms = (now - ts).abs();
+                if age_ms > 15_000 {
+                    tracing::warn!(channel = %req.channel, age_ms, "channel registration rejected: timestamp too old");
+                    return (axum::http::StatusCode::UNAUTHORIZED, Json(ChannelContextResponse {
+                        channel: None, user: None, trust_level: "rejected".to_string(),
+                        ssrf_allowed: false, registered: false,
+                    }));
+                }
+                // Build signing payload and verify
+                let cert = aegis_schemas::ChannelCert {
+                    channel: req.channel.clone(),
+                    user: req.user.clone().unwrap_or_default(),
+                    trust: String::new(),
+                    ts: *ts,
+                    sig: sig.clone(),
+                };
+                let verified = crate::channel_trust::verify_cert(&cert, pubkey_bytes);
+                if !verified {
+                    tracing::warn!(channel = %req.channel, "channel registration rejected: invalid signature");
+                    return (axum::http::StatusCode::UNAUTHORIZED, Json(ChannelContextResponse {
+                        channel: None, user: None, trust_level: "rejected".to_string(),
+                        ssrf_allowed: false, registered: false,
+                    }));
+                }
+                true
+            }
+            _ => {
+                // Signing pubkey configured but no sig provided — reject
+                tracing::warn!(channel = %req.channel, "channel registration rejected: signature required but not provided");
+                return (axum::http::StatusCode::UNAUTHORIZED, Json(ChannelContextResponse {
+                    channel: None, user: None, trust_level: "rejected".to_string(),
+                    ssrf_allowed: false, registered: false,
+                }));
+            }
+        }
+    } else {
+        // No signing pubkey configured — accept unsigned (backward compatible)
+        false
+    };
+
+    // Build cert for trust resolution
     let cert = aegis_schemas::ChannelCert {
         channel: req.channel.clone(),
         user: req.user.clone().unwrap_or_default(),
-        trust: String::new(), // agent doesn't claim trust
-        ts: crate::middleware::now_ms(),
-        sig: String::new(),
+        trust: String::new(),
+        ts: req.ts.unwrap_or_else(crate::middleware::now_ms),
+        sig: req.sig.clone().unwrap_or_default(),
     };
 
     let trust = crate::channel_trust::resolve_trust(
         Some(&cert),
-        false, // not signature-verified (came via tool call)
+        sig_verified,
         &trust_config,
     );
 
@@ -236,7 +288,7 @@ async fn register_channel_handler(
         }
     }
 
-    Json(response)
+    (axum::http::StatusCode::OK, Json(response))
 }
 
 /// GET /aegis/channel-context — return current active channel + full registry.
