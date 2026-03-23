@@ -79,32 +79,36 @@ pub fn verify_cert(cert: &ChannelCert, pubkey_bytes: &[u8]) -> bool {
     // Decode pubkey
     let pubkey_array: [u8; 32] = match pubkey_bytes.try_into() {
         Ok(a) => a,
-        Err(_) => return false,
+        Err(_) => { warn!("verify_cert: pubkey wrong length {}", pubkey_bytes.len()); return false; },
     };
     let verifying_key = match VerifyingKey::from_bytes(&pubkey_array) {
         Ok(k) => k,
-        Err(_) => return false,
+        Err(e) => { warn!("verify_cert: invalid pubkey: {e}"); return false; },
     };
 
     // Decode signature from hex
     let sig_bytes = match hex::decode(&cert.sig) {
         Ok(b) => b,
-        Err(_) => return false,
+        Err(e) => { warn!("verify_cert: sig hex decode failed: {e}"); return false; },
     };
     let sig_array: [u8; 64] = match sig_bytes.try_into() {
         Ok(a) => a,
-        Err(_) => return false,
+        Err(v) => { warn!("verify_cert: sig wrong length {}", v.len()); return false; },
     };
     let signature = Signature::from_bytes(&sig_array);
 
     // Verify
+    debug!(
+        payload_len = payload_bytes.len(),
+        "verifying channel cert signature"
+    );
     match verifying_key.verify(&payload_bytes, &signature) {
         Ok(()) => {
             debug!(channel = %cert.channel, user = %cert.user, "channel cert verified");
             true
         }
-        Err(_) => {
-            warn!(channel = %cert.channel, "channel cert signature invalid");
+        Err(e) => {
+            warn!(channel = %cert.channel, error = %e, "channel cert signature invalid");
             false
         }
     }
