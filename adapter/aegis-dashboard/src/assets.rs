@@ -1044,11 +1044,11 @@ async function showTrafficDetail(id){
       }
       h+='</div>';
     }
-    // Raw bodies
-    h+='<h3 style="color:#8b949e;font-size:12px;text-transform:uppercase;margin:16px 0 8px">Request Body ('+fmtBytes(e.request_size)+')</h3>';
-    h+='<div class="body-pre">'+fmtJson(e.request_body)+'</div>';
-    h+='<h3 style="color:#8b949e;font-size:12px;text-transform:uppercase;margin:16px 0 8px">Response Body ('+fmtBytes(e.response_size)+')</h3>';
-    h+='<div class="body-pre">'+fmtJson(e.response_body)+'</div>';
+    // Raw bodies (collapsible)
+    h+='<details style="margin-top:16px"><summary style="color:#8b949e;font-size:12px;text-transform:uppercase;cursor:pointer;user-select:none">Request Body ('+fmtBytes(e.request_size)+') — click to expand</summary>';
+    h+='<div class="body-pre" style="margin-top:8px">'+fmtJson(e.request_body)+'</div></details>';
+    h+='<details style="margin-top:8px"><summary style="color:#8b949e;font-size:12px;text-transform:uppercase;cursor:pointer;user-select:none">Response Body ('+fmtBytes(e.response_size)+') — click to expand</summary>';
+    h+='<div class="body-pre" style="margin-top:8px">'+fmtJson(e.response_body)+'</div></details>';
     detail.innerHTML=h;
   }catch(err){detail.innerHTML='<p class="empty-state">Failed to load detail.</p>';}
 }
