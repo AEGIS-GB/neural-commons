@@ -168,10 +168,11 @@ table.dtable .screening-row:hover{background:#1c2128}
 </div>
 <div class="panel" id="panel-trust">
 <div class="grid" id="trust-stats"></div>
-<div class="card"><h2>Channel Registry</h2>
+<div id="trust-list-card" class="card"><h2>Channel Registry</h2>
 <div id="trust-config"></div>
 </div>
 <div id="trust-breakdown" style="padding:0 16px"></div>
+<div id="trust-detail" style="display:none"></div>
 </div>
 <div class="panel" id="panel-traffic">
 <div class="card"><h2>Traffic Inspector</h2>
@@ -296,6 +297,8 @@ async function poll(){
         tr.trust_registered=channelCtx.registered;
         tr.channel_registry=channelCtx.channels||[];
       }
+      // Also fetch SLM screenings for channel detail view
+      try{tr.slm_screenings=await(await fetch('/dashboard/api/slm')).json();}catch(e){}
       renderTrust(tr);
     }catch(e){}
   }
@@ -306,10 +309,14 @@ async function poll(){
     }catch(e){}
   }
 }
+let trustData=null;
 function renderTrust(tr){
+  trustData=tr;
   const stats=document.getElementById('trust-stats');
   const config=document.getElementById('trust-config');
   const breakdown=document.getElementById('trust-breakdown');
+  const detail=document.getElementById('trust-detail');
+  if(detail.style.display!=='none')return; // don't overwrite detail view
   const channels=tr.channel_registry||[];
   const counts=tr.screening_by_trust||{};
   const total=tr.total_screened||0;
@@ -338,10 +345,10 @@ function renderTrust(tr){
     config.innerHTML='<p class="empty-state">No channels registered yet. Install the <strong>aegis-channel-trust</strong> OpenClaw plugin or call <code>POST /aegis/register-channel</code>.</p>';
   }else{
     const activeChannel=tr.active_channel?tr.active_channel.channel:null;
-    let ch='<table class="dtable"><tr><th>Channel</th><th>User</th><th>Trust</th><th>SSRF</th><th>Requests</th><th>First Seen</th><th>Last Seen</th></tr>';
+    let ch='<table class="dtable"><tr><th>Channel</th><th>User</th><th>Trust</th><th>SSRF</th><th>Requests</th><th>Last Seen</th><th></th></tr>';
     for(const c of channels){
       const isActive=c.channel===activeChannel;
-      ch+='<tr style="'+(isActive?'background:#1c2128;border-left:3px solid #58a6ff':'')+'">';
+      ch+='<tr class="screening-row" style="cursor:pointer;'+(isActive?'background:#1c2128;border-left:3px solid #58a6ff':'')+'" onclick="showChannelDetail(\''+c.channel.replace(/'/g,"\\'")+'\')">';
       ch+='<td><span class="badge badge-gray" style="font-size:12px">'+c.channel+'</span>';
       if(isActive)ch+=' <span style="font-size:9px;color:#58a6ff;font-weight:600">ACTIVE</span>';
       ch+='</td>';
@@ -349,8 +356,8 @@ function renderTrust(tr){
       ch+='<td><span class="trust-badge trust-'+c.trust_level+'">'+c.trust_level+'</span></td>';
       ch+='<td style="color:'+(c.ssrf_allowed?'#3fb950':'#f85149')+';font-size:12px">'+(c.ssrf_allowed?'allowed':'blocked')+'</td>';
       ch+='<td style="font-weight:600">'+c.request_count+'</td>';
-      ch+='<td style="font-size:11px;color:#8b949e">'+fmtTime(c.first_seen_ms)+'</td>';
-      ch+='<td style="font-size:11px;color:#8b949e">'+fmtTime(c.last_seen_ms)+'</td>';
+      ch+='<td style="font-size:11px;color:#8b949e">'+fmtTimeShort(c.last_seen_ms)+'</td>';
+      ch+='<td style="font-size:11px;color:#58a6ff">detail →</td>';
       ch+='</tr>';
     }
     ch+='</table>';
@@ -365,6 +372,64 @@ function renderTrust(tr){
   ref+='<span class="trust-badge trust-unknown">unknown</span> Balanced (default)';
   ref+='</div>';
   breakdown.innerHTML=ref;
+}
+function showChannelDetail(channelId){
+  if(!trustData)return;
+  const channels=trustData.channel_registry||[];
+  const ch=channels.find(c=>c.channel===channelId);
+  if(!ch)return;
+  const detail=document.getElementById('trust-detail');
+  const listCard=document.getElementById('trust-list-card');
+  listCard.style.display='none';
+  detail.style.display='block';
+  let h='<div class="slm-detail-card">';
+  h+='<span class="detail-back" onclick="closeChannelDetail()">← Back to channel registry</span>';
+  h+='<h2 style="font-size:16px;margin:12px 0 16px"><span class="badge badge-gray" style="font-size:14px">'+channelId+'</span> '+trustBadge(ch.trust_level)+'</h2>';
+  // Channel metadata
+  h+='<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px;margin-bottom:20px">';
+  h+='<div style="padding:10px;background:#0d1117;border:1px solid #30363d;border-radius:6px"><div style="font-size:11px;color:#8b949e">USER</div><div style="font-size:13px;color:#e1e4e8;margin-top:4px">'+ch.user+'</div></div>';
+  h+='<div style="padding:10px;background:#0d1117;border:1px solid #30363d;border-radius:6px"><div style="font-size:11px;color:#8b949e">TRUST LEVEL</div><div style="margin-top:4px">'+trustBadge(ch.trust_level)+'</div></div>';
+  h+='<div style="padding:10px;background:#0d1117;border:1px solid #30363d;border-radius:6px"><div style="font-size:11px;color:#8b949e">SSRF POLICY</div><div style="font-size:13px;font-weight:600;color:'+(ch.ssrf_allowed?'#3fb950':'#f85149')+';margin-top:4px">'+(ch.ssrf_allowed?'Internal URLs allowed':'Internal URLs blocked')+'</div></div>';
+  h+='<div style="padding:10px;background:#0d1117;border:1px solid #30363d;border-radius:6px"><div style="font-size:11px;color:#8b949e">REQUESTS</div><div style="font-size:20px;font-weight:600;color:#e1e4e8;margin-top:4px">'+ch.request_count+'</div></div>';
+  h+='<div style="padding:10px;background:#0d1117;border:1px solid #30363d;border-radius:6px"><div style="font-size:11px;color:#8b949e">FIRST SEEN</div><div style="font-size:12px;color:#e1e4e8;margin-top:4px">'+fmtTime(ch.first_seen_ms)+'</div></div>';
+  h+='<div style="padding:10px;background:#0d1117;border:1px solid #30363d;border-radius:6px"><div style="font-size:11px;color:#8b949e">LAST SEEN</div><div style="font-size:12px;color:#e1e4e8;margin-top:4px">'+fmtTime(ch.last_seen_ms)+'</div></div>';
+  h+='</div>';
+  // Screening history for this channel
+  const slm=trustData.slm_screenings;
+  if(slm&&slm.recent_screenings){
+    const filtered=slm.recent_screenings.filter(e=>e.channel===channelId);
+    const admits=filtered.filter(e=>e.action==='admit').length;
+    const quarantines=filtered.filter(e=>e.action==='quarantine').length;
+    const rejects=filtered.filter(e=>e.action==='reject').length;
+    h+='<div style="margin-bottom:16px"><div style="font-size:12px;color:#8b949e;margin-bottom:8px">SCREENING SUMMARY</div>';
+    h+='<div style="display:flex;gap:16px">'+verdictBadge('admit')+' <span style="font-size:16px;font-weight:600">'+admits+'</span>'+verdictBadge('quarantine')+' <span style="font-size:16px;font-weight:600;color:#d29922">'+quarantines+'</span>'+verdictBadge('reject')+' <span style="font-size:16px;font-weight:600;color:#f85149">'+rejects+'</span></div></div>';
+    if(filtered.length>0){
+      h+='<div style="font-size:12px;color:#8b949e;margin-bottom:8px">SCREENING LOG ('+filtered.length+' entries)</div>';
+      h+='<table class="dtable"><tr><th>Time</th><th>Verdict</th><th>Threat Score</th><th>Engine</th><th>Screened Text</th></tr>';
+      for(const e of filtered){
+        const text=(e.screened_text||'').substring(0,50);
+        h+='<tr>';
+        h+='<td style="white-space:nowrap;font-size:12px">'+fmtTimeShort(e.ts_ms)+'</td>';
+        h+='<td>'+verdictBadge(e.action)+'</td>';
+        h+='<td>'+threatBar(e.threat_score)+'</td>';
+        h+='<td><span class="badge badge-gray">'+e.engine+'</span></td>';
+        h+='<td style="font-size:12px;color:#8b949e;max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+escHtml(text)+'</td>';
+        h+='</tr>';
+      }
+      h+='</table>';
+    }else{
+      h+='<p class="empty-state">No screenings recorded for this channel yet.</p>';
+    }
+  }
+  h+='</div>';
+  detail.innerHTML=h;
+}
+function closeChannelDetail(){
+  const detail=document.getElementById('trust-detail');
+  detail.style.display='none';
+  detail.innerHTML='';
+  document.getElementById('trust-list-card').style.display='';
+  if(trustData)renderTrust(trustData);
 }
 function typeBadge(t){
   const colors={WriteBarrier:'red',MemoryIntegrity:'yellow',ApiCall:'blue',ModeChange:'green',VaultDetection:'red',SlmAnalysis:'yellow',SlmParseFailure:'red'};
