@@ -20,6 +20,9 @@
 //!   aegis slm use <model>        — switch SLM model
 //!   aegis slm engine <engine>    — switch SLM engine (ollama/openai)
 //!   aegis slm server <url>       — set SLM server URL
+//!   aegis trust register <ch>    — register a channel with signed cert
+//!   aegis trust context          — show current channel trust context
+//!   aegis trust pubkey           — show the signing public key
 //!   aegis dashboard              — open dashboard URL in browser
 //!   aegis version                — show version
 
@@ -147,6 +150,12 @@ enum Commands {
         action: SlmCommands,
     },
 
+    /// Channel trust operations
+    Trust {
+        #[command(subcommand)]
+        action: TrustCommands,
+    },
+
     /// Open the dashboard in a browser
     Dashboard,
 
@@ -238,6 +247,34 @@ enum MemoryCommands {
     },
     /// List tracked memory files
     List,
+}
+
+#[derive(Subcommand)]
+enum TrustCommands {
+    /// Register a channel with a signed Ed25519 certificate
+    ///
+    /// Examples:
+    ///   aegis trust register openclaw:web:session1
+    ///   aegis trust register telegram:dm:owner --user telegram:user:12345
+    ///   aegis trust register cli:local:test
+    Register {
+        /// Channel identifier (e.g. "openclaw:web:session1", "telegram:dm:owner")
+        channel: String,
+        /// User identifier (e.g. "telegram:user:12345")
+        #[arg(short, long, default_value = "cli:user:local")]
+        user: String,
+        /// Aegis proxy URL
+        #[arg(long, default_value = "http://127.0.0.1:3141")]
+        aegis_url: String,
+    },
+    /// Show the current active channel trust context
+    Context {
+        /// Aegis proxy URL
+        #[arg(long, default_value = "http://127.0.0.1:3141")]
+        aegis_url: String,
+    },
+    /// Show the signing public key (hex) for configuring [trust] signing_pubkey
+    Pubkey,
 }
 
 fn main() {
@@ -745,6 +782,18 @@ fn main() {
             }
         },
 
+        Some(Commands::Trust { action }) => match action {
+            TrustCommands::Register { channel, user, aegis_url } => {
+                trust_register(&config, &channel, &user, &aegis_url);
+            }
+            TrustCommands::Context { aegis_url } => {
+                trust_context(&aegis_url);
+            }
+            TrustCommands::Pubkey => {
+                trust_pubkey(&config);
+            }
+        },
+
         Some(Commands::Start) => {
             run_systemctl("start");
         }
@@ -788,6 +837,155 @@ fn main() {
             println!("mode: {}", mode_label);
         }
     }
+}
+
+/// Register a channel with a signed Ed25519 certificate.
+fn trust_register(config: &AdapterConfig, channel: &str, user: &str, aegis_url: &str) {
+    use aegis_crypto::ed25519::{Signer, SigningKey};
+
+    let key_path = config.data_dir.join("identity.key");
+    if !key_path.exists() {
+        eprintln!("error: no identity key found at {}", key_path.display());
+        eprintln!("hint: start the adapter first to generate an identity key");
+        std::process::exit(1);
+    }
+
+    let key_bytes = std::fs::read(&key_path).unwrap_or_else(|e| {
+        eprintln!("error: failed to read identity key: {e}");
+        std::process::exit(1);
+    });
+    if key_bytes.len() != 32 {
+        eprintln!("error: identity key is {} bytes (expected 32)", key_bytes.len());
+        std::process::exit(1);
+    }
+
+    let mut key_arr = [0u8; 32];
+    key_arr.copy_from_slice(&key_bytes);
+    let signing_key = SigningKey::from_bytes(&key_arr);
+
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as i64;
+
+    // Build canonical payload — keys MUST be alphabetically sorted
+    // to match Rust's BTreeMap ordering in verify_cert
+    let payload = serde_json::json!({
+        "channel": channel,
+        "trust": "",
+        "ts": ts,
+        "user": user,
+    });
+    let payload_bytes = serde_json::to_vec(&payload).unwrap();
+
+    let signature = signing_key.sign(&payload_bytes);
+    let sig_hex = aegis_crypto::ed25519::signature_hex(&signature);
+
+    let body = serde_json::json!({
+        "channel": channel,
+        "user": user,
+        "ts": ts,
+        "sig": sig_hex,
+    });
+
+    eprintln!("registering channel...");
+    eprintln!("  channel: {channel}");
+    eprintln!("  user:    {user}");
+    eprintln!("  ts:      {ts}");
+    eprintln!("  sig:     {}...{}", &sig_hex[..16], &sig_hex[sig_hex.len()-16..]);
+
+    // POST to Aegis
+    let rt = tokio::runtime::Runtime::new().expect("failed to create runtime");
+    let result = rt.block_on(async {
+        let client = reqwest::Client::new();
+        client
+            .post(format!("{aegis_url}/aegis/register-channel"))
+            .json(&body)
+            .timeout(std::time::Duration::from_secs(5))
+            .send()
+            .await
+    });
+
+    match result {
+        Ok(resp) => {
+            let status = resp.status();
+            let body_text = rt.block_on(resp.text()).unwrap_or_default();
+            if status.is_success() {
+                let json: serde_json::Value = serde_json::from_str(&body_text).unwrap_or_default();
+                let trust_level = json.get("trust_level").and_then(|v| v.as_str()).unwrap_or("unknown");
+                let ssrf = json.get("ssrf_allowed").and_then(|v| v.as_bool()).unwrap_or(false);
+                eprintln!();
+                eprintln!("  registered!");
+                eprintln!("  trust_level:  {trust_level}");
+                eprintln!("  ssrf_allowed: {ssrf}");
+            } else {
+                eprintln!();
+                eprintln!("  registration failed: HTTP {status}");
+                eprintln!("  {body_text}");
+                std::process::exit(1);
+            }
+        }
+        Err(e) => {
+            eprintln!("error: failed to connect to Aegis at {aegis_url}: {e}");
+            eprintln!("hint: is Aegis running? (aegis --upstream ...)");
+            std::process::exit(1);
+        }
+    }
+}
+
+/// Show the current channel trust context from Aegis.
+fn trust_context(aegis_url: &str) {
+    let rt = tokio::runtime::Runtime::new().expect("failed to create runtime");
+    let result = rt.block_on(async {
+        let client = reqwest::Client::new();
+        client
+            .get(format!("{aegis_url}/aegis/channel-context"))
+            .timeout(std::time::Duration::from_secs(5))
+            .send()
+            .await
+    });
+
+    match result {
+        Ok(resp) => {
+            let body_text = rt.block_on(resp.text()).unwrap_or_default();
+            let json: serde_json::Value = serde_json::from_str(&body_text).unwrap_or_default();
+            let pretty = serde_json::to_string_pretty(&json).unwrap_or(body_text);
+            eprintln!("channel trust context:");
+            eprintln!("{pretty}");
+        }
+        Err(e) => {
+            eprintln!("error: failed to connect to Aegis at {aegis_url}: {e}");
+            std::process::exit(1);
+        }
+    }
+}
+
+/// Show the signing public key (for configuring [trust] signing_pubkey in config.toml).
+fn trust_pubkey(config: &AdapterConfig) {
+    let key_path = config.data_dir.join("identity.key");
+    if !key_path.exists() {
+        eprintln!("error: no identity key found at {}", key_path.display());
+        eprintln!("hint: start the adapter first to generate an identity key");
+        std::process::exit(1);
+    }
+
+    let key_bytes = std::fs::read(&key_path).unwrap_or_else(|e| {
+        eprintln!("error: failed to read identity key: {e}");
+        std::process::exit(1);
+    });
+    let mut key_arr = [0u8; 32];
+    key_arr.copy_from_slice(&key_bytes[..32]);
+
+    let signing_key = aegis_crypto::ed25519::SigningKey::from_bytes(&key_arr);
+    let pubkey = signing_key.verifying_key();
+    let pubkey_hex = aegis_crypto::ed25519::pubkey_hex(&pubkey);
+
+    eprintln!("signing public key (Ed25519):");
+    eprintln!("  {pubkey_hex}");
+    eprintln!();
+    eprintln!("add to .aegis/config.toml:");
+    eprintln!("  [trust]");
+    eprintln!("  signing_pubkey = \"{pubkey_hex}\"");
 }
 
 /// Run a systemctl command against the aegis service.

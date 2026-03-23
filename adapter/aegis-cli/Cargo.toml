@@ -25,3 +25,4 @@ serde_json.workspace = true
 anyhow.workspace = true
 dirs = "5"
 toml.workspace = true
+reqwest.workspace = true
