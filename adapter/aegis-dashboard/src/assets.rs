@@ -624,6 +624,130 @@ function layerStatus(detected,label){
   if(detected)return'<div style="display:flex;align-items:center;gap:6px"><span style="color:#f85149;font-size:14px">⛔</span><span style="font-size:12px;color:#f85149;font-weight:600">'+label+' — CAUGHT</span></div>';
   return'<div style="display:flex;align-items:center;gap:6px"><span style="color:#3fb950;font-size:14px">✓</span><span style="font-size:12px;color:#3fb950">'+label+' — clear</span></div>';
 }
+// Build the full screening detail HTML for a SLM screening entry.
+// Shared between SLM tab detail and Traffic tab unified view.
+function buildScreeningHtml(e){
+  const anns=e.annotations||[];
+  const isDangerous=e.action==='reject'||e.action==='quarantine';
+  const stoppedAt=e.engine;
+  const heur_caught=stoppedAt==='heuristic';
+  const cls_caught=stoppedAt==='prompt-guard';
+  const passA_ran=e.pass_a_ms!=null&&e.pass_a_ms>0;
+  const passA_caught=anns.some(a=>['DirectInjection','IndirectInjection','PersonaHijack','AuthorityEscalation','EncodingEvasion','BoundaryErosion','MemoryPoison'].includes(a.pattern));
+  const passB_ran=e.pass_b_ms!=null&&e.pass_b_ms>0;
+  const passB_caught=anns.some(a=>['ExfiltrationAttempt','CredentialProbe','ToolAbuse','LinkInjection','SsrfAttempt'].includes(a.pattern));
+  let h='';
+  // Channel trust
+  if(e.channel||e.channel_trust_level){
+    h+='<div style="margin-bottom:12px;padding:10px 14px;background:#0d1117;border:1px solid #30363d;border-radius:6px;display:flex;gap:16px;align-items:center;flex-wrap:wrap">';
+    h+='<span style="font-size:11px;color:#8b949e">CHANNEL</span>';
+    if(e.channel)h+='<span class="badge badge-gray" style="font-size:12px">'+escHtml(e.channel)+'</span>';
+    if(e.channel_user)h+='<span style="font-size:11px;color:#8b949e">'+escHtml(e.channel_user)+'</span>';
+    if(e.channel_trust_level)h+='<span class="trust-badge trust-'+e.channel_trust_level+'">'+e.channel_trust_level+'</span>';
+    h+='</div>';
+  }
+  // Screened text with highlighted excerpts
+  if(e.screened_text){
+    h+='<div style="margin-bottom:12px"><div style="font-size:11px;color:#8b949e;margin-bottom:4px">SCREENED TEXT</div>';
+    let stxt=escHtml(e.screened_text);
+    if(anns.length>0){for(const ann of anns){const ex=escHtml(ann.excerpt);if(ex&&stxt.includes(ex)){stxt=stxt.replace(ex,'<mark style="background:#5c2d0e;color:#f0883e;padding:1px 2px;border-radius:2px">'+ex+'</mark>');}}}
+    h+='<div class="body-pre" style="max-height:120px">'+stxt+'</div></div>';
+  }
+  // Reason banner
+  if(e.reason&&isDangerous){
+    h+='<div style="margin-bottom:12px;padding:8px 12px;background:'+(e.action==='reject'?'rgba(248,81,73,0.1);border:1px solid #da3633':'rgba(210,153,34,0.1);border:1px solid #9e6a03')+';border-radius:6px">';
+    h+='<div style="font-size:10px;font-weight:600;text-transform:uppercase;color:'+(e.action==='reject'?'#f85149':'#d29922')+'">'+(e.action==='reject'?'BLOCKED':'QUARANTINED')+'</div>';
+    h+='<div style="font-size:12px;color:#e1e4e8">'+escHtml(e.reason)+'</div></div>';
+  }
+  // Pipeline flow
+  h+='<div style="margin-bottom:12px"><div style="font-size:11px;color:#8b949e;margin-bottom:6px">SCREENING PIPELINE</div>';
+  h+='<div style="display:flex;flex-wrap:wrap;gap:0;align-items:stretch">';
+  h+='<div class="flow-node flow-in" style="flex:0 0 auto">Input</div><div class="flow-arrow">\u2192</div>';
+  h+='<div class="flow-node '+(heur_caught?'flow-node-caught':'flow-holster')+'" style="flex:0 0 auto">Heuristic<br><span class="flow-ms">&lt;1ms</span>';
+  if(heur_caught)h+='<br><span style="font-size:10px;color:#f85149;font-weight:600">CAUGHT</span>';
+  else h+='<br><span style="font-size:10px;color:#3fb950">clear</span>';
+  h+='</div><div class="flow-arrow">\u2192</div>';
+  if(!heur_caught){
+    h+='<div class="flow-node '+(cls_caught?'flow-node-caught':'flow-enrich')+'" style="flex:0 0 auto">Classifier<br><span class="flow-ms">'+(e.classifier_ms||'~5')+'ms</span>';
+    if(cls_caught)h+='<br><span style="font-size:10px;color:#f85149;font-weight:600">CAUGHT</span>';
+    else h+='<br><span style="font-size:10px;color:#3fb950">clear</span>';
+    h+='</div><div class="flow-arrow">\u2192</div>';
+  }
+  if(!heur_caught&&!cls_caught){
+    h+='<div class="flow-node '+(passA_caught?'flow-node-caught':passA_ran?'flow-enrich':'flow-parse')+'" style="flex:0 0 auto">SLM<br><span class="flow-ms">'+(passA_ran?e.pass_a_ms+'ms':'skip')+'</span>';
+    if(passA_caught||passB_caught)h+='<br><span style="font-size:10px;color:#f85149;font-weight:600">CAUGHT</span>';
+    else if(passA_ran)h+='<br><span style="font-size:10px;color:#3fb950">clear</span>';
+    h+='</div><div class="flow-arrow">\u2192</div>';
+  }
+  const holsterColor=e.action==='reject'?'#2d1f1f':e.action==='quarantine'?'#2d2a1f':'#1f2d1f';
+  const holsterBorder=e.action==='reject'?'#da3633':e.action==='quarantine'?'#9e6a03':'#238636';
+  const holsterText=e.action==='reject'?'#f85149':e.action==='quarantine'?'#d29922':'#3fb950';
+  h+='<div class="flow-node" style="flex:0 0 auto;background:'+holsterColor+';color:'+holsterText+';border:2px solid '+holsterBorder+';font-weight:600">';
+  h+=(e.holster_profile||'Decision')+'<br><span style="font-size:12px">\u2192 '+e.action.toUpperCase()+'</span>';
+  if(e.threshold_exceeded)h+='<br><span style="font-size:10px">threshold exceeded</span>';
+  h+='</div></div></div>';
+  // Layer results grid
+  h+='<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:12px">';
+  // Layer 1: Heuristic
+  h+='<div style="padding:8px 12px;background:#0d1117;border:1px solid '+(heur_caught?'#da3633':'#30363d')+';border-radius:6px">';
+  h+='<div style="font-size:10px;font-weight:600;color:#3fb950;margin-bottom:4px">LAYER 1 — Heuristic</div>';
+  h+=(heur_caught?'<div style="color:#f85149;font-size:11px;font-weight:600">CAUGHT</div>':'<div style="color:#3fb950;font-size:11px">Clear</div>');
+  h+='</div>';
+  // Layer 2: Classifier
+  h+='<div style="padding:8px 12px;background:#0d1117;border:1px solid '+(cls_caught?'#da3633':'#30363d')+';border-radius:6px">';
+  h+='<div style="font-size:10px;font-weight:600;color:#a371f7;margin-bottom:4px">LAYER 2 — Classifier</div>';
+  h+=(heur_caught?'<div style="color:#8b949e;font-size:11px">Skipped</div>':cls_caught?'<div style="color:#f85149;font-size:11px;font-weight:600">CAUGHT</div>':'<div style="color:#3fb950;font-size:11px">Clear</div>');
+  h+='</div>';
+  // Layer 3: SLM
+  h+='<div style="padding:8px 12px;background:#0d1117;border:1px solid '+((passA_caught||passB_caught)?'#da3633':'#30363d')+';border-radius:6px">';
+  h+='<div style="font-size:10px;font-weight:600;color:#d29922;margin-bottom:4px">LAYER 3 — SLM</div>';
+  h+=((heur_caught||cls_caught)?'<div style="color:#8b949e;font-size:11px">Skipped</div>':(passA_caught||passB_caught)?'<div style="color:#f85149;font-size:11px;font-weight:600">CAUGHT '+anns.length+' pattern(s)</div>':passA_ran?'<div style="color:#3fb950;font-size:11px">Clear ('+e.pass_a_ms+'ms)</div>':'<div style="color:#8b949e;font-size:11px">Did not run</div>');
+  h+='</div>';
+  // Timing
+  h+='<div style="padding:8px 12px;background:#0d1117;border:1px solid #30363d;border-radius:6px">';
+  h+='<div style="font-size:10px;font-weight:600;color:#8b949e;margin-bottom:4px">TIMING</div>';
+  h+='<div style="font-size:14px;font-weight:600;color:#e1e4e8">'+e.screening_ms+'ms</div>';
+  h+='<div style="font-size:10px;color:#8b949e">Engine: '+e.engine+'</div>';
+  h+='</div></div>';
+  // Detected patterns
+  if(anns.length>0){
+    h+='<div style="margin-bottom:12px"><div style="font-size:11px;color:#8b949e;margin-bottom:6px">DETECTED PATTERNS ('+anns.length+')</div>';
+    for(const ann of anns){
+      const sevColor=ann.severity>=8000?'#f85149':ann.severity>=5000?'#d29922':'#58a6ff';
+      h+='<div style="padding:6px 10px;background:#0d1117;border-left:3px solid '+sevColor+';border-radius:0 6px 6px 0;margin-bottom:4px">';
+      h+='<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:3px">';
+      h+='<span class="badge badge-red">'+escHtml(ann.pattern)+'</span>';
+      h+='<span style="font-size:11px;color:'+sevColor+'">'+ann.severity+'/10000</span>';
+      h+='</div>';
+      h+='<div style="font-family:monospace;font-size:11px;color:#f0883e;background:#1c1208;padding:3px 6px;border-radius:3px">"'+escHtml(ann.excerpt)+'"</div>';
+      h+='</div>';
+    }
+    h+='</div>';
+  }
+  // Dimensions
+  if(e.dimensions){
+    const dims=[['Injection',e.dimensions.injection],['Manipulation',e.dimensions.manipulation],['Exfiltration',e.dimensions.exfiltration],['Persistence',e.dimensions.persistence],['Evasion',e.dimensions.evasion]];
+    const hasDims=dims.some(([_,v])=>v>0);
+    if(hasDims){
+      h+='<div style="margin-bottom:12px"><div style="font-size:11px;color:#8b949e;margin-bottom:6px">THREAT DIMENSIONS</div>';
+      h+='<div style="display:grid;grid-template-columns:1fr 1fr;gap:3px 16px">';
+      for(const[name,val] of dims){
+        const pct=Math.min(100,val/100);
+        const color=val>=8000?'#f85149':val>=5000?'#d29922':val>0?'#58a6ff':'#30363d';
+        h+='<div class="dim-bar"><span class="dim-bar-label">'+name+'</span><div class="dim-bar-track"><div class="dim-bar-fill" style="width:'+pct+'%;background:'+color+'"></div></div><span class="dim-bar-val" style="color:'+color+'">'+val+'</span></div>';
+      }
+      h+='</div></div>';
+    }
+  }
+  // Explanation
+  if(e.explanation){
+    h+='<div style="margin-bottom:12px"><div style="font-size:11px;color:#8b949e;margin-bottom:4px">SLM EXPLANATION</div>';
+    h+='<div style="font-size:12px;color:#c9d1d9;font-style:italic;padding:6px 10px;background:#0d1117;border:1px solid #30363d;border-radius:4px">'+escHtml(e.explanation)+'</div></div>';
+  }
+  // Metadata
+  h+='<div style="font-size:10px;color:#30363d">seq='+e.seq+' confidence='+(e.confidence||0)+' engine='+e.engine+'</div>';
+  return h;
+}
 function showSlmDetail(seq){
   if(!slmData)return;
   const e=slmData.recent_screenings.find(s=>s.seq===seq);
@@ -633,12 +757,15 @@ function showSlmDetail(seq){
   const tblCard=document.getElementById('slm-table').parentElement;
   tblCard.style.display='none';
   detail.style.display='block';
-  const anns=e.annotations||[];
-  const hasPatterns=anns.length>0;
-  const isDangerous=e.action==='reject'||e.action==='quarantine';
   let h='<div class="slm-detail-card">';
   h+='<span class="detail-back" onclick="closeSlmDetail()">← Back to screening list</span>';
   h+='<h2 style="font-size:16px;margin:12px 0 16px">Screening #'+e.seq+' — '+verdictBadge(e.action)+' <span style="font-size:13px;color:#8b949e">'+new Date(e.ts_ms).toLocaleString()+'</span></h2>';
+  h+=buildScreeningHtml(e);
+  h+='</div>';
+  detail.innerHTML=h;
+}
+/* OLD showSlmDetail body replaced by buildScreeningHtml above
+
   // ── CHANNEL TRUST CONTEXT ──
   if(e.channel||e.channel_trust_level){
     h+='<div style="margin-bottom:16px;padding:10px 14px;background:#0d1117;border:1px solid #30363d;border-radius:6px;display:flex;gap:16px;align-items:center;flex-wrap:wrap">';
@@ -818,6 +945,7 @@ function showSlmDetail(seq){
   h+='</div>';
   detail.innerHTML=h;
 }
+END OF OLD showSlmDetail body */
 function closeSlmDetail(){
   const detail=document.getElementById('slm-detail');
   detail.style.display='none';
@@ -883,8 +1011,7 @@ async function showTrafficDetail(id){
     h+='<span style="color:#8b949e;font-size:12px">'+fmtTime(e.ts_ms)+'</span>';
     if(e.slm_verdict){h+=' '+verdictBadge(e.slm_verdict)+' <span style="font-size:12px;color:#8b949e">score:'+(e.slm_threat_score||0)+' '+(e.slm_duration_ms||0)+'ms</span>';}
     h+='</div>';
-    // ── Unified: Channel Trust + Screening Pipeline ──
-    // Match SLM screening entry by closest timestamp
+    // ── Unified: Full SLM Screening Detail (same as SLM tab) ──
     let matchedSlm=null;
     if(slmData&&slmData.recent_screenings){
       let bestDiff=Infinity;
@@ -894,63 +1021,26 @@ async function showTrafficDetail(id){
       }
     }
     if(matchedSlm){
-      const s=matchedSlm;
-      // Channel Trust
-      if(s.channel||s.channel_trust_level){
-        h+='<div style="padding:10px 14px;background:#0d1117;border:1px solid #30363d;border-radius:6px;margin-bottom:12px;display:flex;gap:16px;align-items:center;flex-wrap:wrap">';
-        h+='<span style="font-size:11px;color:#8b949e">CHANNEL</span>';
-        if(s.channel)h+='<span class="badge badge-gray">'+s.channel+'</span>';
-        if(s.channel_user)h+='<span style="font-size:11px;color:#8b949e">'+s.channel_user+'</span>';
-        if(s.channel_trust_level)h+='<span class="trust-badge trust-'+s.channel_trust_level+'">'+s.channel_trust_level+'</span>';
-        h+='</div>';
-      }
-      // Screening Pipeline
-      const stoppedAt=s.engine;
-      const heur_caught=stoppedAt==='heuristic';
-      const cls_caught=stoppedAt==='prompt-guard';
-      const anns=s.annotations||[];
-      h+='<div style="margin-bottom:12px"><div style="font-size:11px;color:#8b949e;margin-bottom:6px">SCREENING PIPELINE</div>';
-      h+='<div style="display:flex;flex-wrap:wrap;gap:0;align-items:center">';
-      h+='<div class="flow-node flow-in" style="padding:4px 10px;font-size:11px">Input</div><div class="flow-arrow" style="font-size:14px">\u2192</div>';
-      h+='<div class="flow-node '+(heur_caught?'flow-node-caught':'flow-holster')+'" style="padding:4px 10px;font-size:11px">Heuristic'+(heur_caught?' \u26D4':'')+'</div><div class="flow-arrow" style="font-size:14px">\u2192</div>';
-      if(!heur_caught){
-        h+='<div class="flow-node '+(cls_caught?'flow-node-caught':'flow-enrich')+'" style="padding:4px 10px;font-size:11px">Classifier'+(cls_caught?' \u26D4':'')+'</div><div class="flow-arrow" style="font-size:14px">\u2192</div>';
-      }
-      if(!heur_caught&&!cls_caught){
-        const slm_ran=s.pass_a_ms!=null&&s.pass_a_ms>0;
-        h+='<div class="flow-node '+(slm_ran?'flow-enrich':'flow-parse')+'" style="padding:4px 10px;font-size:11px">SLM '+(slm_ran?s.pass_a_ms+'ms':'skip')+'</div><div class="flow-arrow" style="font-size:14px">\u2192</div>';
-      }
-      const vc=s.action==='reject'?'#f85149':s.action==='quarantine'?'#d29922':'#3fb950';
-      h+='<div style="padding:4px 10px;font-size:11px;font-weight:600;background:'+(s.action==='reject'?'#2d1f1f':s.action==='quarantine'?'#2d2a1f':'#1f2d1f')+';color:'+vc+';border:2px solid '+vc+';border-radius:8px">'+s.action.toUpperCase()+'</div>';
-      h+='</div></div>';
-      // Patterns
-      if(anns.length>0){
-        h+='<div style="margin-bottom:12px"><div style="font-size:11px;color:#8b949e;margin-bottom:4px">DETECTED PATTERNS</div>';
-        for(const a of anns){
-          const sevColor=a.severity>=8000?'#f85149':a.severity>=5000?'#d29922':'#58a6ff';
-          h+='<div style="display:inline-flex;align-items:center;gap:6px;margin:2px 4px 2px 0;padding:3px 8px;background:#0d1117;border-left:3px solid '+sevColor+';border-radius:0 4px 4px 0;font-size:11px">';
-          h+='<span class="badge badge-red" style="font-size:10px">'+a.pattern+'</span>';
-          h+='<span style="color:#f0883e;font-family:monospace">"'+escHtml(a.excerpt)+'"</span>';
-          h+='<span style="color:#8b949e">sev:'+a.severity+'</span></div>';
-        }
-        h+='</div>';
-      }
-      // SLM explanation
-      if(s.explanation){
-        h+='<div style="margin-bottom:12px;font-size:12px;color:#8b949e;font-style:italic;padding:6px 10px;background:#0d1117;border:1px solid #30363d;border-radius:4px">'+escHtml(s.explanation)+'</div>';
-      }
-      // Timing + engine
-      h+='<div style="font-size:11px;color:#8b949e;margin-bottom:12px">Engine: <span class="badge badge-gray">'+s.engine+'</span> '+s.screening_ms+'ms';
-      if(s.holster_profile)h+=' \u00B7 Holster: '+s.holster_profile;
-      h+='</div>';
+      h+=buildScreeningHtml(matchedSlm);
     }
     // Chat view if we have parsed messages
     if(d.chat&&d.chat.length>0){
       h+='<h3 style="color:#8b949e;font-size:12px;text-transform:uppercase;margin-bottom:8px">Chat View</h3>';
       h+='<div class="chat-box">';
       for(const m of d.chat){
+        let content=m.content||'';
+        // Strip <think>...</think> blocks from assistant messages
+        if(m.role==='assistant'&&content.includes('</think>')){
+          content=content.split('</think>').pop().trim();
+        }else if(m.role==='assistant'&&content.includes('<think>')){
+          content=content.replace(/<think>[\s\S]*/,'[thinking...]');
+        }
+        // Strip AEGIS metaprompt from system messages
+        if(m.role==='system'&&content.includes('[AEGIS SECURITY RULES')){
+          content='[AEGIS Security Rules injected]\n\n'+content.split('\n\n').slice(-1)[0];
+        }
         const cls=m.role==='user'?'chat-user':m.role==='system'?'chat-system':'chat-assistant';
-        h+='<div class="chat-msg '+cls+'"><strong>'+esc(m.role)+'</strong><br>'+esc(m.content)+'</div>';
+        h+='<div class="chat-msg '+cls+'"><strong>'+esc(m.role)+'</strong><br>'+esc(content)+'</div>';
       }
       h+='</div>';
     }
