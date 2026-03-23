@@ -177,6 +177,56 @@ pub async fn start_with_traffic(
 }
 
 /// Catch-all handler that forwards HTTP requests to the upstream LLM provider.
+/// Extract user-authored content from any JSON request format for SLM screening.
+/// Handles: OpenAI messages format, Responses API input format, plain strings.
+/// Only includes user messages and tool results — skips assistant responses.
+fn extract_user_content_from_json(body: &str) -> String {
+    if let Ok(json) = serde_json::from_str::<serde_json::Value>(body) {
+        let mut parts = Vec::new();
+
+        // Try "messages" array (OpenAI chat completions format)
+        if let Some(messages) = json.get("messages").and_then(|m| m.as_array()) {
+            for msg in messages {
+                let role = msg.get("role").and_then(|r| r.as_str()).unwrap_or("");
+                if role == "assistant" { continue; } // skip self-generated
+                if let Some(content) = msg.get("content").and_then(|c| c.as_str()) {
+                    parts.push(format!("[{role}] {content}"));
+                }
+            }
+        }
+
+        // Try "input" field (Responses API format — can be string or array)
+        if let Some(input) = json.get("input") {
+            if let Some(s) = input.as_str() {
+                parts.push(format!("[user] {s}"));
+            } else if let Some(arr) = input.as_array() {
+                for item in arr {
+                    let role = item.get("role").and_then(|r| r.as_str()).unwrap_or("user");
+                    // Skip assistant (self-generated) and system (agent config, not attack surface)
+                    if role == "assistant" || role == "system" { continue; }
+                    // Content can be string or array of content blocks
+                    if let Some(content) = item.get("content").and_then(|c| c.as_str()) {
+                        parts.push(format!("[{role}] {content}"));
+                    } else if let Some(blocks) = item.get("content").and_then(|c| c.as_array()) {
+                        for block in blocks {
+                            if let Some(text) = block.get("text").and_then(|t| t.as_str()) {
+                                parts.push(format!("[{role}] {text}"));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if !parts.is_empty() {
+            return parts.join("\n");
+        }
+    }
+
+    // Fallback: use raw body (but cap at 4KB to prevent SLM overflow)
+    body.chars().take(4096).collect()
+}
+
 async fn forward_request(
     State(state): State<AppState>,
     req: Request<Body>,
@@ -344,7 +394,9 @@ async fn forward_request(
                 let payload = anthropic::extract_screen_payload(parsed);
                 anthropic::screen_payload_to_string(&payload)
             } else if let Ok(s) = std::str::from_utf8(&body_bytes) {
-                s.to_string()
+                // Try to extract user messages from any JSON format
+                // (Responses API uses "input" instead of "messages")
+                extract_user_content_from_json(s)
             } else {
                 String::new()
             };
