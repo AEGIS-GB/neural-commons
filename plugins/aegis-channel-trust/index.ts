@@ -178,7 +178,7 @@ const plugin: OpenClawPluginDefinition = {
       // Normalize platform name: "web" and "openclaw" both map to "openclaw"
       // so channel matches config pattern "openclaw:web:*"
       let platform = channelId;
-      if (channelId === "web" || channelId === "openclaw") {
+      if (channelId === "web" || channelId === "openclaw" || channelId === "webchat") {
         platform = "openclaw";
         chatType = "web";
       }
