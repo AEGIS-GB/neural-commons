@@ -86,9 +86,14 @@ aegis --pass-through               # zero inspection, metadata-only receipts
 aegis setup openclaw               # configure OpenClaw integration
 aegis setup openclaw --revert      # undo configuration
 
+# Channel trust
+aegis trust register <channel>     # register channel with signed Ed25519 cert
+aegis trust context                # show active channel + full registry
+aegis trust pubkey                 # show signing pubkey for config
+
 # SLM model management
 aegis slm status                   # show current SLM config
-aegis slm use qwen2.5:1.5b        # switch model
+aegis slm use qwen/qwen3-30b-a3b  # switch model
 aegis slm engine openai            # switch engine (ollama/openai)
 aegis slm server http://localhost:1234  # set server URL
 

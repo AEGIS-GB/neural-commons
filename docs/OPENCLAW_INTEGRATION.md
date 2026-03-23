@@ -17,13 +17,21 @@ Route your OpenClaw bot's LLM traffic through Aegis for inspection, evidence rec
                                  │
                     subagent ────┤ lmstudio/qwen/qwen3-8b
                                  │
+              aegis-channel-trust plugin
+              signs & registers channel ──► POST /aegis/register-channel
+                                 │
                                  ▼
                           ┌──────────────┐
                           │    Aegis     │
                           │   Proxy      │
                           │  (:3141)     │
+                          │              │
+                          │  1. Verify channel cert (Ed25519)
+                          │  2. Resolve trust level
+                          │  3. 4-layer screening pipeline
+                          │  4. Record evidence receipt
                           └──────┬───────┘
-                                 │ evidence, vault scan, traffic capture
+                                 │
                                  ▼
                           ┌──────────────┐
                           │  LM Studio   │
@@ -198,11 +206,13 @@ open http://127.0.0.1:3141/dashboard
 
 | Feature | Status | Details |
 |---------|--------|---------|
+| 4-layer screening | Active | Heuristic (<1ms) + ProtectAI classifier (~30ms) + SLM (2-3s async) + metaprompt |
+| Channel trust | Active | Ed25519 signed channel certs, trust-based screening policy |
 | Request body | Full | Complete prompt including system instructions and tool definitions |
 | Response body | Up to 256KB | Streaming SSE events captured incrementally |
-| Evidence receipt | Per request | SHA-256 hash chain entry with request/response hashes |
+| Evidence receipt | Per request | SHA-256 hash chain entry with request/response hashes + channel trust |
 | Vault scanning | Active | Scans for credentials in request/response bodies |
-| Traffic inspector | Active | Full request/response visible in dashboard |
+| Traffic inspector | Active | Full request/response visible in dashboard with screening detail |
 | Barrier monitoring | Active | Watches workspace files for tampering |
 
 ### API Endpoints Used
@@ -411,9 +421,104 @@ Then in `openclaw.json`, add an OpenAI provider override:
 
 ---
 
+## Channel Trust
+
+Aegis resolves a trust level per-channel, which determines how aggressively content is screened. The `aegis-channel-trust` OpenClaw plugin handles this automatically.
+
+### How It Works
+
+1. A Telegram message arrives → OpenClaw's `message_received` hook fires
+2. The `aegis-channel-trust` plugin signs a channel registration with the bot's Ed25519 identity key
+3. Plugin POSTs to `POST /aegis/register-channel` with `{channel, user, ts, sig}`
+4. Aegis verifies the signature and resolves trust level from `[trust]` config patterns
+5. All subsequent LLM requests use that trust level for screening decisions
+
+### Trust Levels
+
+| Channel Pattern | Trust Level | Classifier | SSRF |
+|-----------------|------------|------------|------|
+| `telegram:dm:owner` | full | Advisory | Allowed |
+| `telegram:dm:*` | trusted | Advisory | Blocked |
+| `telegram:group:*` | public | Blocking | Blocked |
+| `openclaw:web:*` | trusted | Advisory | Blocked |
+| `cli:local:*` | full | Advisory | Allowed |
+| No registration | unknown | Blocking | Blocked |
+
+### Plugin Installation
+
+The plugin is at `plugins/aegis-channel-trust/`. To enable it in OpenClaw:
+
+1. Add the plugin to OpenClaw's plugin config
+2. Add `aegis-channel-trust` to `plugins.allow` in `openclaw.json`
+3. Ensure `.aegis/identity.key` exists (Aegis creates it on first start)
+
+The plugin searches for the identity key in:
+- Configured path (default: `.aegis/identity.key`)
+- `$CWD/.aegis/identity.key`
+- `$HOME/.aegis/data/identity.key`
+- `$HOME/aegis/neural-commons/.aegis/identity.key`
+
+### Security Model
+
+The plugin signs registrations with the bot's **private** Ed25519 key. Aegis verifies against the **public** key configured in `[trust] signing_pubkey`. Without the private key, a channel cannot be registered — unsigned requests are rejected (HTTP 401).
+
+This means:
+- Prompt injection cannot fake a channel registration (no key access)
+- The warden controls which channels get which trust level (config patterns)
+- The trust level determines screening behavior, not the registrant's claim
+
+### CLI Testing
+
+Test channel registration manually without the plugin:
+
+```bash
+# Register a channel
+aegis trust register openclaw:web:test-session
+aegis trust register telegram:dm:owner --user telegram:user:12345
+
+# Check current trust state
+aegis trust context
+
+# Show pubkey (for config.toml setup)
+aegis trust pubkey
+```
+
+### Configuration
+
+Add to `.aegis/config.toml`:
+
+```toml
+[trust]
+default_level = "unknown"
+signing_pubkey = "<from 'aegis trust pubkey'>"
+
+[[trust.channels]]
+pattern = "telegram:dm:owner"
+level = "full"
+
+[[trust.channels]]
+pattern = "telegram:dm:*"
+level = "trusted"
+
+[[trust.channels]]
+pattern = "telegram:group:*"
+level = "public"
+
+[[trust.channels]]
+pattern = "openclaw:web:*"
+level = "trusted"
+```
+
+### Dashboard
+
+The **Channel Trust** tab in the dashboard shows all registered channels, their trust levels, request counts, and per-channel screening history.
+
+---
+
 ## Security Notes
 
 - The OpenClaw gateway token is sensitive — it provides full operator access. Keep it on localhost only.
 - Aegis runs in **observe-only** mode by default. It logs but never blocks traffic.
 - The Telegram bot token in `openclaw.json` should not be committed to version control.
 - Evidence receipts are stored locally in SQLite. Back up `~/.aegis/data/evidence.db`.
+- The identity key (`.aegis/identity.key`) is the root of trust for channel registration. Protect it like a private key.

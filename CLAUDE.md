@@ -84,11 +84,20 @@ neural-commons/
 ## Request Lifecycle
 
 ```
-OpenClaw POST /v1/messages
+OpenClaw message_received → aegis-channel-trust plugin signs & registers channel
+  → POST /aegis/register-channel {channel, user, ts, sig}
+  → Aegis verifies Ed25519 signature, resolves trust level from config patterns
+
+OpenClaw POST /v1/messages (or /v1/chat/completions)
   → proxy.rs forward_request()
     → Provider detection (anthropic.rs detect_provider — 422 for unknown)
+    → Channel trust resolution (cognitive_bridge → trust level → holster preset)
     → Rate limiter check (token bucket, keyed by Ed25519 fingerprint, 1000/min burst 50)
-    → SLM hook screens input (hooks.rs SlmHookImpl → Ollama HTTP or heuristic fallback)
+    → 4-layer screening:
+        1. Heuristic (<1ms) — regex patterns + SSRF detection
+        2. ProtectAI Classifier (~30ms) — ONNX DeBERTa-v2 (blocking on public, advisory on trusted)
+        3. SLM Deep Analysis (async) — Qwen3-30B combined prompt, runs alongside LLM forwarding
+        4. Metaprompt (0ms) — 7 security rules injected into system message
     → Forward request to upstream (reqwest, 5min timeout)
     → SSE streaming detection:
         Content-Type: text/event-stream OR Transfer-Encoding: chunked
@@ -198,6 +207,18 @@ memory_write = "enforce"           # always enforce
 
 [dashboard]
 path = "/dashboard"
+
+[trust]
+default_level = "unknown"
+signing_pubkey = "<hex Ed25519 pubkey>"  # from 'aegis trust pubkey'
+
+[[trust.channels]]                     # channel pattern → trust level
+pattern = "telegram:dm:owner"
+level = "full"                         # full/trusted/public/restricted/unknown
+
+[[trust.channels]]
+pattern = "openclaw:web:*"
+level = "trusted"
 ```
 
 ## CLI Quick Reference
@@ -212,6 +233,16 @@ aegis --config /path/to/config.toml
 aegis setup openclaw               # Configure OpenClaw → Aegis proxy
 aegis setup openclaw --dry-run     # Preview changes
 aegis setup openclaw --revert      # Undo configuration
+
+aegis trust register <channel>     # Register channel with signed Ed25519 cert
+aegis trust register openclaw:web:session1  # Example: web chat channel
+aegis trust context                # Show active channel + full registry
+aegis trust pubkey                 # Show signing pubkey for config
+
+aegis slm status                   # Show SLM configuration
+aegis slm use qwen/qwen3-30b-a3b  # Switch SLM model
+aegis slm engine openai            # Switch engine (ollama/openai)
+aegis slm server http://localhost:1234  # Set SLM server URL
 
 aegis scan                         # Scan workspace for credentials
 aegis scan /path/to/dir            # Scan specific directory
@@ -240,6 +271,18 @@ All mounted under the dashboard path (default `/dashboard`):
 | `GET /api/alerts/stream` | SSE stream for real-time critical alerts |
 | `GET /api/traffic` | Traffic inspector summary (no bodies) |
 | `GET /api/traffic/{id}` | Traffic entry detail with bodies + chat view |
+| `GET /api/slm` | SLM screening entries with verdicts, timing, trust |
+| `GET /api/trust` | Channel trust overview + screening by trust level |
+
+### Cognitive Bridge Endpoints (on proxy port, not dashboard)
+
+| Endpoint | Description |
+|----------|-------------|
+| `POST /aegis/register-channel` | Register channel with signed Ed25519 cert |
+| `GET /aegis/channel-context` | Active channel + full channel registry |
+| `GET /aegis/status` | Adapter status |
+| `POST /aegis/scan` | Trigger manual scan |
+| `GET /aegis/evidence` | Evidence summary |
 
 ## Dogfooding: Route Claude Code Through Aegis
 
