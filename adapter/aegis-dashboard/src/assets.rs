@@ -677,6 +677,7 @@ function buildScreeningHtml(e){
   if(!heur_caught){
     h+='<div class="flow-node '+(cls_caught?'flow-node-caught':'flow-enrich')+'" style="flex:0 0 auto">Classifier<br><span class="flow-ms">'+(e.classifier_ms||'~5')+'ms</span>';
     if(cls_caught)h+='<br><span style="font-size:10px;color:#f85149;font-weight:600">CAUGHT</span>';
+    else if(e.classifier_advisory)h+='<br><span style="font-size:10px;color:#d29922;font-weight:600">advisory</span>';
     else h+='<br><span style="font-size:10px;color:#3fb950">clear</span>';
     h+='</div><div class="flow-arrow">\u2192</div>';
   }
@@ -703,7 +704,7 @@ function buildScreeningHtml(e){
   // Layer 2: Classifier
   h+='<div style="padding:8px 12px;background:#0d1117;border:1px solid '+(cls_caught?'#da3633':'#30363d')+';border-radius:6px">';
   h+='<div style="font-size:10px;font-weight:600;color:#a371f7;margin-bottom:4px">LAYER 2 — Classifier</div>';
-  h+=(heur_caught?'<div style="color:#8b949e;font-size:11px">Skipped</div>':cls_caught?'<div style="color:#f85149;font-size:11px;font-weight:600">CAUGHT</div>':'<div style="color:#3fb950;font-size:11px">Clear</div>');
+  h+=(heur_caught?'<div style="color:#8b949e;font-size:11px">Skipped</div>':cls_caught?'<div style="color:#f85149;font-size:11px;font-weight:600">CAUGHT</div>':e.classifier_advisory?'<div style="color:#d29922;font-size:11px;font-weight:600">ADVISORY</div>':'<div style="color:#3fb950;font-size:11px">Clear</div>');
   h+='</div>';
   // Layer 3: SLM
   h+='<div style="padding:8px 12px;background:#0d1117;border:1px solid '+((passA_caught||passB_caught)?'#da3633':'#30363d')+';border-radius:6px">';
@@ -816,6 +817,7 @@ function showSlmDetail(seq){
     h+='<div class="flow-node '+(cls_caught?'flow-node-caught':cls_ran?'flow-enrich':'flow-parse')+'" style="flex:0 0 auto">';
     h+='Classifier<br><span class="flow-ms">'+(cls_ran?e.classifier_ms+'ms':'~5ms')+'</span>';
     if(cls_caught)h+='<br><span style="font-size:10px;color:#f85149;font-weight:600">CAUGHT</span>';
+    else if(e.classifier_advisory)h+='<br><span style="font-size:10px;color:#d29922;font-weight:600">advisory</span>';
     else h+='<br><span style="font-size:10px;color:#3fb950">clear</span>';
     h+='</div><div class="flow-arrow">→</div>';
   }
@@ -862,6 +864,7 @@ function showSlmDetail(seq){
   h+='<div style="font-size:11px;font-weight:600;color:#a371f7;margin-bottom:6px">LAYER 2 — ProtectAI Classifier</div>';
   if(heur_caught){h+='<div style="color:#8b949e;font-size:12px">Skipped — heuristic already caught</div>';}
   else if(cls_caught){h+='<div style="color:#f85149;font-size:12px;font-weight:600">CAUGHT — high-confidence MALICIOUS</div>';}
+  else if(e.classifier_advisory){h+='<div style="color:#d29922;font-size:12px;font-weight:600">ADVISORY — '+escHtml(e.classifier_advisory)+'</div>';}
   else{h+='<div style="color:#3fb950;font-size:12px">Clear — classified as safe</div>';}
   h+='<div style="font-size:10px;color:#8b949e;margin-top:4px">'+(cls_ran?e.classifier_ms+'ms':'~5ms')+'</div>';
   h+='</div>';

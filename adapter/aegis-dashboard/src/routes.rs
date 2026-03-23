@@ -228,6 +228,7 @@ struct SlmScreeningEntry {
     channel: Option<String>,
     channel_user: Option<String>,
     channel_trust_level: Option<String>,
+    classifier_advisory: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -709,6 +710,10 @@ async fn api_slm(
                     channel,
                     channel_user,
                     channel_trust_level,
+                    classifier_advisory: detail
+                        .and_then(|d| d.get("classifier_advisory"))
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string()),
                 });
             }
         }

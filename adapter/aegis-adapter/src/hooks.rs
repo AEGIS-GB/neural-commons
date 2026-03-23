@@ -23,6 +23,9 @@ use aegis_schemas::ReceiptType;
 use aegis_vault::scanner;
 use tracing::{debug, info};
 
+/// Global classifier advisory — set by screen_fast when advisory, consumed by build_verdict.
+static CLASSIFIER_ADVISORY: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+
 // ---------------------------------------------------------------------------
 // Alert threshold
 // ---------------------------------------------------------------------------
@@ -396,6 +399,7 @@ impl SlmHookImpl {
             channel: None,
             channel_user: None,
             channel_trust_level: None,
+            classifier_advisory: None,
         };
 
         // Stamp channel trust from registered context (cognitive bridge)
@@ -403,6 +407,11 @@ impl SlmHookImpl {
             v.channel = trust.channel;
             v.channel_user = trust.user;
             v.channel_trust_level = Some(format!("{:?}", trust.trust_level).to_lowercase());
+        }
+
+        // Pick up classifier advisory if one was set during fast screening
+        if let Ok(mut advisory) = CLASSIFIER_ADVISORY.lock() {
+            v.classifier_advisory = advisory.take();
         }
 
         v
@@ -497,10 +506,20 @@ impl SlmHook for SlmHookImpl {
             .await;
 
             match result {
-                Ok(Some(screening_result)) => {
+                Ok((Some(screening_result), _advisory)) => {
                     Some(self.record_and_alert(&screening_result, content))
                 }
-                Ok(None) => None, // fast layers clean, needs deep SLM
+                Ok((None, advisory)) => {
+                    // Fast layers clean or advisory-only. Pass advisory to deep SLM path.
+                    if let Some(ref adv) = advisory {
+                        tracing::info!(advisory = %adv, "classifier advisory passed to deep SLM path");
+                    }
+                    // Store advisory for the deep SLM verdict to pick up
+                    if let Some(adv) = advisory {
+                        CLASSIFIER_ADVISORY.lock().ok().map(|mut a| *a = Some(adv));
+                    }
+                    None
+                }
                 Err(e) => {
                     tracing::warn!("fast screening task panicked: {e}");
                     None
