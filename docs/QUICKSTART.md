@@ -106,6 +106,10 @@ aegis setup openclaw --revert  # undo configuration
 aegis scan                   # scan workspace for credentials
 aegis scan /path/to/dir      # scan specific directory
 
+aegis trust register <ch>    # register channel with signed cert
+aegis trust context          # show current channel trust
+aegis trust pubkey           # show signing pubkey
+
 aegis status                 # show adapter status
 aegis vault summary          # credential vault overview
 aegis memory status          # memory file health
