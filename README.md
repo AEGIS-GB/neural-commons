@@ -4,7 +4,7 @@
 [![Release](https://img.shields.io/github/v/release/LCatGA12/neural-commons)](https://github.com/LCatGA12/neural-commons/releases/latest)
 [![License: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-blue.svg)](LICENSE)
 
-Trust infrastructure for MoltBook bot wardens. A Rust proxy that gives AI agents cryptographic identity, tamper-evident evidence, write protection, credential security, and prompt injection screening.
+Trust infrastructure for MoltBook bot wardens. A Rust proxy that gives AI agents cryptographic identity, tamper-evident evidence, write protection, credential security, 4-layer prompt injection screening, and channel-aware trust.
 
 **[Why Install Aegis?](docs/WHY_INSTALL_AEGIS.md)** — written by an agent, for agents.
 
@@ -17,13 +17,13 @@ curl -fsSL https://github.com/LCatGA12/neural-commons/releases/latest/download/i
 # 2. Connect to OpenClaw
 aegis setup openclaw
 
-# 3. Start protection (no Ollama needed)
+# 3. Start protection (no SLM needed for basic use)
 aegis --no-slm
 ```
 
 Dashboard: http://localhost:3141/dashboard
 
-Your agent now has evidence recording, write barriers, credential scanning, and injection screening — all running locally. Default mode is observe-only (warns but never blocks).
+Your agent now has evidence recording, write barriers, credential scanning, 4-layer injection screening, and channel-based trust — all running locally. Default mode is observe-only (warns but never blocks).
 
 See the [Quickstart Guide](docs/QUICKSTART.md) for full setup details.
 
@@ -33,36 +33,44 @@ See the [Quickstart Guide](docs/QUICKSTART.md) for full setup details.
 
 Aegis sits between a bot and its upstream LLM provider as a transparent proxy. It watches what happens, records tamper-proof evidence, and protects critical files — all without breaking existing workflows.
 
+- **4-Layer Screening Pipeline** — Defense-in-depth prompt injection detection:
+  1. **Heuristic** (<1ms) — 14-pattern regex for known injection patterns + SSRF detection
+  2. **ProtectAI Classifier** (~30ms) — ONNX DeBERTa-v2 ML model, cached at startup
+  3. **SLM Deep Analysis** (2-3s) — Local 30B model (Qwen3) for combined injection + recon + SSRF + fetch→exfil analysis, runs async alongside LLM forwarding
+  4. **Metaprompt Hardening** (0ms) — 7 security rules injected into system message (format-agnostic, works with Anthropic + OpenAI APIs)
+- **Channel Trust** — Trust level resolved per-channel via signed Ed25519 certificates. Channel identity determines screening behavior: advisory vs blocking classifier, holster presets, SSRF policy. Configurable channel patterns with glob matching.
 - **Evidence Chain** — Every API call produces a signed, hash-chained receipt. SHA-256 linked, Ed25519 signed, stored in append-only SQLite. Verifiable end-to-end with `aegis export --verify`.
 - **Write Barrier** — Triple-layer detection for unauthorized file changes: real-time filesystem watcher, periodic hash sweeps, and outbound proxy interlock. Protects SOUL.md, AGENTS.md, MEMORY.md, .env, and custom files.
-- **SLM Screening** — Local prompt injection detection via Ollama, LM Studio, vLLM, or any OpenAI-compatible server. 14-pattern threat taxonomy, deterministic scoring, configurable thresholds. Heuristic fallback when no model is available.
 - **Credential Vault** — Automatic detection and encryption of plaintext secrets (API keys, tokens, passwords) in both request and response bodies. AES-256-GCM encryption, HKDF-SHA256 key derivation.
 - **Memory Integrity** — Monitors bot memory files for unauthorized changes, injection attempts, and configuration drift. SSE alerts on detection.
 - **Cryptographic Identity** — BIP-39 mnemonic to SLIP-0010 Ed25519 key derivation with domain-separated HD paths for signing, encryption, vault, and transport.
+- **OpenClaw Plugin** — `aegis-channel-trust` plugin auto-registers channel context (Telegram, Discord, Slack, etc.) with signed Ed25519 payloads on every incoming message.
 
 ## Architecture
 
 ```
-                    +------------------+
-                    |   Bot / Client   |
-                    +--------+---------+
-                             |
-                    +--------v---------+
-                    |   aegis-proxy    |  <-- transparent HTTP proxy (:3141)
-                    |   (axum/tower)   |
-                    +--------+---------+
-                             |
-          +------------------+------------------+
-          |                  |                  |
-   +------v------+   +------v------+   +------v------+
-   | aegis-slm   |   | aegis-      |   | aegis-      |
-   | (screening) |   | barrier     |   | evidence    |
-   +-------------+   +-------------+   +-------------+
-          |                  |                  |
-   +------v------+   +------v------+   +------v------+
-   | aegis-vault |   | aegis-      |   | aegis-      |
-   | (secrets)   |   | memory      |   | crypto      |
-   +-------------+   +-------------+   +-------------+
+ Agent Framework (OpenClaw, etc.)
+   │
+   │  POST /aegis/register-channel {channel, user, ts, sig}
+   │  (signed Ed25519 channel certificate)
+   ▼
+ aegis-proxy (:3141) ─── transparent HTTP proxy (axum/tower)
+   │
+   ├── Channel Trust Resolution (verify cert → resolve trust level)
+   │
+   ├── 4-Layer Screening Pipeline
+   │   ├── 1. Heuristic    (<1ms)   regex patterns + SSRF
+   │   ├── 2. Classifier   (~30ms)  ProtectAI DeBERTa-v2 ONNX
+   │   ├── 3. SLM Deep     (2-3s)   Qwen3-30B async analysis
+   │   └── 4. Metaprompt   (0ms)    security rules injected
+   │
+   ├── Evidence Recording (hash-chained receipts)
+   ├── Credential Vault (scan + redact secrets)
+   ├── Write Barrier (filesystem protection)
+   └── Dashboard (9-tab web UI + SSE alerts)
+         │
+         ▼
+   Upstream LLM (Anthropic, OpenAI, local)
 ```
 
 ## CLI Reference
@@ -113,13 +121,13 @@ cargo build --release -p aegis-cli # release binary
 | `aegis-adapter` | Server orchestration, hooks, config, state | 35 |
 | `aegis-barrier` | Write barrier — filesystem watcher, protected files, snapshots | 208 |
 | `aegis-evidence` | Evidence chain — hash-linked receipts, SQLite WAL store | 26 |
-| `aegis-slm` | SLM screening — Ollama, OpenAI-compat, heuristic engines, holster | 38 |
+| `aegis-slm` | SLM screening — 4-layer pipeline, ProtectAI classifier, holster | 38 |
 | `aegis-vault` | Credential vault — scanner, encrypted storage, KDF | 38 |
 | `aegis-memory` | Memory integrity — file monitoring, heuristic screening | 23 |
 | `aegis-proxy` | HTTP proxy — middleware pipeline, SSE streaming, rate limiting | 37 |
 | `aegis-failure` | Resilience — anomaly detection, heartbeat, rollback | 8 |
 | `aegis-gateway` | Auth — NC-Ed25519 stateless authentication | 4 |
-| `aegis-dashboard` | Embedded web dashboard — 7 tabs, SSE alerts | 5 |
+| `aegis-dashboard` | Embedded web dashboard — 9 tabs, SSE alerts | 5 |
 | `aegis-cli` | CLI binary — all user-facing commands | — |
 
 ### Shared
@@ -155,8 +163,11 @@ All decisions documented in [`DECISIONS.md`](DECISIONS.md). Highlights:
 
 See the full [Roadmap](ROADMAP.md) and [GitHub Milestones](https://github.com/LCatGA12/neural-commons/milestones).
 
-**Tier 1 — Local Adapter:** Shipped (v0.2.x, 461+ tests)
-All adapter crates implemented and tested. Proxy, evidence chain, SLM screening, credential vault, write barrier, memory monitor, dashboard, CLI, CI/CD, install script.
+**Tier 1 — Local Adapter:** Shipped (v0.2.33+, 461+ tests)
+All adapter crates implemented and tested. Proxy, evidence chain, 4-layer SLM screening (heuristic + ProtectAI classifier + SLM + metaprompt), credential vault, write barrier, memory monitor, channel trust with signed certificates, 9-tab dashboard, OpenClaw plugin, CLI, CI/CD, install script.
+
+**Channel Trust (TRUSTMARK v0.3):** Shipped in v0.2.29–v0.2.33
+Ed25519 signed channel registration, trust-based screening policy, per-channel dashboard, 100% detection on 76 security + 71 CVE tests.
 
 **Tier 1 Hardening (v0.3.0):** [In progress](https://github.com/LCatGA12/neural-commons/milestone/1) — target April 2026
 
@@ -171,6 +182,7 @@ All adapter crates implemented and tested. Proxy, evidence chain, SLM screening,
 - [Roadmap](ROADMAP.md) — what's shipped, what's next
 - [Decisions Register](DECISIONS.md) — architectural decisions with rationale
 - [OpenClaw Integration](docs/OPENCLAW_INTEGRATION.md) — detailed integration guide
+- [Channel Trust (Issue #83)](https://github.com/LCatGA12/neural-commons/issues/83) — TRUSTMARK channel trust design and implementation
 
 ## Contributing
 
