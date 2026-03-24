@@ -4,8 +4,9 @@
 //!   POST /aegis/scan              — trigger a manual security scan
 //!   GET  /aegis/status            — return adapter status
 //!   GET  /aegis/evidence          — return recent evidence summary
-//!   POST /aegis/register-channel  — register channel context for trust
-//!   GET  /aegis/channel-context   — get current channel trust context
+//!   POST /aegis/register-channel    — register channel context for trust
+//!   POST /aegis/unregister-channel  — remove a channel from the registry
+//!   GET  /aegis/channel-context     — get current channel trust context
 //!
 //! These routes are served on the proxy's listen address alongside
 //! the catch-all upstream forwarding. The LLM provider can invoke
@@ -23,6 +24,7 @@ pub fn routes() -> Router<crate::proxy::AppState> {
         .route("/status", get(status_handler))
         .route("/evidence", get(evidence_handler))
         .route("/register-channel", post(register_channel_handler))
+        .route("/unregister-channel", post(unregister_channel_handler))
         .route("/channel-context", get(channel_context_handler))
 }
 
@@ -117,6 +119,13 @@ struct RegisterChannelRequest {
     /// Ed25519 signature (hex) over canonical JSON of {channel, ts, user}
     #[serde(default)]
     sig: Option<String>,
+}
+
+/// Request body for POST /aegis/unregister-channel.
+#[derive(Debug, Deserialize)]
+struct UnregisterChannelRequest {
+    /// Channel identifier to remove (e.g. "openclaw:web:default")
+    channel: String,
 }
 
 /// Response for channel registration and context queries.
@@ -289,6 +298,52 @@ async fn register_channel_handler(
     }
 
     (axum::http::StatusCode::OK, Json(response))
+}
+
+/// POST /aegis/unregister-channel — remove a channel from the registry.
+///
+/// If the unregistered channel was the active channel, clear the active channel.
+async fn unregister_channel_handler(
+    Json(req): Json<UnregisterChannelRequest>,
+) -> (axum::http::StatusCode, Json<serde_json::Value>) {
+    let channel = req.channel.trim().to_string();
+    if channel.is_empty() {
+        return (axum::http::StatusCode::BAD_REQUEST, Json(serde_json::json!({
+            "error": "channel is required",
+        })));
+    }
+
+    let mut removed = false;
+
+    // Remove from registry
+    if let Ok(mut registry) = CHANNEL_REGISTRY.write() {
+        let before = registry.channels.len();
+        registry.channels.retain(|r| r.channel != channel);
+        removed = registry.channels.len() < before;
+    }
+
+    // Clear active channel if it matches
+    if let Ok(mut active) = ACTIVE_CHANNEL.write() {
+        if let Some(ref trust) = *active {
+            if trust.channel.as_deref() == Some(&channel) {
+                *active = None;
+            }
+        }
+    }
+
+    if removed {
+        tracing::info!(channel = %channel, "channel unregistered");
+        (axum::http::StatusCode::OK, Json(serde_json::json!({
+            "channel": channel,
+            "unregistered": true,
+        })))
+    } else {
+        (axum::http::StatusCode::NOT_FOUND, Json(serde_json::json!({
+            "channel": channel,
+            "unregistered": false,
+            "error": "channel not found in registry",
+        })))
+    }
 }
 
 /// GET /aegis/channel-context — return current active channel + full registry.

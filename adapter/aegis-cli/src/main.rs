@@ -21,6 +21,7 @@
 //!   aegis slm engine <engine>    — switch SLM engine (ollama/openai)
 //!   aegis slm server <url>       — set SLM server URL
 //!   aegis trust register <ch>    — register a channel with signed cert
+//!   aegis trust unregister <ch>  — remove a channel from the registry
 //!   aegis trust context          — show current channel trust context
 //!   aegis trust pubkey           — show the signing public key
 //!   aegis dashboard              — open dashboard URL in browser
@@ -263,6 +264,18 @@ enum TrustCommands {
         /// User identifier (e.g. "telegram:user:12345")
         #[arg(short, long, default_value = "cli:user:local")]
         user: String,
+        /// Aegis proxy URL
+        #[arg(long, default_value = "http://127.0.0.1:3141")]
+        aegis_url: String,
+    },
+    /// Unregister a channel from the trust registry
+    ///
+    /// Examples:
+    ///   aegis trust unregister openclaw:web:default
+    ///   aegis trust unregister telegram:dm:owner
+    Unregister {
+        /// Channel identifier to remove
+        channel: String,
         /// Aegis proxy URL
         #[arg(long, default_value = "http://127.0.0.1:3141")]
         aegis_url: String,
@@ -794,6 +807,9 @@ fn main() {
             TrustCommands::Register { channel, user, aegis_url } => {
                 trust_register(&config, &channel, &user, &aegis_url);
             }
+            TrustCommands::Unregister { channel, aegis_url } => {
+                trust_unregister(&channel, &aegis_url);
+            }
             TrustCommands::Context { aegis_url } => {
                 trust_context(&aegis_url);
             }
@@ -936,6 +952,40 @@ fn trust_register(config: &AdapterConfig, channel: &str, user: &str, aegis_url: 
         Err(e) => {
             eprintln!("error: failed to connect to Aegis at {aegis_url}: {e}");
             eprintln!("hint: is Aegis running? (aegis --upstream ...)");
+            std::process::exit(1);
+        }
+    }
+}
+
+/// Unregister a channel from the trust registry.
+fn trust_unregister(channel: &str, aegis_url: &str) {
+    eprintln!("unregistering channel...");
+    eprintln!("  channel: {channel}");
+
+    let rt = tokio::runtime::Runtime::new().expect("failed to create runtime");
+    let result = rt.block_on(async {
+        let client = reqwest::Client::new();
+        client
+            .post(format!("{aegis_url}/aegis/unregister-channel"))
+            .json(&serde_json::json!({ "channel": channel }))
+            .timeout(std::time::Duration::from_secs(5))
+            .send()
+            .await
+    });
+
+    match result {
+        Ok(resp) => {
+            let status = resp.status();
+            let body_text = rt.block_on(resp.text()).unwrap_or_default();
+            if status.is_success() {
+                eprintln!("\n  unregistered!");
+            } else {
+                eprintln!("\n  failed: {body_text}");
+                std::process::exit(1);
+            }
+        }
+        Err(e) => {
+            eprintln!("error: failed to connect to Aegis at {aegis_url}: {e}");
             std::process::exit(1);
         }
     }
