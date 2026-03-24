@@ -60,7 +60,7 @@ struct Cli {
     enforce: bool,
 
     /// Path to configuration file
-    #[arg(short, long, default_value = ".aegis/config.toml")]
+    #[arg(short, long, default_value = ".aegis/config/config.toml")]
     config: String,
 
     /// Upstream LLM provider URL (overrides config)
@@ -324,9 +324,20 @@ fn main() {
         Some(Mode::ObserveOnly) | None => "observe-only",
     };
 
-    // Load configuration
-    let mut config = if Path::new(&cli.config).exists() {
-        AdapterConfig::from_file(Path::new(&cli.config)).unwrap_or_else(|e| {
+    // Load configuration — resolve relative paths against $HOME
+    let config_path = {
+        let p = Path::new(&cli.config);
+        if p.is_absolute() || p.exists() {
+            p.to_path_buf()
+        } else if let Some(home) = dirs::home_dir() {
+            let resolved = home.join(p);
+            if resolved.exists() { resolved } else { p.to_path_buf() }
+        } else {
+            p.to_path_buf()
+        }
+    };
+    let mut config = if config_path.exists() {
+        AdapterConfig::from_file(&config_path).unwrap_or_else(|e| {
             eprintln!("warning: failed to load config: {e}");
             eprintln!("using defaults");
             AdapterConfig::default()
@@ -376,7 +387,7 @@ fn main() {
         Some(Commands::Status) => {
             eprintln!("aegis status:");
             eprintln!("  mode:     {}", mode_label);
-            eprintln!("  config:   {}", cli.config);
+            eprintln!("  config:   {}", config_path.display());
             eprintln!("  version:  {}", env!("CARGO_PKG_VERSION"));
             eprintln!("  listen:   {}", config.proxy.listen_addr);
             eprintln!("  upstream: {}", config.proxy.upstream_url);
@@ -781,7 +792,7 @@ fn main() {
                 eprintln!("  * Apple Silicon uses unified memory — 32GB Mac ≈ 24GB effective for models.");
             }
             SlmCommands::Use { model } => {
-                update_slm_config(&cli.config, "model", &model);
+                update_slm_config(&config_path.display().to_string(), "model", &model);
             }
             SlmCommands::Engine { engine } => {
                 if engine != "ollama" && engine != "openai" && engine != "anthropic" {
@@ -791,7 +802,7 @@ fn main() {
                     eprintln!("  anthropic  — Anthropic Messages API (requires ANTHROPIC_API_KEY)");
                     std::process::exit(1);
                 }
-                update_slm_config(&cli.config, "engine", &engine);
+                update_slm_config(&config_path.display().to_string(), "engine", &engine);
                 if engine == "anthropic" {
                     eprintln!("hint: set ANTHROPIC_API_KEY env var for authentication");
                     eprintln!("hint: default server: https://api.anthropic.com");
@@ -799,7 +810,7 @@ fn main() {
                 }
             }
             SlmCommands::Server { url } => {
-                update_slm_config(&cli.config, "server_url", &url);
+                update_slm_config(&config_path.display().to_string(), "server_url", &url);
             }
         },
 
