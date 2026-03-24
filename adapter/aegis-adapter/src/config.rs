@@ -126,6 +126,10 @@ pub struct ProxySection {
     /// Allow any provider through without detection (default: false)
     #[serde(default)]
     pub allow_any_provider: bool,
+    /// Upstream provider type — determines metaprompt injection format.
+    /// Auto-detected from upstream_url if not set.
+    #[serde(default)]
+    pub provider: Option<String>,
     /// Burst size for rate limiting (default: 50)
     #[serde(default = "default_burst_size")]
     pub burst_size: u32,
@@ -187,6 +191,7 @@ impl Default for ProxySection {
             max_body_size: default_max_body_size(),
             rate_limit_per_minute: default_rate_limit(),
             allow_any_provider: false,
+            provider: None,
             burst_size: default_burst_size(),
         }
     }

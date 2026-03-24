@@ -20,6 +20,11 @@
 //!   aegis slm use <model>        — switch SLM model
 //!   aegis slm engine <engine>    — switch SLM engine (ollama/openai)
 //!   aegis slm server <url>       — set SLM server URL
+//!   aegis upstream anthropic     — set upstream to Anthropic
+//!   aegis upstream openai        — set upstream to OpenAI
+//!   aegis upstream ollama        — set upstream to Ollama
+//!   aegis upstream lmstudio      — set upstream to LM Studio
+//!   aegis upstream <url>         — set upstream to custom URL
 //!   aegis trust register <ch>    — register a channel with signed cert
 //!   aegis trust unregister <ch>  — remove a channel from the registry
 //!   aegis trust context          — show current channel trust context
@@ -155,6 +160,23 @@ enum Commands {
     Trust {
         #[command(subcommand)]
         action: TrustCommands,
+    },
+
+    /// Set the upstream LLM provider
+    ///
+    /// Sets the upstream URL and provider type for metaprompt injection.
+    /// Well-known providers: anthropic, openai, ollama, lmstudio
+    ///
+    /// Examples:
+    ///   aegis upstream anthropic
+    ///   aegis upstream openai
+    ///   aegis upstream ollama
+    ///   aegis upstream lmstudio
+    ///   aegis upstream http://custom-server:8080
+    Upstream {
+        /// Provider name or custom URL
+        /// (anthropic, openai, ollama, lmstudio, or a URL)
+        target: String,
     },
 
     /// Open the dashboard in a browser
@@ -841,6 +863,10 @@ fn main() {
             run_systemctl("restart");
         }
 
+        Some(Commands::Upstream { target }) => {
+            set_upstream(&config_path.display().to_string(), &target);
+        }
+
         Some(Commands::Dashboard) => {
             let url = format!(
                 "http://{}/dashboard",
@@ -1364,4 +1390,108 @@ fn update_slm_config(config_path: &str, field: &str, value: &str) {
     if field == "model" {
         eprintln!("hint: make sure the model is pulled/available on your SLM server");
     }
+}
+
+/// Set the upstream provider and URL.
+fn set_upstream(config_path: &str, target: &str) {
+    // Resolve well-known provider names to URL + provider type
+    let (url, provider) = match target.to_lowercase().as_str() {
+        "anthropic" | "claude" => (
+            "https://api.anthropic.com".to_string(),
+            "anthropic".to_string(),
+        ),
+        "openai" | "gpt" => (
+            "https://api.openai.com".to_string(),
+            "open_ai".to_string(),
+        ),
+        "ollama" => (
+            "http://localhost:11434".to_string(),
+            "ollama".to_string(),
+        ),
+        "lmstudio" | "lms" => (
+            "http://localhost:1234".to_string(),
+            "open_ai_compat".to_string(),
+        ),
+        "openrouter" => (
+            "https://openrouter.ai/api".to_string(),
+            "open_ai_compat".to_string(),
+        ),
+        _ if target.starts_with("http://") || target.starts_with("https://") => {
+            let provider = if target.contains("anthropic.com") {
+                "anthropic"
+            } else if target.contains("api.openai.com") {
+                "open_ai"
+            } else if target.contains(":11434") {
+                "ollama"
+            } else {
+                "open_ai_compat"
+            };
+            (target.to_string(), provider.to_string())
+        }
+        _ => {
+            eprintln!("error: unknown provider '{target}'");
+            eprintln!("  known providers: anthropic, openai, ollama, lmstudio, openrouter");
+            eprintln!("  or pass a URL:   aegis upstream http://my-server:8080");
+            std::process::exit(1);
+        }
+    };
+
+    let path = Path::new(config_path);
+
+    if !path.exists() {
+        let parent = path.parent().unwrap_or(Path::new("."));
+        std::fs::create_dir_all(parent).unwrap_or_else(|e| {
+            eprintln!("error: cannot create {}: {e}", parent.display());
+            std::process::exit(1);
+        });
+        let default_config = AdapterConfig::default();
+        let toml_str = toml::to_string_pretty(&default_config).unwrap_or_else(|e| {
+            eprintln!("error: failed to serialize default config: {e}");
+            std::process::exit(1);
+        });
+        std::fs::write(path, &toml_str).unwrap_or_else(|e| {
+            eprintln!("error: failed to write {}: {e}", path.display());
+            std::process::exit(1);
+        });
+    }
+
+    let content = std::fs::read_to_string(path).unwrap_or_else(|e| {
+        eprintln!("error: failed to read {}: {e}", path.display());
+        std::process::exit(1);
+    });
+
+    let mut doc: toml::Value = toml::from_str(&content).unwrap_or_else(|e| {
+        eprintln!("error: invalid TOML in {}: {e}", path.display());
+        std::process::exit(1);
+    });
+
+    let table = doc.as_table_mut().unwrap();
+    if !table.contains_key("proxy") {
+        table.insert("proxy".to_string(), toml::Value::Table(toml::map::Map::new()));
+    }
+    let proxy = table.get_mut("proxy").unwrap().as_table_mut().unwrap();
+
+    let old_url = proxy.get("upstream_url")
+        .and_then(|v| v.as_str())
+        .unwrap_or("(not set)")
+        .to_string();
+
+    proxy.insert("upstream_url".to_string(), toml::Value::String(url.clone()));
+    proxy.insert("provider".to_string(), toml::Value::String(provider.clone()));
+
+    let toml_str = toml::to_string_pretty(&doc).unwrap_or_else(|e| {
+        eprintln!("error: failed to serialize config: {e}");
+        std::process::exit(1);
+    });
+
+    std::fs::write(path, &toml_str).unwrap_or_else(|e| {
+        eprintln!("error: failed to write {}: {e}", path.display());
+        std::process::exit(1);
+    });
+
+    eprintln!("upstream: {} -> {}", old_url, url);
+    eprintln!("provider: {}", provider);
+    eprintln!("config: {}", path.display());
+    eprintln!();
+    eprintln!("restart aegis to apply: aegis restart");
 }

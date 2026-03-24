@@ -448,7 +448,9 @@ pub async fn start(
             Mode::ObserveOnly => ProxyMode::ObserveOnly,
             Mode::Enforce => ProxyMode::Enforce,
         },
-        provider: aegis_proxy::config::Provider::Anthropic,
+        provider: config.proxy.provider.as_deref()
+            .and_then(|p| serde_json::from_value(serde_json::Value::String(p.to_string())).ok())
+            .unwrap_or_else(|| aegis_proxy::config::Provider::from_url(&config.proxy.upstream_url)),
         allow_any_provider: config.proxy.allow_any_provider,
         metaprompt_hardening: config.slm.metaprompt_hardening,
     };

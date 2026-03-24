@@ -9,7 +9,16 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum Provider {
+    /// Anthropic Messages API (/v1/messages) — system field is top-level, not in messages array
     Anthropic,
+    /// OpenAI Chat Completions (/v1/chat/completions) — system role in messages array
+    OpenAi,
+    /// OpenAI Responses API (/v1/responses) — developer role in input array
+    OpenAiResponses,
+    /// Ollama native (/api/chat, /api/generate) — system role in messages array
+    Ollama,
+    /// Generic OpenAI-compatible (LM Studio, vLLM, llama.cpp) — system role in messages array
+    OpenAiCompat,
 }
 
 /// Proxy configuration.
@@ -61,6 +70,46 @@ pub enum ProxyMode {
     PassThrough,
     ObserveOnly,
     Enforce,
+}
+
+impl Provider {
+    /// Resolve provider from a well-known upstream URL.
+    pub fn from_url(url: &str) -> Self {
+        if url.contains("anthropic.com") {
+            Provider::Anthropic
+        } else if url.contains("api.openai.com") {
+            Provider::OpenAi
+        } else if url.contains("openrouter.ai") {
+            Provider::OpenAiCompat
+        } else if url.contains(":11434") {
+            Provider::Ollama
+        } else {
+            // Default to OpenAI-compatible for unknown URLs (most common format)
+            Provider::OpenAiCompat
+        }
+    }
+
+    /// Get the default upstream URL for this provider.
+    pub fn default_url(&self) -> &'static str {
+        match self {
+            Provider::Anthropic => "https://api.anthropic.com",
+            Provider::OpenAi => "https://api.openai.com",
+            Provider::OpenAiResponses => "https://api.openai.com",
+            Provider::Ollama => "http://localhost:11434",
+            Provider::OpenAiCompat => "http://localhost:1234",
+        }
+    }
+
+    /// Display name for the CLI.
+    pub fn display_name(&self) -> &'static str {
+        match self {
+            Provider::Anthropic => "anthropic",
+            Provider::OpenAi => "openai",
+            Provider::OpenAiResponses => "openai-responses",
+            Provider::Ollama => "ollama",
+            Provider::OpenAiCompat => "openai-compat",
+        }
+    }
 }
 
 impl Default for ProxyConfig {

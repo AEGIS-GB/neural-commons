@@ -491,26 +491,66 @@ async fn forward_request(
         match serde_json::from_slice::<serde_json::Value>(&body_bytes) {
             Ok(mut json) => {
                 let mut injected = false;
-                // Inject into messages array (works for ALL API formats)
-                if let Some(messages) = json.get_mut("messages").and_then(|m| m.as_array_mut()) {
-                    let system_msg = serde_json::json!({
-                        "role": "system",
-                        "content": METAPROMPT_RULES
-                    });
-                    messages.insert(0, system_msg);
-                    injected = true;
-                }
-                // Also set top-level "system" field (Anthropic format)
-                if let Some(obj) = json.as_object_mut() {
-                    if obj.contains_key("system") {
-                        let existing = obj.get("system")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("");
-                        obj.insert(
-                            "system".to_string(),
-                            serde_json::Value::String(format!("{}\n{}", METAPROMPT_RULES, existing)),
-                        );
-                        injected = true;
+                // Use the configured provider to determine metaprompt injection format.
+                // Falls back to auto-detection from headers/model name if provider is generic.
+                use crate::config::Provider;
+                let provider = if state.config.allow_any_provider {
+                    // Auto-detect: check headers and model name
+                    if headers.get("anthropic-version").is_some()
+                        || json.get("model").and_then(|m| m.as_str()).map(|m| m.starts_with("claude")).unwrap_or(false)
+                    {
+                        Provider::Anthropic
+                    } else if json.get("input").is_some() {
+                        Provider::OpenAiResponses
+                    } else {
+                        state.config.provider
+                    }
+                } else {
+                    state.config.provider
+                };
+
+                match provider {
+                    Provider::Anthropic => {
+                        // Anthropic Messages API: top-level "system" field, NOT in messages array
+                        if let Some(obj) = json.as_object_mut() {
+                            let existing = obj.get("system")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("")
+                                .to_string();
+                            obj.insert(
+                                "system".to_string(),
+                                serde_json::Value::String(
+                                    if existing.is_empty() {
+                                        METAPROMPT_RULES.to_string()
+                                    } else {
+                                        format!("{}\n{}", METAPROMPT_RULES, existing)
+                                    }
+                                ),
+                            );
+                            injected = true;
+                        }
+                    }
+                    Provider::OpenAiResponses => {
+                        // OpenAI Responses API: developer role in input array
+                        if let Some(input) = json.get_mut("input").and_then(|m| m.as_array_mut()) {
+                            let dev_msg = serde_json::json!({
+                                "role": "developer",
+                                "content": METAPROMPT_RULES
+                            });
+                            input.insert(0, dev_msg);
+                            injected = true;
+                        }
+                    }
+                    Provider::OpenAi | Provider::Ollama | Provider::OpenAiCompat => {
+                        // OpenAI / Ollama / LM Studio: system role in messages array
+                        if let Some(messages) = json.get_mut("messages").and_then(|m| m.as_array_mut()) {
+                            let system_msg = serde_json::json!({
+                                "role": "system",
+                                "content": METAPROMPT_RULES
+                            });
+                            messages.insert(0, system_msg);
+                            injected = true;
+                        }
                     }
                 }
                 if injected {
