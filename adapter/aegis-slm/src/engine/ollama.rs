@@ -28,6 +28,11 @@ struct OllamaGenerateRequest<'a> {
 #[derive(Serialize)]
 struct OllamaOptions {
     num_predict: u32,
+    /// Limit context window for SLM screening to avoid KvSize mismatch
+    /// with the main chat runner. Without this, Ollama allocates the model's
+    /// full context (e.g. 262144 for Qwen3), which forces a runner restart
+    /// when a subsequent /api/chat arrives with a different KvSize.
+    num_ctx: u32,
 }
 
 /// Ollama generate response body.
@@ -133,7 +138,7 @@ impl SlmEngine for OllamaEngine {
             prompt,
             stream: false,
             format: "json",
-            options: OllamaOptions { num_predict: 256 },
+            options: OllamaOptions { num_predict: 256, num_ctx: 32768 },
         };
 
         debug!(
