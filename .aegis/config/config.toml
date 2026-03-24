@@ -1,18 +1,19 @@
 mode = "observe_only"
 
+[dashboard]
+path = "/dashboard"
+
+[memory]
+hash_interval_secs = 30
+memory_paths = []
+
 [proxy]
-listen_addr = "127.0.0.1:3141"
-upstream_url = "http://localhost:1234"
-max_body_size = 10485760
-rate_limit_per_minute = 1000
 allow_any_provider = true
+listen_addr = "127.0.0.1:3141"
+max_body_size = 10485760
+provider = "anthropic"
+rate_limit_per_minute = 1000
+upstream_url = "https://api.anthropic.com"
 
 [slm]
 enabled = false
-
-[memory]
-memory_paths = []
-hash_interval_secs = 30
-
-[dashboard]
-path = "/dashboard"
