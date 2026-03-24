@@ -30,10 +30,14 @@ members = [
 ]
 
 [workspace.package]
-version = "0.2.46"
+version = "0.2.47"
 edition = "2024"
 license = "AGPL-3.0-or-later"
-repository = "https://github.com/neural-commons/neural-commons"
+repository = "https://github.com/LCatGA12/neural-commons"
+homepage = "https://github.com/LCatGA12/neural-commons"
+description = "Trust infrastructure for AI agents — evidence chain, credential vault, write barrier, injection screening, cryptographic identity"
+keywords = ["security", "ai-agents", "proxy", "trust", "evidence"]
+categories = ["cryptography", "network-programming", "command-line-utilities"]
 
 [workspace.dependencies]
 # Crypto

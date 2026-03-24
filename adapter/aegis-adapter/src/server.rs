@@ -65,7 +65,7 @@ fn detect_prompt_guard_model() -> Option<String> {
             return Some(path.to_string_lossy().to_string());
         }
     }
-    warn!("ProtectAI classifier model not found — classifier layer disabled");
+    info!("ProtectAI classifier model not found — classifier layer disabled (use `aegis slm recommend` for setup guidance, or `aegis --no-slm` to silence)");
     None
 }
 

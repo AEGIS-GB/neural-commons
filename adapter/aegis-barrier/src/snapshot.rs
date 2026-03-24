@@ -67,10 +67,10 @@ impl SnapshotStore {
                     );
                 }
                 Err(e) => {
-                    warn!(
+                    debug!(
                         path = %rel_path.display(),
                         error = %e,
-                        "snapshot: critical file not found at startup (cannot restore later)"
+                        "snapshot: critical file not found at startup — will be protected once created"
                     );
                 }
             }
