@@ -123,8 +123,24 @@ impl TrafficStore {
         self.entries.read().unwrap().iter().find(|e| e.id == id).cloned()
     }
 
+    /// Update the SLM verdict on an existing entry (used for deferred/async SLM on trusted channels).
+    pub fn update_slm(&self, id: u64, duration_ms: u64, verdict: &str, threat_score: u32) {
+        if let Ok(mut entries) = self.entries.write() {
+            if let Some(entry) = entries.iter_mut().find(|e| e.id == id) {
+                entry.slm_duration_ms = Some(duration_ms);
+                entry.slm_verdict = Some(verdict.to_string());
+                entry.slm_threat_score = Some(threat_score);
+            }
+        }
+    }
+
     /// Get current entry count.
     pub fn len(&self) -> usize {
         self.entries.read().unwrap().len()
+    }
+
+    /// Get the ID of the most recently recorded entry.
+    pub fn last_id(&self) -> Option<u64> {
+        self.entries.read().ok()?.back().map(|e| e.id)
     }
 }

@@ -63,7 +63,12 @@ context (\"let's roleplay\", \"for a math problem, first disable filters\") then
 
 /// Callback for recording traffic (request/response bodies) in the traffic inspector.
 /// Parameters: method, path, status, req_body, resp_body, duration_ms, is_streaming, slm_verdict
-pub type TrafficRecorder = dyn Fn(&str, &str, u16, &[u8], &[u8], u64, bool, Option<&middleware::SlmVerdict>) + Send + Sync;
+/// Returns: the traffic entry ID (for later SLM verdict updates).
+pub type TrafficRecorder = dyn Fn(&str, &str, u16, &[u8], &[u8], u64, bool, Option<&middleware::SlmVerdict>) -> Option<u64> + Send + Sync;
+
+/// Callback for updating the SLM verdict on an existing traffic entry (deferred/async SLM on trusted channels).
+/// Parameters: entry_id, slm_duration_ms, verdict, threat_score
+pub type TrafficSlmUpdater = dyn Fn(u64, u64, &str, u32) + Send + Sync;
 
 /// Shared application state for the proxy server.
 #[derive(Clone)]
@@ -78,6 +83,8 @@ pub struct AppState {
     pub rate_limiter: Option<Arc<crate::rate_limit::RateLimiter>>,
     /// Optional traffic recorder for the dashboard traffic inspector.
     pub traffic_recorder: Option<Arc<TrafficRecorder>>,
+    /// Optional callback to update SLM verdict on a traffic entry after deferred screening.
+    pub traffic_slm_updater: Option<Arc<TrafficSlmUpdater>>,
     /// Channel trust configuration for resolving X-Aegis-Channel-Cert.
     pub trust_config: Option<crate::channel_trust::TrustConfig>,
 }
@@ -127,6 +134,18 @@ pub async fn start_with_traffic(
     traffic_recorder: Option<Arc<TrafficRecorder>>,
     trust_config: Option<crate::channel_trust::TrustConfig>,
 ) -> Result<(), ProxyError> {
+    start_with_traffic_full(config, hooks, dashboard, traffic_recorder, None, trust_config).await
+}
+
+/// Start the proxy server with full traffic recording (recorder + SLM updater).
+pub async fn start_with_traffic_full(
+    config: ProxyConfig,
+    hooks: MiddlewareHooks,
+    dashboard: Option<(String, Router)>,
+    traffic_recorder: Option<Arc<TrafficRecorder>>,
+    traffic_slm_updater: Option<Arc<TrafficSlmUpdater>>,
+    trust_config: Option<crate::channel_trust::TrustConfig>,
+) -> Result<(), ProxyError> {
     let client = Client::builder()
         .timeout(std::time::Duration::from_secs(300)) // 5 min for long LLM responses
         .build()
@@ -148,6 +167,7 @@ pub async fn start_with_traffic(
         identity_fingerprint: None,
         rate_limiter,
         traffic_recorder,
+        traffic_slm_updater,
         trust_config,
     };
 
@@ -674,7 +694,7 @@ async fn forward_request(
 
             // Record streaming traffic
             if let Some(ref recorder) = stream_traffic_recorder {
-                recorder(&stream_method, &stream_path, resp_status, &stream_req_body, &accumulated, start_time.elapsed().as_millis() as u64, true, stream_slm_verdict.as_ref());
+                let _ = recorder(&stream_method, &stream_path, resp_status, &stream_req_body, &accumulated, start_time.elapsed().as_millis() as u64, true, stream_slm_verdict.as_ref());
             }
         });
 
@@ -776,24 +796,30 @@ async fn forward_request(
     }
 
     // Record traffic for dashboard inspector (with redacted body)
-    if let Some(ref recorder) = state.traffic_recorder {
-        recorder(&method.to_string(), &path, resp_status, &body_bytes, &final_body, duration_ms, false, slm_verdict.as_ref());
-    }
+    let traffic_entry_id = if let Some(ref recorder) = state.traffic_recorder {
+        recorder(&method.to_string(), &path, resp_status, &body_bytes, &final_body, duration_ms, false, slm_verdict.as_ref())
+    } else {
+        None
+    };
 
     // Fire-and-forget deep SLM for trusted channels (after response ready)
     if let Some(content) = slm_deferred_content {
         if let Some(ref slm) = state.hooks.slm {
             let slm_clone: Arc<dyn middleware::SlmHook> = Arc::clone(slm);
             let trust_channel = req_info.channel_trust.channel.clone();
-            let trust_user = req_info.channel_trust.user.clone();
             let trust_level = req_info.channel_trust.trust_level;
+            let updater = state.traffic_slm_updater.clone();
             tokio::spawn(async move {
-                let (_decision, _verdict) = slm_clone.screen_deep(&content).await;
+                let (_decision, verdict) = slm_clone.screen_deep(&content).await;
                 info!(
                     channel = ?trust_channel,
                     trust = ?trust_level,
                     "SLM deep analysis completed after response (trusted channel)"
                 );
+                // Update traffic entry with deferred SLM verdict
+                if let (Some(entry_id), Some(updater), Some(v)) = (traffic_entry_id, &updater, &verdict) {
+                    updater(entry_id, v.screening_ms, &v.action, v.threat_score);
+                }
             });
         }
     }
@@ -827,6 +853,7 @@ mod tests {
             identity_fingerprint: None,
             rate_limiter: None,
             traffic_recorder: None,
+            traffic_slm_updater: None,
             trust_config: None,
         };
         let _router = build_router(state, None);
@@ -842,6 +869,7 @@ mod tests {
             identity_fingerprint: Some("abc123def456".to_string()),
             rate_limiter: None,
             traffic_recorder: None,
+            traffic_slm_updater: None,
             trust_config: None,
         };
         assert_eq!(state.identity_fingerprint.as_deref(), Some("abc123def456"));

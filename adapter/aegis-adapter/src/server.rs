@@ -488,6 +488,14 @@ pub async fn start(
                 None => (None, None, None),
             };
             ts.record(method, path, status, req, resp, dur, streaming, slm_dur, slm_action, slm_score);
+            ts.last_id()
+        })
+    };
+
+    let traffic_slm_updater: Arc<aegis_proxy::proxy::TrafficSlmUpdater> = {
+        let ts = traffic_store.clone();
+        Arc::new(move |entry_id: u64, duration_ms: u64, verdict: &str, threat_score: u32| {
+            ts.update_slm(entry_id, duration_ms, verdict, threat_score);
         })
     };
 
@@ -507,11 +515,12 @@ pub async fn start(
         }
     };
 
-    aegis_proxy::proxy::start_with_traffic(
+    aegis_proxy::proxy::start_with_traffic_full(
         proxy_config,
         hooks,
         Some((dashboard_path, dashboard_router)),
         Some(traffic_recorder),
+        Some(traffic_slm_updater),
         Some(trust_config),
     )
         .await
