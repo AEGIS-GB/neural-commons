@@ -34,6 +34,9 @@ struct OllamaOptions {
 #[derive(Deserialize)]
 struct OllamaGenerateResponse {
     response: String,
+    /// Qwen3 "thinking" models put their output here instead of `response`.
+    #[serde(default)]
+    thinking: Option<String>,
 }
 
 /// Ollama tags response (for model listing).
@@ -169,12 +172,20 @@ impl SlmEngine for OllamaEngine {
             .json()
             .map_err(|e| format!("failed to parse Ollama generate response: {e}"))?;
 
+        // Qwen3 thinking models put output in `thinking` field with empty `response`.
+        // Fall back to `thinking` content when `response` is empty.
+        let output = if response.response.is_empty() {
+            response.thinking.unwrap_or_default()
+        } else {
+            response.response
+        };
+
         debug!(
-            response_len = response.response.len(),
+            response_len = output.len(),
             "Ollama inference complete"
         );
 
-        Ok(response.response)
+        Ok(output)
     }
 }
 
