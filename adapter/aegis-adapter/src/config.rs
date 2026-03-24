@@ -149,12 +149,12 @@ pub struct SlmSection {
     /// Enable SLM screening (default: true)
     #[serde(default = "default_true")]
     pub enabled: bool,
-    /// SLM engine: "ollama" (default)
+    /// SLM engine: "ollama" (default), "openai", or "anthropic"
     #[serde(default = "default_slm_engine")]
     pub engine: String,
-    /// Ollama API URL
-    #[serde(default = "default_ollama_url")]
-    pub ollama_url: String,
+    /// SLM server URL (accepts legacy "ollama_url" for backward compatibility)
+    #[serde(default = "default_server_url", alias = "ollama_url")]
+    pub server_url: String,
     /// Model name (default: "llama3.2:1b")
     #[serde(default = "default_slm_model")]
     pub model: String,
@@ -171,7 +171,7 @@ impl Default for SlmSection {
         Self {
             enabled: true,
             engine: default_slm_engine(),
-            ollama_url: default_ollama_url(),
+            server_url: default_server_url(),
             model: default_slm_model(),
             fallback_to_heuristics: true,
             metaprompt_hardening: true,
@@ -241,7 +241,7 @@ fn default_hash_interval() -> u64 { 60 }
 fn default_enforcement() -> EnforcementConfig { EnforcementConfig::observe_default() }
 fn default_dashboard_path() -> String { "/dashboard".to_string() }
 fn default_slm_engine() -> String { "ollama".to_string() }
-fn default_ollama_url() -> String { "http://localhost:11434".to_string() }
+fn default_server_url() -> String { "http://localhost:11434".to_string() }
 fn default_slm_model() -> String { "llama3.2:1b".to_string() }
 
 impl Default for AdapterConfig {

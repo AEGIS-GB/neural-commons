@@ -1,12 +1,14 @@
 //! Engine trait for SLM inference.
 //!
-//! Four implementations:
+//! Five implementations:
 //!   - `OllamaEngine`: HTTP client for Ollama API (`/api/generate`)
 //!   - `OpenAiCompatEngine`: HTTP client for any OpenAI-compatible API (`/v1/chat/completions`)
 //!     — works with LM Studio, vLLM, llama.cpp, text-generation-inference, LocalAI
+//!   - `AnthropicEngine`: HTTP client for Anthropic Messages API (`/v1/messages`)
 //!   - `HeuristicEngine`: Regex-based fallback (no model required)
 //!   - `PromptGuardEngine`: ONNX classifier (ProtectAI DeBERTa-v2, 184M params)
 
+pub mod anthropic;
 pub mod heuristic;
 pub mod ollama;
 pub mod openai_compat;

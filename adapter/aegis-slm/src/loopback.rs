@@ -2,7 +2,7 @@
 //!
 //! Pipeline:
 //!   1. Build screening prompt from raw content
-//!   2. Try primary engine (Ollama or OpenAI-compatible)
+//!   2. Try primary engine (Ollama, OpenAI-compatible, or Anthropic)
 //!   3. Fall back to heuristic engine if primary fails and fallback enabled
 //!   4. Parse SLM output JSON
 //!   5. Enrich with deterministic scoring
@@ -14,6 +14,7 @@
 
 use tracing::{debug, info, warn};
 
+use crate::engine::anthropic::AnthropicEngine;
 use crate::engine::heuristic::HeuristicEngine;
 use crate::engine::ollama::OllamaEngine;
 use crate::engine::openai_compat::OpenAiCompatEngine;
@@ -27,7 +28,7 @@ use crate::types::*;
 /// Configuration for the loopback screening pipeline.
 #[derive(Debug, Clone)]
 pub struct LoopbackConfig {
-    /// SLM engine type: "ollama" or "openai"
+    /// SLM engine type: "ollama", "openai", or "anthropic"
     pub engine: String,
     /// Server URL (Ollama: "http://localhost:11434", LM Studio: "http://localhost:1234")
     pub server_url: String,
@@ -213,6 +214,7 @@ pub fn screen_deep_slm(config: &LoopbackConfig, content: &str, holster_profile: 
 
     let engine: Box<dyn SlmEngine> = match config.engine.as_str() {
         "openai" => Box::new(OpenAiCompatEngine::new(&config.server_url, &config.model)),
+        "anthropic" => Box::new(AnthropicEngine::new(&config.server_url, &config.model, None)),
         _ => Box::new(OllamaEngine::new(&config.server_url, &config.model)),
     };
 
@@ -406,6 +408,7 @@ pub fn screen_content_rich(config: &LoopbackConfig, content: &str) -> ScreeningR
 
     let engine: Box<dyn SlmEngine> = match config.engine.as_str() {
         "openai" => Box::new(OpenAiCompatEngine::new(&config.server_url, &config.model)),
+        "anthropic" => Box::new(AnthropicEngine::new(&config.server_url, &config.model, None)),
         _ => Box::new(OllamaEngine::new(&config.server_url, &config.model)),
     };
 

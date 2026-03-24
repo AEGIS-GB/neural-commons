@@ -224,7 +224,7 @@ enum SlmCommands {
         /// Model name (e.g. qwen/qwen3-30b-a3b, qwen/qwen3-8b)
         model: String,
     },
-    /// Switch the SLM engine (ollama or openai)
+    /// Switch the SLM engine (ollama, openai, or anthropic)
     Engine {
         /// Engine type: "ollama" or "openai" (OpenAI-compatible: LM Studio, vLLM, etc.)
         engine: String,
@@ -734,7 +734,7 @@ fn main() {
                 eprintln!("  enabled:              {}", config.slm.enabled);
                 eprintln!("  engine:               {}", config.slm.engine);
                 eprintln!("  model:                {}", config.slm.model);
-                eprintln!("  server url:           {}", config.slm.ollama_url);
+                eprintln!("  server url:           {}", config.slm.server_url);
                 eprintln!("  heuristic fallback:   {}", config.slm.fallback_to_heuristics);
                 eprintln!("  metaprompt hardening: {}", config.slm.metaprompt_hardening);
                 eprintln!("  screening:            2-pass (injection + reconnaissance)");
@@ -759,8 +759,10 @@ fn main() {
                 eprintln!("  {:12} {:>8} {:28} {:>12} {:>10}", "good", "6-12GB", "qwen/qwen3-8b", "~70%", "4-10s");
                 eprintln!("  {:12} {:>8} {:28} {:>12} {:>10}", "basic", "3-6GB", "qwen/qwen3-1.7b", "~45%", "1-3s");
                 eprintln!("  {:12} {:>8} {:28} {:>12} {:>10}", "cpu-only", "none", "heuristic + classifier only", "~65%", "<10ms");
+                eprintln!("  {:12} {:>8} {:28} {:>12} {:>10}", "api", "cloud", "claude-haiku-4-5-20251001", "~95%", "0.5-2s");
                 eprintln!();
                 eprintln!("  * cpu-only uses no LLM — heuristic patterns + ProtectAI classifier.");
+                eprintln!("  * api tier uses Anthropic Haiku — no local GPU needed, requires ANTHROPIC_API_KEY.");
                 eprintln!("  * All tiers include heuristic + classifier. SLM adds on top.");
                 eprintln!("  * Metaprompt hardening is always available regardless of tier.");
                 eprintln!("  * Apple Silicon uses unified memory — 32GB Mac ≈ 24GB effective for models.");
@@ -769,16 +771,22 @@ fn main() {
                 update_slm_config(&cli.config, "model", &model);
             }
             SlmCommands::Engine { engine } => {
-                if engine != "ollama" && engine != "openai" {
-                    eprintln!("error: engine must be 'ollama' or 'openai'");
-                    eprintln!("  ollama  — Ollama API (http://localhost:11434)");
-                    eprintln!("  openai  — OpenAI-compatible API (LM Studio, vLLM, llama.cpp, LocalAI)");
+                if engine != "ollama" && engine != "openai" && engine != "anthropic" {
+                    eprintln!("error: engine must be 'ollama', 'openai', or 'anthropic'");
+                    eprintln!("  ollama     — Ollama API (http://localhost:11434)");
+                    eprintln!("  openai     — OpenAI-compatible API (LM Studio, vLLM, llama.cpp, LocalAI)");
+                    eprintln!("  anthropic  — Anthropic Messages API (requires ANTHROPIC_API_KEY)");
                     std::process::exit(1);
                 }
                 update_slm_config(&cli.config, "engine", &engine);
+                if engine == "anthropic" {
+                    eprintln!("hint: set ANTHROPIC_API_KEY env var for authentication");
+                    eprintln!("hint: default server: https://api.anthropic.com");
+                    eprintln!("hint: recommended model: claude-haiku-4-5-20251001");
+                }
             }
             SlmCommands::Server { url } => {
-                update_slm_config(&cli.config, "ollama_url", &url);
+                update_slm_config(&cli.config, "server_url", &url);
             }
         },
 
@@ -1282,7 +1290,7 @@ fn update_slm_config(config_path: &str, field: &str, value: &str) {
     let friendly_name = match field {
         "model" => "model",
         "engine" => "engine",
-        "ollama_url" => "server url",
+        "server_url" => "server url",
         _ => field,
     };
 

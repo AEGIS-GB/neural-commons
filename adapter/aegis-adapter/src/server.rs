@@ -429,7 +429,7 @@ pub async fn start(
     aegis_slm::loopback::init_prompt_guard(prompt_guard_dir.as_deref());
     let slm_config = aegis_slm::loopback::LoopbackConfig {
         engine: config.slm.engine.clone(),
-        server_url: config.slm.ollama_url.clone(),
+        server_url: config.slm.server_url.clone(),
         model: config.slm.model.clone(),
         fallback_to_heuristics: config.slm.fallback_to_heuristics,
         prompt_guard_model_dir: prompt_guard_dir,
