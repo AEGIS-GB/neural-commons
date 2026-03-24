@@ -40,7 +40,7 @@ neural-commons/
 │   │       └── config.rs           # MemoryConfig (paths, interval)
 │   ├── aegis-slm/                  # SLM injection screening                  (18 tests)
 │   │   └── src/
-│   │       └── ollama.rs           # Ollama HTTP client, heuristic fallback
+│   │       └── engine/             # ollama.rs, openai_compat.rs, anthropic.rs, heuristic.rs, prompt_guard.rs
 │   ├── aegis-proxy/                # Core proxy engine                        (21 tests)
 │   │   └── src/
 │   │       ├── proxy.rs            # forward_request(), SSE streaming, build_router()
@@ -135,7 +135,7 @@ OpenClaw POST /v1/messages (or /v1/chat/completions)
 5. **`adapter/aegis-barrier/src/protected_files.rs`** — ProtectedFileManager: system defaults (SOUL.md, AGENTS.md, etc.), warden-added files, pattern matching, 50-path cap
 6. **`adapter/aegis-evidence/src/chain.rs`** — SHA-256 hash chain: `create_receipt()`, `advance_chain_state()`, `compute_receipt_hash()`
 7. **`adapter/aegis-evidence/src/store.rs`** — SQLite WAL storage: `append_receipt()`, `get_receipt_by_seq()`, `verify_full_chain()`
-8. **`adapter/aegis-slm/src/ollama.rs`** — Ollama HTTP client for SLM screening, heuristic regex fallback
+8. **`adapter/aegis-slm/src/engine/`** — SLM engines: ollama.rs, openai_compat.rs, anthropic.rs, heuristic.rs, prompt_guard.rs
 9. **`adapter/aegis-dashboard/src/routes.rs`** — 8 dashboard API endpoints + SSE alert stream
 10. **`adapter/aegis-dashboard/src/assets.rs`** — Embedded HTML/JS dashboard
 
@@ -149,8 +149,8 @@ OpenClaw POST /v1/messages (or /v1/chat/completions)
 | Default mode | observe-only (warn, don't block) |
 | Upstream default | `https://api.anthropic.com` |
 | Listen address | `127.0.0.1:3141` |
-| SLM engine | Ollama HTTP (`http://127.0.0.1:11434`) |
-| SLM model | `llama3.2:1b` |
+| SLM engine | Ollama HTTP (default), OpenAI-compatible, or Anthropic Messages API |
+| SLM model | `llama3.2:1b` (default), `qwen3:30b-a3b` (optimal), or `claude-haiku-4-5-20251001` (cloud) |
 | Protected files | SOUL.md, AGENTS.md, IDENTITY.md, TOOLS.md, BOOT.md, MEMORY.md, `*.memory.md`, `.env*`, config.toml |
 | Memory monitored | MEMORY.md, `memory/*.md`, HEARTBEAT.md, USER.md |
 | Providers | Anthropic + OpenAI (422 for unknown) |
@@ -191,9 +191,11 @@ allow_any_provider = false         # true to skip provider detection
 
 [slm]
 enabled = true
-ollama_url = "http://127.0.0.1:11434"
-model = "llama3.2:1b"
-fallback_to_heuristics = true      # regex fallback when Ollama unavailable
+engine = "ollama"                    # "ollama", "openai", or "anthropic"
+server_url = "http://127.0.0.1:11434"  # SLM server URL (accepts legacy "ollama_url")
+model = "llama3.2:1b"               # screening model
+fallback_to_heuristics = true        # regex fallback when engine unavailable
+metaprompt_hardening = true          # inject security rules into system messages
 
 [memory]
 memory_paths = []                  # additional paths to monitor
@@ -240,9 +242,10 @@ aegis trust context                # Show active channel + full registry
 aegis trust pubkey                 # Show signing pubkey for config
 
 aegis slm status                   # Show SLM configuration
-aegis slm use qwen/qwen3-30b-a3b  # Switch SLM model
-aegis slm engine openai            # Switch engine (ollama/openai)
-aegis slm server http://localhost:1234  # Set SLM server URL
+aegis slm use qwen3:30b-a3b       # Switch SLM model
+aegis slm engine ollama            # Switch engine (ollama/openai/anthropic)
+aegis slm server http://localhost:11434  # Set SLM server URL
+aegis slm recommend                # Detect hardware, recommend model tier
 
 aegis scan                         # Scan workspace for credentials
 aegis scan /path/to/dir            # Scan specific directory

@@ -15,7 +15,7 @@ Route your OpenClaw bot's LLM traffic through Aegis for inspection, evidence rec
                                  │
                     o4-mini ◄────┤ primary model (OpenAI direct)
                                  │
-                    subagent ────┤ lmstudio/qwen/qwen3-8b
+                    subagent ────┤ ollama/qwen3:30b-a3b (or lmstudio/qwen/qwen3-8b)
                                  │
               aegis-channel-trust plugin
               signs & registers channel ──► POST /aegis/register-channel
@@ -34,13 +34,13 @@ Route your OpenClaw bot's LLM traffic through Aegis for inspection, evidence rec
                                  │
                                  ▼
                           ┌──────────────┐
-                          │  LM Studio   │
-                          │  (Qwen 3)    │
-                          │  (:1234)     │
+                          ┌──────────────┐
+                          │  LLM Backend │
+                          │  Ollama(:11434) / LM Studio(:1234) / vLLM
                           └──────────────┘
 ```
 
-In Tier 1, Aegis proxies the **local LM Studio traffic** (Qwen subagent calls). The primary model (o4-mini on OpenAI) goes direct. To proxy both, run a second Aegis instance (see [Advanced: Dual Proxy](#advanced-dual-proxy)).
+Aegis proxies **local LLM traffic** (subagent calls via Ollama, LM Studio, or any OpenAI-compatible server). The primary model (o4-mini on OpenAI) goes direct. To proxy both, run a second Aegis instance (see [Advanced: Dual Proxy](#advanced-dual-proxy)).
 
 ---
 
@@ -48,10 +48,10 @@ In Tier 1, Aegis proxies the **local LM Studio traffic** (Qwen subagent calls). 
 
 | Component | Version | Purpose |
 |-----------|---------|---------|
-| Aegis | v0.2.0+ | Proxy, inspection, evidence chain |
+| Aegis | v0.2.30+ | Proxy, inspection, evidence chain |
 | OpenClaw | 2026.3.7+ | Bot framework |
-| LM Studio | 0.3+ | Local model serving |
-| Qwen 3 8B | - | Subagent model |
+| Ollama / LM Studio / vLLM | any | Local model serving (pick one) |
+| Qwen3 30B-A3B or 8B | - | Subagent + SLM screening model |
 
 ---
 
@@ -61,6 +61,32 @@ In Tier 1, Aegis proxies the **local LM Studio traffic** (Qwen subagent calls). 
 
 Create `~/.aegis/config/config.toml`:
 
+**For Ollama backend:**
+
+```toml
+mode = "observe_only"
+
+[proxy]
+listen_addr = "127.0.0.1:3141"
+upstream_url = "http://localhost:11434"
+max_body_size = 10485760
+rate_limit_per_minute = 1000
+allow_any_provider = true
+
+[slm]
+enabled = true
+engine = "ollama"
+server_url = "http://localhost:11434"
+model = "qwen3:30b-a3b"       # same model for screening + responses
+fallback_to_heuristics = true
+metaprompt_hardening = true
+
+[dashboard]
+path = "/dashboard"
+```
+
+**For LM Studio backend:**
+
 ```toml
 mode = "observe_only"
 
@@ -69,22 +95,24 @@ listen_addr = "127.0.0.1:3141"
 upstream_url = "http://localhost:1234"
 max_body_size = 10485760
 rate_limit_per_minute = 1000
-allow_any_provider = true     # Required: LM Studio uses OpenAI-compatible API
+allow_any_provider = true
 
 [slm]
-enabled = false               # Disable for local traffic (optional)
-
-[memory]
-memory_paths = []
-hash_interval_secs = 30
+enabled = true
+engine = "openai"
+server_url = "http://localhost:1234"
+model = "qwen/qwen3-30b-a3b"
+fallback_to_heuristics = true
+metaprompt_hardening = true
 
 [dashboard]
 path = "/dashboard"
 ```
 
 Key settings:
-- `upstream_url` points to LM Studio
-- `allow_any_provider = true` is required because LM Studio is not Anthropic or OpenAI
+- `upstream_url` points to your LLM backend (Ollama `:11434` or LM Studio `:1234`)
+- `allow_any_provider = true` is required for non-Anthropic/OpenAI providers
+- `engine` selects the SLM screening protocol (`"ollama"`, `"openai"`, or `"anthropic"`)
 
 ### 2. Configure OpenClaw
 

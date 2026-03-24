@@ -77,31 +77,75 @@ Every request your OpenClaw agent sends now generates a signed evidence receipt.
 
 ## Optional: Add SLM Injection Screening
 
-Everything above works without a language model. If you want stronger injection detection, install Ollama and pull a model (~1.3GB):
+Everything above works without a language model. If you want stronger injection detection, Aegis supports three SLM engines:
+
+### Option A: Ollama (local, default)
 
 ```bash
-# Install Ollama (if not already)
+# Install Ollama
 curl -fsSL https://ollama.com/install.sh | sh
 
-# Pull the screening model (~1.3GB)
-ollama pull llama3.2:1b
+# Pull a screening model
+ollama pull llama3.2:1b          # 1.3GB, basic detection
+# or for better accuracy:
+ollama pull qwen3:30b-a3b        # 18GB, optimal detection (MoE, 3B active)
 
-# Restart Aegis without --no-slm to enable SLM screening
+# Configure and restart
+aegis slm engine ollama
+aegis slm use llama3.2:1b        # or qwen3:30b-a3b
+aegis slm server http://localhost:11434
 aegis
 ```
 
-Without Ollama, use `aegis --no-slm`. You still get heuristic regex patterns for injection detection, plus all other protections (evidence, vault, barrier, memory). The SLM adds deeper semantic analysis but is not required.
+### Option B: OpenAI-compatible (LM Studio, vLLM, llama.cpp)
+
+```bash
+# Start your server (e.g., LM Studio on port 1234)
+aegis slm engine openai
+aegis slm use qwen/qwen3-30b-a3b
+aegis slm server http://localhost:1234
+aegis
+```
+
+### Option C: Anthropic API (cloud, no GPU needed)
+
+```bash
+export ANTHROPIC_API_KEY=sk-ant-...
+aegis slm engine anthropic
+aegis slm use claude-haiku-4-5-20251001
+aegis slm server https://api.anthropic.com
+aegis
+```
+
+### SLM Model Tiers
+
+| Tier | VRAM | Model | Detection | Latency |
+|------|------|-------|-----------|---------|
+| optimal | 12GB+ | qwen3:30b-a3b (MoE 3B active) | ~100% | 3-8s |
+| good | 6-12GB | qwen3:8b | ~70% | 4-10s |
+| basic | 3-6GB | llama3.2:1b | ~45% | 1-3s |
+| cpu-only | none | heuristic + classifier only | ~65% | <10ms |
+| api | cloud | claude-haiku-4-5-20251001 | ~95% | 0.5-2s |
+
+Without any SLM engine, use `aegis --no-slm`. You still get heuristic regex patterns + ProtectAI classifier for injection detection, plus all other protections (evidence, vault, barrier, memory). The SLM adds deeper semantic analysis but is not required.
 
 ## Common Commands
 
 ```bash
-aegis --no-slm               # start adapter (no Ollama needed)
-aegis                        # start with SLM screening (requires Ollama)
+aegis --no-slm               # start adapter (no SLM engine needed)
+aegis                        # start with SLM screening
 aegis --enforce              # start with blocking enabled
 aegis --pass-through         # dumb forwarder, zero inspection
+aegis --slm-model qwen3:30b-a3b  # override SLM model from CLI
 
 aegis setup openclaw         # configure OpenClaw integration
 aegis setup openclaw --revert  # undo configuration
+
+aegis slm status             # show SLM configuration
+aegis slm engine ollama      # switch engine (ollama/openai/anthropic)
+aegis slm use qwen3:30b-a3b  # switch screening model
+aegis slm server <url>       # set SLM server URL
+aegis slm recommend          # detect hardware, recommend model tier
 
 aegis scan                   # scan workspace for credentials
 aegis scan /path/to/dir      # scan specific directory
@@ -127,11 +171,34 @@ mode = "observe_only"    # or "enforce" to enable blocking
 
 [proxy]
 listen_addr = "127.0.0.1:3141"
-upstream_url = "https://api.anthropic.com"  # change for OpenAI or other providers
+upstream_url = "https://api.anthropic.com"  # change for OpenAI, Ollama, or other providers
 
 [slm]
 enabled = true
-model = "llama3.2:1b"      # or "llama3.2:3b" for better accuracy
+engine = "ollama"              # "ollama", "openai", or "anthropic"
+server_url = "http://localhost:11434"  # SLM engine server URL
+model = "llama3.2:1b"         # screening model name
+fallback_to_heuristics = true  # regex fallback if engine unavailable
+metaprompt_hardening = true    # inject security rules into system messages
+```
+
+**Engine examples:**
+
+```toml
+# Ollama (default)
+engine = "ollama"
+server_url = "http://localhost:11434"
+model = "qwen3:30b-a3b"
+
+# LM Studio / vLLM / llama.cpp (OpenAI-compatible)
+engine = "openai"
+server_url = "http://localhost:1234"
+model = "qwen/qwen3-30b-a3b"
+
+# Anthropic API (cloud, requires ANTHROPIC_API_KEY env var)
+engine = "anthropic"
+server_url = "https://api.anthropic.com"
+model = "claude-haiku-4-5-20251001"
 ```
 
 For OpenAI bots, change `upstream_url` to `https://api.openai.com` and set `allow_any_provider = true` in the `[proxy]` section.
@@ -166,7 +233,7 @@ Your OpenClaw Agent
   ┌─────────────┐
   │  Aegis Proxy │──→ Evidence Receipt (signed, hash-chained)
   │  :3141       │──→ Write Barrier (filesystem watcher)
-  │              │──→ SLM Screening (Ollama / heuristic)
+  │              │──→ SLM Screening (Ollama / OpenAI-compat / Anthropic / heuristic)
   │              │──→ Vault Scanner (credential detection)
   │              │──→ Memory Monitor (MEMORY.md, USER.md)
   └──────┬───────┘
@@ -229,6 +296,12 @@ Check `~/.openclaw/openclaw.json` has `"baseUrl": "http://127.0.0.1:3141"`. Run 
 Send a request through your bot first. The dashboard displays evidence receipts — it needs at least one request to have something to show.
 
 **SLM says "Ollama unavailable"**
-Install Ollama (`curl -fsSL https://ollama.com/install.sh | sh`), pull the model (`ollama pull llama3.2:1b`), make sure Ollama is running (`ollama serve`), then restart Aegis.
+Install Ollama (`curl -fsSL https://ollama.com/install.sh | sh`), pull the model (`ollama pull llama3.2:1b`), make sure Ollama is running (`ollama serve`), then restart Aegis. Or switch to a different engine: `aegis slm engine anthropic`.
+
+**SLM says "ANTHROPIC_API_KEY not set"**
+Set the environment variable: `export ANTHROPIC_API_KEY=sk-ant-...` and restart Aegis.
+
+**SLM parse failures with thinking models (e.g., Qwen3)**
+Aegis v0.2.30+ handles Qwen3 thinking models natively. If using an older version, upgrade: `cargo install --path adapter/aegis-cli`.
 
 Full documentation: `docs/tier1/` | Issues: [GitHub](https://github.com/LCatGA12/neural-commons/issues)
