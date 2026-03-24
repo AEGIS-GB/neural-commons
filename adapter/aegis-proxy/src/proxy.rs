@@ -651,12 +651,23 @@ async fn forward_request(
         let (chunk_tx, chunk_rx) = tokio::sync::mpsc::channel::<Result<bytes::Bytes, std::io::Error>>(32);
         let (evidence_tx, evidence_rx) = tokio::sync::oneshot::channel::<(String, usize)>();
 
-        // Background task: read upstream chunks → hash → forward to client
+        // Background task: read upstream chunks → hash → vault scan → forward to client
         let stream_traffic_recorder = state.traffic_recorder.clone();
         let stream_method = method.to_string();
         let stream_path = path.clone();
         let stream_req_body = body_bytes.to_vec();
         let stream_slm_verdict = slm_verdict.clone();
+        let stream_vault = if state.config.mode != ProxyMode::PassThrough {
+            state.hooks.vault.clone()
+        } else {
+            None
+        };
+        let stream_evidence = if state.config.mode != ProxyMode::PassThrough {
+            state.hooks.evidence.clone()
+        } else {
+            None
+        };
+        let stream_path_for_vault = path.clone();
         tokio::spawn(async move {
             use tokio_stream::StreamExt;
             let mut hasher = Sha256::new();
@@ -664,18 +675,74 @@ async fn forward_request(
             let mut stream = std::pin::pin!(byte_stream);
             let mut accumulated = Vec::new();
             let capture_limit = 256 * 1024usize; // 256KB capture limit for traffic
+            // Accumulate streamed text for vault scanning.
+            // We collect text_delta content across chunks and scan periodically.
+            let mut text_buffer = String::new();
+            let mut vault_detected = false;
 
             while let Some(chunk_result) = stream.next().await {
                 match chunk_result {
                     Ok(chunk) => {
-                        hasher.update(&chunk);
                         total += chunk.len();
+
+                        // Extract text content from SSE data lines for vault scanning.
+                        // Each SSE line is `data: {json}\n` — we look for text_delta events.
+                        if let (Some(vault), Ok(chunk_str)) = (&stream_vault, std::str::from_utf8(&chunk)) {
+                            for line in chunk_str.lines() {
+                                if let Some(json_str) = line.strip_prefix("data: ") {
+                                    // Extract text from content_block_delta events
+                                    if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(json_str) {
+                                        if let Some(text) = parsed
+                                            .pointer("/delta/text")
+                                            .and_then(|t| t.as_str())
+                                        {
+                                            text_buffer.push_str(text);
+                                        }
+                                    }
+                                }
+                            }
+
+                            // Scan accumulated text for credentials every 512 chars
+                            // (balances detection accuracy vs overhead)
+                            if !vault_detected && text_buffer.len() >= 512 {
+                                let decision = vault.scan(&text_buffer).await;
+                                if let middleware::VaultDecision::Detected(ref secrets) = decision {
+                                    vault_detected = true;
+                                    warn!(count = secrets.len(), "vault detected credentials in streaming response");
+                                    if let Some(ref evidence) = stream_evidence {
+                                        if let Err(e) = evidence.on_vault_detection(&stream_path_for_vault, "response", secrets).await {
+                                            warn!("evidence hook error on streaming vault detection: {e}");
+                                        }
+                                    }
+                                }
+                            }
+
+                            // If vault detected credentials, redact text in SSE chunks
+                            if vault_detected {
+                                if let Ok(chunk_str) = std::str::from_utf8(&chunk) {
+                                    if let Some(redacted) = vault.redact(chunk_str).await {
+                                        let redacted_bytes = bytes::Bytes::from(redacted.into_bytes());
+                                        hasher.update(&redacted_bytes);
+                                        if accumulated.len() < capture_limit {
+                                            let remaining = capture_limit - accumulated.len();
+                                            accumulated.extend_from_slice(&redacted_bytes[..redacted_bytes.len().min(remaining)]);
+                                        }
+                                        if chunk_tx.send(Ok(redacted_bytes)).await.is_err() {
+                                            break;
+                                        }
+                                        continue;
+                                    }
+                                }
+                            }
+                        }
+
+                        // Default path: forward chunk as-is
+                        hasher.update(&chunk);
                         if accumulated.len() < capture_limit {
                             let remaining = capture_limit - accumulated.len();
                             accumulated.extend_from_slice(&chunk[..chunk.len().min(remaining)]);
                         }
-                        let result: Result<bytes::Bytes, std::io::Error> = Ok(chunk);
-                        if chunk_tx.send(result).await.is_err() {
+                        if chunk_tx.send(Ok(chunk)).await.is_err() {
                             break; // Client disconnected
                         }
                     }
@@ -685,6 +752,21 @@ async fn forward_request(
                             e.to_string(),
                         ))).await;
                         break;
+                    }
+                }
+            }
+
+            // Final vault scan on remaining buffered text
+            if !vault_detected && !text_buffer.is_empty() {
+                if let Some(ref vault) = stream_vault {
+                    let decision = vault.scan(&text_buffer).await;
+                    if let middleware::VaultDecision::Detected(ref secrets) = decision {
+                        warn!(count = secrets.len(), "vault detected credentials in streaming response (final scan)");
+                        if let Some(ref evidence) = stream_evidence {
+                            if let Err(e) = evidence.on_vault_detection(&stream_path_for_vault, "response", secrets).await {
+                                warn!("evidence hook error on streaming vault final detection: {e}");
+                            }
+                        }
                     }
                 }
             }
