@@ -342,7 +342,8 @@ async fn forward_request(
 
     // SLM verdict — populated by the SLM hook below, used by traffic recorder
     let mut slm_verdict: Option<middleware::SlmVerdict> = None;
-    let mut slm_deep_handle: Option<tokio::task::JoinHandle<(middleware::SlmDecision, Option<middleware::SlmVerdict>)>> = None;
+    // Deferred SLM content — for trusted channels, deep SLM runs after response
+    let mut slm_deferred_content: Option<String> = None;
 
     // Run pre-request middleware (skip in pass-through mode)
     if state.config.mode != ProxyMode::PassThrough {
@@ -433,13 +434,50 @@ async fn forward_request(
                         middleware::SlmDecision::Admit => {}
                     }
                 } else {
-                    // Phase 2: Fast layers clean — spawn deep SLM in parallel with LLM
-                    let slm_clone: Arc<dyn middleware::SlmHook> = Arc::clone(slm);
-                    let content_for_deep = screen_content.clone();
-                    slm_deep_handle = Some(tokio::spawn(async move {
-                        slm_clone.screen_deep(&content_for_deep).await
-                    }));
-                    debug!(path = %path, "SLM deep analysis started in parallel with LLM");
+                    // Phase 2: Fast layers clean — deep SLM timing depends on trust level.
+                    //
+                    // Trusted/Full: run deep SLM AFTER response (fire-and-forget).
+                    //   Reason: trusted channels only log, never block. Running after
+                    //   response avoids GPU contention with the LLM call.
+                    //
+                    // Public/Unknown/Restricted: run deep SLM BEFORE forwarding (sequential).
+                    //   Reason: we may need to block in enforce mode. Sequential avoids
+                    //   GPU contention and gives us the verdict before sending anything.
+                    let is_trusted = matches!(
+                        req_info.channel_trust.trust_level,
+                        aegis_schemas::TrustLevel::Full | aegis_schemas::TrustLevel::Trusted
+                    );
+
+                    if is_trusted {
+                        // Trusted: defer deep SLM to after response
+                        slm_deferred_content = Some(screen_content.clone());
+                        debug!(path = %path, "SLM deep analysis deferred (trusted channel — will run after response)");
+                    } else {
+                        // Untrusted: run deep SLM sequentially BEFORE forwarding
+                        info!(path = %path, "SLM deep analysis running sequentially (untrusted channel)");
+                        let (decision, verdict) = slm.screen_deep(&screen_content).await;
+                        slm_verdict = verdict;
+                        stamp_trust(&mut slm_verdict);
+                        match decision {
+                            middleware::SlmDecision::Reject(reason) if state.config.mode == ProxyMode::Enforce => {
+                                warn!(path = %path, reason = %reason, "SLM deep-layer rejected request (sequential)");
+                                return Ok((StatusCode::FORBIDDEN, format!("rejected: {reason}")).into_response());
+                            }
+                            middleware::SlmDecision::Quarantine(reason) if state.config.mode == ProxyMode::Enforce => {
+                                warn!(path = %path, reason = %reason, "SLM deep-layer quarantined — blocking (sequential)");
+                                return Ok((StatusCode::FORBIDDEN, format!("blocked: {reason}")).into_response());
+                            }
+                            middleware::SlmDecision::Quarantine(reason) => {
+                                info!(path = %path, reason = %reason, "SLM deep-layer quarantine (sequential, observe-only)");
+                            }
+                            middleware::SlmDecision::Reject(reason) => {
+                                info!(path = %path, reason = %reason, "SLM deep-layer would reject (sequential, observe-only)");
+                            }
+                            middleware::SlmDecision::Admit => {
+                                debug!(path = %path, "SLM deep-layer admitted (sequential)");
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -520,40 +558,8 @@ async fn forward_request(
     let resp_status = upstream_resp.status().as_u16();
     let resp_headers = upstream_resp.headers().clone();
 
-    // --- Await deep SLM verdict (P1: ran in parallel with LLM) ---
-    if let Some(handle) = slm_deep_handle {
-        match handle.await {
-            Ok((decision, verdict)) => {
-                slm_verdict = verdict;
-                // Stamp channel trust onto deep SLM verdict
-                if let Some(v) = slm_verdict.as_mut() {
-                    v.channel = req_info.channel_trust.channel.clone();
-                    v.channel_user = req_info.channel_trust.user.clone();
-                    v.channel_trust_level = Some(format!("{:?}", req_info.channel_trust.trust_level).to_lowercase());
-                }
-                match decision {
-                    middleware::SlmDecision::Reject(reason) if state.config.mode == ProxyMode::Enforce => {
-                        warn!(path = %path, reason = %reason, "SLM deep-layer rejected (blocking response)");
-                        return Ok((StatusCode::FORBIDDEN, format!("rejected: {reason}")).into_response());
-                    }
-                    middleware::SlmDecision::Quarantine(reason) if state.config.mode == ProxyMode::Enforce => {
-                        warn!(path = %path, reason = %reason, "SLM deep-layer quarantined — blocking in enforce mode");
-                        return Ok((StatusCode::FORBIDDEN, format!("blocked: {reason}")).into_response());
-                    }
-                    middleware::SlmDecision::Quarantine(reason) => {
-                        info!(path = %path, reason = %reason, "SLM deep-layer quarantine");
-                    }
-                    middleware::SlmDecision::Reject(reason) => {
-                        info!(path = %path, reason = %reason, "SLM deep-layer would reject (observe-only)");
-                    }
-                    middleware::SlmDecision::Admit => {}
-                }
-            }
-            Err(e) => {
-                warn!("SLM deep screening task failed: {e}");
-            }
-        }
-    }
+    // Deep SLM for untrusted channels already ran sequentially above (before forwarding).
+    // Deep SLM for trusted channels will run after the response is sent (below).
 
     // --- SSE streaming passthrough (BUG 1 fix) ---
     // Detect SSE via Content-Type or chunked Transfer-Encoding.
@@ -658,6 +664,23 @@ async fn forward_request(
             });
         }
 
+        // Fire-and-forget deep SLM for trusted channels (after response stream starts)
+        if let Some(content) = slm_deferred_content {
+            if let Some(ref slm) = state.hooks.slm {
+                let slm_clone: Arc<dyn middleware::SlmHook> = Arc::clone(slm);
+                let trust_channel = req_info.channel_trust.channel.clone();
+                let trust_level = req_info.channel_trust.trust_level;
+                tokio::spawn(async move {
+                    let (_decision, _verdict) = slm_clone.screen_deep(&content).await;
+                    info!(
+                        channel = ?trust_channel,
+                        trust = ?trust_level,
+                        "SLM deep analysis completed after response (trusted channel)"
+                    );
+                });
+            }
+        }
+
         return response.body(body)
             .map_err(|e| ProxyError::Internal(format!("streaming response build error: {e}")));
     }
@@ -715,6 +738,24 @@ async fn forward_request(
     // Record traffic for dashboard inspector (with redacted body)
     if let Some(ref recorder) = state.traffic_recorder {
         recorder(&method.to_string(), &path, resp_status, &body_bytes, &final_body, duration_ms, false, slm_verdict.as_ref());
+    }
+
+    // Fire-and-forget deep SLM for trusted channels (after response ready)
+    if let Some(content) = slm_deferred_content {
+        if let Some(ref slm) = state.hooks.slm {
+            let slm_clone: Arc<dyn middleware::SlmHook> = Arc::clone(slm);
+            let trust_channel = req_info.channel_trust.channel.clone();
+            let trust_user = req_info.channel_trust.user.clone();
+            let trust_level = req_info.channel_trust.trust_level;
+            tokio::spawn(async move {
+                let (_decision, _verdict) = slm_clone.screen_deep(&content).await;
+                info!(
+                    channel = ?trust_channel,
+                    trust = ?trust_level,
+                    "SLM deep analysis completed after response (trusted channel)"
+                );
+            });
+        }
     }
 
     // Build response
