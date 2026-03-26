@@ -760,6 +760,9 @@ async fn api_traffic(
             "slm_duration_ms": e.slm_duration_ms,
             "slm_verdict": e.slm_verdict,
             "slm_threat_score": e.slm_threat_score,
+            "channel": e.channel,
+            "trust_level": e.trust_level,
+            "model": e.model,
         })
     }).collect();
 
