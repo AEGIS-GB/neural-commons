@@ -9,6 +9,7 @@ license.workspace = true
 aegis-crypto = { path = "../../aegis-crypto" }
 aegis-schemas = { path = "../../aegis-schemas" }
 aegis-evidence = { path = "../aegis-evidence" }
+ed25519-dalek.workspace = true
 notify.workspace = true
 serde.workspace = true
 serde_json.workspace = true

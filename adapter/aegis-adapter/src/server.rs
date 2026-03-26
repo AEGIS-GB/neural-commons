@@ -116,7 +116,10 @@ pub async fn start(
 
     // 3. Generate or load signing key
     let signing_key = load_or_generate_key(&data_dir)?;
-    let bot_id = ed25519::pubkey_hex(&signing_key.verifying_key());
+    let verifying_key = signing_key.verifying_key();
+    let bot_id = ed25519::pubkey_hex(&verifying_key);
+    // Clone signing key for manifest use (before evidence recorder consumes it)
+    let manifest_signing_key = SigningKey::from_bytes(&signing_key.to_bytes());
     info!(bot_id = %bot_id, "identity loaded");
 
     // 4. Initialize evidence recorder
@@ -278,6 +281,67 @@ pub async fn start(
         let watcher_workspace = std::env::current_dir().unwrap_or_default();
         let barrier_mode = mode;
 
+        // Between-session manifest check: compare disk against last known-good state.
+        // Detects tampering that happened while Aegis was offline.
+        if let Some(prev_manifest) = aegis_barrier::manifest::FileManifest::load_from(&data_dir) {
+            if prev_manifest.verify_signature(&verifying_key) {
+                let discrepancies = prev_manifest.compare_against_disk(&watcher_workspace);
+                let tamperings: Vec<_> = discrepancies.iter()
+                    .filter(|r| !matches!(r, aegis_barrier::manifest::ManifestCheckResult::Match))
+                    .collect();
+                if tamperings.is_empty() {
+                    info!("manifest: all files match previous session — no between-session tampering");
+                } else {
+                    for result in &tamperings {
+                        let (msg, action) = match result {
+                            aegis_barrier::manifest::ManifestCheckResult::HashChanged { path, expected, actual } => {
+                                (
+                                    format!("BETWEEN-SESSION TAMPERING: {} (expected={} actual={})",
+                                        path.display(), &expected[..16.min(expected.len())], &actual[..16.min(actual.len())]),
+                                    format!("between_session_tamper {}", path.display()),
+                                )
+                            }
+                            aegis_barrier::manifest::ManifestCheckResult::Missing { path } => {
+                                (
+                                    format!("BETWEEN-SESSION DELETION: {}", path.display()),
+                                    format!("between_session_delete {}", path.display()),
+                                )
+                            }
+                            _ => continue,
+                        };
+                        warn!("manifest: {msg}");
+                        if let Err(e) = barrier_recorder.record_simple(
+                            aegis_schemas::ReceiptType::WriteBarrier,
+                            &action,
+                            "between_session_tampering_detected",
+                        ) {
+                            warn!("failed to record between-session tampering: {e}");
+                        }
+                        let alert = aegis_dashboard::DashboardAlert {
+                            ts_ms: std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .unwrap_or_default()
+                                .as_millis() as u64,
+                            kind: "between_session_tamper".to_string(),
+                            message: msg,
+                            receipt_seq: barrier_recorder.chain_head().head_seq,
+                        };
+                        let _ = alert_tx.send(alert);
+                    }
+                    warn!(count = tamperings.len(), "manifest: between-session tampering detected!");
+                }
+            } else {
+                warn!("manifest: previous session manifest has INVALID SIGNATURE — possible manifest tampering");
+                if let Err(e) = barrier_recorder.record_simple(
+                    aegis_schemas::ReceiptType::WriteBarrier,
+                    "manifest_signature_invalid",
+                    "previous manifest signature verification failed",
+                ) {
+                    warn!("failed to record manifest signature failure: {e}");
+                }
+            }
+        }
+
         // Snapshot critical files at startup for enforce-mode restore.
         // No git dependency — restores from in-memory copy.
         let critical_paths: Vec<std::path::PathBuf> = barrier_protected.lock()
@@ -293,6 +357,104 @@ pub async fn start(
         let snapshot_store = Arc::new(
             aegis_barrier::snapshot::SnapshotStore::load(&watcher_workspace, &critical_paths)
         );
+
+        // Write signed manifest for between-session persistence.
+        // On next startup, this manifest is compared against disk to detect offline tampering.
+        let manifest = aegis_barrier::manifest::FileManifest::from_snapshot(
+            &snapshot_store, &manifest_signing_key,
+        );
+        if let Err(e) = manifest.write_to(&data_dir) {
+            warn!("failed to write file manifest: {e}");
+        }
+        let barrier_manifest = Arc::new(std::sync::Mutex::new(manifest));
+        let barrier_signing_key = Arc::new(manifest_signing_key);
+        let barrier_data_dir = data_dir.clone();
+
+        // Layer 2: Periodic hash verification (60s safety net).
+        // If inotify drops events (overflow, race), this catches tampering.
+        let layer2_snapshot = snapshot_store.clone();
+        let layer2_workspace = watcher_workspace.clone();
+        let layer2_recorder = barrier_recorder.clone();
+        let layer2_alert_tx = barrier_alert_tx.clone();
+        let layer2_mode = barrier_mode;
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
+            interval.tick().await; // skip immediate first tick
+
+            loop {
+                interval.tick().await;
+                let mismatches = layer2_snapshot.verify_all(&layer2_workspace);
+                for (rel_path, mismatch) in &mismatches {
+                    let mismatch_desc = match mismatch {
+                        aegis_barrier::snapshot::SnapshotMismatch::HashChanged { expected, actual } => {
+                            format!("hash_changed expected={} actual={}", &expected[..16.min(expected.len())], &actual[..16.min(actual.len())])
+                        }
+                        aegis_barrier::snapshot::SnapshotMismatch::Missing => "file_missing".to_string(),
+                    };
+
+                    // In enforce mode, restore from snapshot
+                    let reverted = if layer2_mode == Mode::Enforce {
+                        match layer2_snapshot.restore(&layer2_workspace, rel_path) {
+                            Ok(true) => {
+                                tracing::warn!(
+                                    path = %rel_path.display(),
+                                    layer = 2,
+                                    "barrier: RESTORED critical file from snapshot (periodic check)"
+                                );
+                                true
+                            }
+                            Ok(false) => false,
+                            Err(e) => {
+                                tracing::error!(path = %rel_path.display(), error = %e, "barrier: Layer 2 restore failed");
+                                false
+                            }
+                        }
+                    } else {
+                        false
+                    };
+
+                    let action = format!("periodic_hash_check {}", rel_path.display());
+                    let outcome = if reverted {
+                        format!("{mismatch_desc} reverted=true")
+                    } else {
+                        format!("{mismatch_desc} reverted=false")
+                    };
+
+                    if let Err(e) = layer2_recorder.record_simple(
+                        aegis_schemas::ReceiptType::WriteBarrier,
+                        &action,
+                        &outcome,
+                    ) {
+                        tracing::warn!("failed to record Layer 2 barrier event: {e}");
+                    }
+
+                    let msg = if reverted {
+                        format!("Layer 2: Critical file tampered and REVERTED: {} ({})", rel_path.display(), mismatch_desc)
+                    } else {
+                        format!("Layer 2: Critical file tampered: {} ({})", rel_path.display(), mismatch_desc)
+                    };
+                    let alert = aegis_dashboard::DashboardAlert {
+                        ts_ms: std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .as_millis() as u64,
+                        kind: "periodic_hash_check".to_string(),
+                        message: msg,
+                        receipt_seq: layer2_recorder.chain_head().head_seq,
+                    };
+                    let _ = layer2_alert_tx.send(alert);
+                }
+                if !mismatches.is_empty() {
+                    tracing::warn!(count = mismatches.len(), "Layer 2 periodic check found mismatches");
+                }
+            }
+        });
+        info!("barrier Layer 2 periodic hash check started (60s interval)");
+
+        // Clone refs for the Layer 1 watcher (needs manifest + signing key for trust-tier updates)
+        let watcher_manifest = barrier_manifest.clone();
+        let watcher_signing_key = barrier_signing_key.clone();
+        let watcher_data_dir = barrier_data_dir.clone();
 
         tokio::spawn(async move {
             use notify::{Watcher, RecursiveMode, Config};
@@ -348,20 +510,43 @@ pub async fn start(
                     if is_protected {
                         let action = format!("filesystem_change {} {:?}", relative.display(), we.kind);
 
-                        // In enforce mode, restore critical files from startup snapshot
-                        let reverted = if barrier_mode == Mode::Enforce && is_critical {
+                        // Trust-tier-aware decision: check active channel trust level.
+                        // Trusted/Full → allow change, update manifest (warden or authorized agent)
+                        // Public/Unknown/Restricted → potential prompt injection, block/alert
+                        // No channel → no active session, treat as suspicious
+                        let channel_trust = aegis_proxy::cognitive_bridge::get_registered_channel_trust();
+                        let is_trusted_channel = channel_trust
+                            .as_ref()
+                            .map(|ct| matches!(
+                                ct.trust_level,
+                                aegis_schemas::TrustLevel::Full | aegis_schemas::TrustLevel::Trusted
+                            ))
+                            .unwrap_or(false);
+
+                        let trust_label = channel_trust
+                            .as_ref()
+                            .map(|ct| format!("{:?}", ct.trust_level))
+                            .unwrap_or_else(|| "no_channel".to_string());
+
+                        // Decision: revert only if untrusted channel AND enforce mode AND critical
+                        let should_revert = barrier_mode == Mode::Enforce
+                            && is_critical
+                            && !is_trusted_channel;
+
+                        let reverted = if should_revert {
                             match snapshot_store.restore(&watcher_workspace, relative) {
                                 Ok(true) => {
                                     tracing::warn!(
                                         path = %relative.display(),
-                                        "barrier: RESTORED critical file from startup snapshot (enforce mode)"
+                                        trust = %trust_label,
+                                        "barrier: RESTORED critical file (untrusted channel, enforce mode)"
                                     );
                                     true
                                 }
                                 Ok(false) => {
                                     tracing::warn!(
                                         path = %relative.display(),
-                                        "barrier: no snapshot available for restore (file did not exist at startup)"
+                                        "barrier: no snapshot available for restore"
                                     );
                                     false
                                 }
@@ -378,27 +563,52 @@ pub async fn start(
                             false
                         };
 
+                        // If trusted channel and not reverted, update the manifest
+                        // to accept the new file state as legitimate.
+                        if is_trusted_channel && !reverted {
+                            if let Ok(content) = std::fs::read(watcher_workspace.join(relative)) {
+                                let new_hash = hex::encode(aegis_crypto::hash(&content));
+                                if let Ok(mut m) = watcher_manifest.lock() {
+                                    m.update_file(
+                                        &relative.to_string_lossy(),
+                                        &new_hash,
+                                        &watcher_signing_key,
+                                    );
+                                    if let Err(e) = m.write_to(&watcher_data_dir) {
+                                        tracing::warn!("failed to update manifest: {e}");
+                                    }
+                                }
+                                tracing::info!(
+                                    path = %relative.display(),
+                                    trust = %trust_label,
+                                    "barrier: accepted change from trusted channel, manifest updated"
+                                );
+                            }
+                        }
+
                         let outcome = if reverted {
-                            "critical_protected_file_reverted"
+                            format!("critical_file_reverted trust={trust_label}")
+                        } else if is_trusted_channel {
+                            format!("trusted_change_accepted trust={trust_label}")
                         } else if is_critical {
-                            "critical_protected_file_modified"
+                            format!("critical_file_modified trust={trust_label}")
                         } else {
-                            "protected_file_modified"
+                            format!("protected_file_modified trust={trust_label}")
                         };
 
                         if let Err(e) = barrier_recorder.record_simple(
                             aegis_schemas::ReceiptType::WriteBarrier,
                             &action,
-                            outcome,
+                            &outcome,
                         ) {
                             tracing::warn!("failed to record barrier event: {e}");
                         }
 
-                        if is_critical {
+                        if is_critical && !is_trusted_channel {
                             let msg = if reverted {
-                                format!("Critical file modified and REVERTED: {}", relative.display())
+                                format!("Critical file modified and REVERTED: {} (channel: {})", relative.display(), trust_label)
                             } else {
-                                format!("Critical file modified: {}", relative.display())
+                                format!("Critical file modified: {} (channel: {})", relative.display(), trust_label)
                             };
                             let alert = aegis_dashboard::DashboardAlert {
                                 ts_ms: we.timestamp_ms,
@@ -413,6 +623,7 @@ pub async fn start(
                             path = %relative.display(),
                             critical = is_critical,
                             reverted = reverted,
+                            trust = %trust_label,
                             kind = ?we.kind,
                             "barrier: protected file change detected"
                         );
