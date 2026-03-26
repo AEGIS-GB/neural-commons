@@ -173,6 +173,16 @@ impl SnapshotStore {
         mismatches
     }
 
+    /// Return all entries as (rel_path, hash) pairs.
+    ///
+    /// Used by the manifest to serialize the current snapshot state.
+    pub fn all_entries(&self) -> Vec<(&PathBuf, &str)> {
+        self.snapshots
+            .iter()
+            .map(|(path, snap)| (path, snap.hash.as_str()))
+            .collect()
+    }
+
     /// Number of snapshotted files.
     pub fn len(&self) -> usize {
         self.snapshots.len()
