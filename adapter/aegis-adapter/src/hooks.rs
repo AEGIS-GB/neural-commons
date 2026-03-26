@@ -553,9 +553,9 @@ impl SlmHook for SlmHookImpl {
                     (SlmDecision::Admit, None)
                 }
                 Err(_) => {
-                    tracing::warn!("SLM deep analysis timed out (15s) — admitting without screening");
-                    (SlmDecision::Admit, Some(SlmVerdict {
-                        action: "admit".to_string(),
+                    tracing::warn!("SLM deep analysis timed out (15s) — quarantining unscreened request");
+                    (SlmDecision::Quarantine("slm_timeout: SLM did not respond within 15s — content unscreened".to_string()), Some(SlmVerdict {
+                        action: "quarantine".to_string(),
                         screening_ms: 15_000,
                         reason: Some("slm_timeout_15s".to_string()),
                         ..Default::default()
