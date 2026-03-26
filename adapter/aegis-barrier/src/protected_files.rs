@@ -71,6 +71,9 @@ impl ProtectedFileManager {
     ///   BOOT.md         — WorkspaceRoot, critical, Standard
     ///   MEMORY.md       — WorkspaceRoot, critical, Standard
     ///   *.memory.md     — DepthLimited(3), critical, Standard
+    ///   memory/*.md     — DepthLimited(2), NOT critical, Standard
+    ///   HEARTBEAT.md    — WorkspaceRoot, NOT critical, Standard
+    ///   USER.md         — WorkspaceRoot, NOT critical, Standard
     ///   .env*           — DepthLimited(2), critical, Credential
     ///   config.toml     — WorkspaceRoot, not critical, Standard
     pub fn new() -> Self {
@@ -122,6 +125,31 @@ impl ProtectedFileManager {
                 scope: FileScope::DepthLimited,
                 max_depth: Some(3),
                 critical: true,
+                sensitivity: SensitivityClass::Standard,
+            },
+            // Memory directory files — agents write here frequently.
+            // Protected (trust-tier gated) but NOT critical (no auto-revert).
+            // Without this, prompt injection via untrusted channel could
+            // poison memory files undetected by the barrier.
+            ProtectedFileEntry {
+                pattern: "memory/*.md".into(),
+                scope: FileScope::DepthLimited,
+                max_depth: Some(2),
+                critical: false,
+                sensitivity: SensitivityClass::Standard,
+            },
+            ProtectedFileEntry {
+                pattern: "HEARTBEAT.md".into(),
+                scope: FileScope::WorkspaceRoot,
+                max_depth: None,
+                critical: false,
+                sensitivity: SensitivityClass::Standard,
+            },
+            ProtectedFileEntry {
+                pattern: "USER.md".into(),
+                scope: FileScope::WorkspaceRoot,
+                max_depth: None,
+                critical: false,
                 sensitivity: SensitivityClass::Standard,
             },
             ProtectedFileEntry {
@@ -327,6 +355,11 @@ impl ProtectedFileManager {
             }
         }
 
+        // Directory-prefixed pattern (e.g. "memory/*.md")
+        if pattern.contains('/') {
+            return Self::matches_dir_pattern(pattern, path);
+        }
+
         // Pattern matching against the file name.
         Self::name_matches_pattern(pattern, file_name)
     }
@@ -344,6 +377,42 @@ impl ProtectedFileManager {
         } else {
             // Exact match.
             file_name == pattern
+        }
+    }
+
+    /// Check whether `path` matches a directory-prefixed pattern like `memory/*.md`.
+    ///
+    /// The pattern `dir/*.ext` matches any file with the given extension
+    /// inside a directory named `dir` at any depth within the scope limit.
+    fn matches_dir_pattern(pattern: &str, path: &Path) -> bool {
+        let parts: Vec<&str> = pattern.splitn(2, '/').collect();
+        if parts.len() != 2 {
+            return false;
+        }
+        let dir_name = parts[0];
+        let file_pattern = parts[1];
+
+        // Check that the path has a parent component matching dir_name
+        let parent = match path.parent().and_then(|p| p.file_name()).and_then(|n| n.to_str()) {
+            Some(p) => p,
+            None => return false,
+        };
+
+        if parent != dir_name {
+            return false;
+        }
+
+        let file_name = match path.file_name().and_then(|n| n.to_str()) {
+            Some(n) => n,
+            None => return false,
+        };
+
+        // Match the file part
+        if file_pattern.starts_with('*') {
+            let suffix = &file_pattern[1..];
+            file_name.ends_with(suffix)
+        } else {
+            file_name == file_pattern
         }
     }
 
@@ -384,7 +453,7 @@ mod tests {
     #[test]
     fn default_system_files_count() {
         let mgr = ProtectedFileManager::new();
-        assert_eq!(mgr.system_files.len(), 9);
+        assert_eq!(mgr.system_files.len(), 12);
         assert!(mgr.warden_files.is_empty());
         assert_eq!(mgr.current_version, 1);
     }
@@ -774,7 +843,7 @@ mod tests {
     #[test]
     fn default_trait_works() {
         let mgr = ProtectedFileManager::default();
-        assert_eq!(mgr.system_files.len(), 9);
+        assert_eq!(mgr.system_files.len(), 12);
     }
 
     // ─── Edge cases ──────────────────────────────────────────────
@@ -808,5 +877,76 @@ mod tests {
         )
         .unwrap();
         assert!(mgr.is_critical(Path::new("important.lock")));
+    }
+
+    // ─── Memory file protection (blind spot fix) ────────────────
+
+    #[test]
+    fn memory_dir_files_are_protected() {
+        let mgr = ProtectedFileManager::new();
+        assert!(mgr.is_protected(Path::new("memory/community-intel.md")));
+        assert!(mgr.is_protected(Path::new("memory/notes.md")));
+        assert!(mgr.is_protected(Path::new("memory/anything.md")));
+    }
+
+    #[test]
+    fn memory_dir_files_are_not_critical() {
+        let mgr = ProtectedFileManager::new();
+        // Memory dir files change frequently — protected but not auto-reverted
+        assert!(!mgr.is_critical(Path::new("memory/community-intel.md")));
+    }
+
+    #[test]
+    fn memory_dir_non_md_not_protected() {
+        let mgr = ProtectedFileManager::new();
+        assert!(!mgr.is_protected(Path::new("memory/data.json")));
+        assert!(!mgr.is_protected(Path::new("memory/image.png")));
+    }
+
+    #[test]
+    fn memory_dir_too_deep_not_protected() {
+        let mgr = ProtectedFileManager::new();
+        // max_depth=2 means memory/file.md is ok (depth 2) but memory/sub/file.md is not (depth 3)
+        assert!(!mgr.is_protected(Path::new("memory/sub/nested.md")));
+    }
+
+    #[test]
+    fn heartbeat_md_is_protected_not_critical() {
+        let mgr = ProtectedFileManager::new();
+        assert!(mgr.is_protected(Path::new("HEARTBEAT.md")));
+        assert!(!mgr.is_critical(Path::new("HEARTBEAT.md")));
+    }
+
+    #[test]
+    fn user_md_is_protected_not_critical() {
+        let mgr = ProtectedFileManager::new();
+        assert!(mgr.is_protected(Path::new("USER.md")));
+        assert!(!mgr.is_critical(Path::new("USER.md")));
+    }
+
+    #[test]
+    fn dir_pattern_matching() {
+        assert!(ProtectedFileManager::matches_pattern(
+            "memory/*.md",
+            &FileScope::DepthLimited,
+            Some(2),
+            Path::new("memory/notes.md"),
+        ));
+
+        // Wrong directory
+        assert!(!ProtectedFileManager::matches_pattern(
+            "memory/*.md",
+            &FileScope::DepthLimited,
+            Some(2),
+            Path::new("other/notes.md"),
+        ));
+
+        // Not .md
+        assert!(!ProtectedFileManager::matches_pattern(
+            "memory/*.md",
+            &FileScope::DepthLimited,
+            Some(2),
+            Path::new("memory/data.json"),
+        ));
     }
 }

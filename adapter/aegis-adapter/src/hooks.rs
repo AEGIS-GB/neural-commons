@@ -535,16 +535,31 @@ impl SlmHook for SlmHookImpl {
         Box::pin(async move {
             let config_clone = self.config.clone();
             let content_owned = content.to_string();
-            let result = tokio::task::spawn_blocking(move || {
+            let task = tokio::task::spawn_blocking(move || {
                 aegis_slm::loopback::screen_deep_slm(&config_clone, &content_owned, None)
-            })
-            .await;
+            });
+
+            // Timeout: don't let a slow SLM block the server indefinitely.
+            // 15s is generous — qwen typically responds in 2-3s.
+            let result = tokio::time::timeout(
+                std::time::Duration::from_secs(15),
+                task,
+            ).await;
 
             match result {
-                Ok(screening_result) => self.record_and_alert(&screening_result, content),
-                Err(e) => {
+                Ok(Ok(screening_result)) => self.record_and_alert(&screening_result, content),
+                Ok(Err(e)) => {
                     tracing::warn!("deep SLM screening task panicked: {e}");
                     (SlmDecision::Admit, None)
+                }
+                Err(_) => {
+                    tracing::warn!("SLM deep analysis timed out (15s) — quarantining unscreened request");
+                    (SlmDecision::Quarantine("slm_timeout: SLM did not respond within 15s — content unscreened".to_string()), Some(SlmVerdict {
+                        action: "quarantine".to_string(),
+                        screening_ms: 15_000,
+                        reason: Some("slm_timeout_15s".to_string()),
+                        ..Default::default()
+                    }))
                 }
             }
         })

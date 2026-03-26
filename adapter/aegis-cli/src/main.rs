@@ -37,6 +37,8 @@ use std::path::Path;
 use clap::{Parser, Subcommand};
 
 use aegis_adapter::config::AdapterConfig;
+
+mod trace;
 use aegis_adapter::Mode;
 
 #[derive(Parser)]
@@ -181,6 +183,40 @@ enum Commands {
 
     /// Open the dashboard in a browser
     Dashboard,
+
+    /// Trace request flow end-to-end (channel → SLM → upstream → response)
+    Trace {
+        /// Traffic entry ID to show in detail (omit for table view)
+        id: Option<u64>,
+
+        /// Filter by channel (e.g. "telegram", "web", "cron")
+        #[arg(long)]
+        channel: Option<String>,
+
+        /// Filter by SLM verdict ("admit", "reject", "quarantine")
+        #[arg(long)]
+        verdict: Option<String>,
+
+        /// Show last N minutes of traffic
+        #[arg(long)]
+        last: Option<String>,
+
+        /// Include request/response bodies
+        #[arg(long)]
+        body: bool,
+
+        /// Show SLM health status
+        #[arg(long)]
+        health: bool,
+
+        /// Aegis proxy URL
+        #[arg(long, default_value = "http://127.0.0.1:3141")]
+        aegis_url: String,
+
+        /// Number of entries to show in table view (default: 10)
+        #[arg(short, long, default_value = "10")]
+        num: usize,
+    },
 
     /// Show version information
     Version,
@@ -892,6 +928,19 @@ fn main() {
             }
         }
 
+        Some(Commands::Trace { id, channel, verdict, last, body, health, aegis_url, num }) => {
+            trace::run(
+                &aegis_url,
+                id,
+                channel.as_deref(),
+                verdict.as_deref(),
+                last.as_deref(),
+                body,
+                health,
+                num,
+            );
+        }
+
         Some(Commands::Version) => {
             println!("aegis {}", env!("CARGO_PKG_VERSION"));
             println!("neural-commons adapter");
@@ -1083,70 +1132,177 @@ fn trust_pubkey(config: &AdapterConfig) {
     eprintln!("  signing_pubkey = \"{pubkey_hex}\"");
 }
 
-/// Run a systemctl command against the aegis service.
+/// Run a service management command (systemd or process-level fallback).
 fn run_systemctl(action: &str) {
     // Check for updates on start/restart
     if action == "start" || action == "restart" {
         check_for_update();
     }
 
-    // Try user service first, fall back to system service
+    // Try systemd first (user service, then system)
+    if try_systemd(action) {
+        return;
+    }
+
+    // Fallback: direct process management
+    run_process_action(action);
+}
+
+/// Try systemd user/system service. Returns true if handled.
+fn try_systemd(action: &str) -> bool {
     let user_output = std::process::Command::new("systemctl")
         .args(["--user", action, "aegis"])
         .output();
 
-    let success = match user_output {
-        Ok(o) if o.status.success() => {
-            eprintln!("aegis service {action}ed");
-            true
-        }
-        _ => {
-            // Fall back to system service
-            let sys_output = std::process::Command::new("systemctl")
-                .args([action, "aegis"])
-                .output();
-            match sys_output {
-                Ok(o) if o.status.success() => {
-                    eprintln!("aegis service {action}ed");
-                    true
-                }
-                Ok(o) => {
-                    let stderr = String::from_utf8_lossy(&o.stderr);
-                    if stderr.contains("not found") || stderr.contains("not loaded") {
-                        eprintln!("error: aegis systemd service not installed");
-                        eprintln!("hint: run 'aegis setup service' to install the systemd service");
-                    } else {
-                        eprintln!("error: systemctl {action} failed");
-                        eprint!("{}", stderr);
-                    }
-                    std::process::exit(1);
-                }
-                Err(e) => {
-                    eprintln!("error: failed to run systemctl: {e}");
-                    eprintln!("hint: systemd is required for aegis start/stop/restart");
-                    std::process::exit(1);
-                }
-            }
-        }
-    };
-
-    // Show status after start/restart
-    if success && action != "stop" {
-        std::thread::sleep(std::time::Duration::from_secs(2));
-        // Try user service status first
-        let status = std::process::Command::new("systemctl")
-            .args(["--user", "status", "aegis", "--no-pager", "-l"])
-            .output();
-        match status {
-            Ok(o) if o.status.success() || o.status.code() == Some(3) => {
-                // code 3 = inactive, still show it
-                eprint!("{}", String::from_utf8_lossy(&o.stdout));
-            }
-            _ => {
+    if let Ok(o) = user_output {
+        if o.status.success() {
+            eprintln!("aegis service {action}ed (systemd)");
+            if action != "stop" {
+                std::thread::sleep(std::time::Duration::from_secs(2));
                 let _ = std::process::Command::new("systemctl")
-                    .args(["status", "aegis", "--no-pager", "-l"])
+                    .args(["--user", "status", "aegis", "--no-pager", "-l"])
                     .status();
             }
+            return true;
+        }
+    }
+
+    let sys_output = std::process::Command::new("systemctl")
+        .args([action, "aegis"])
+        .output();
+
+    if let Ok(o) = sys_output {
+        if o.status.success() {
+            eprintln!("aegis service {action}ed (systemd)");
+            return true;
+        }
+    }
+
+    false
+}
+
+/// Direct process management: find running aegis, kill it, start new one.
+fn run_process_action(action: &str) {
+    match action {
+        "stop" => {
+            if kill_running_aegis() {
+                eprintln!("aegis stopped");
+            } else {
+                eprintln!("aegis is not running");
+            }
+        }
+        "start" => {
+            if find_running_aegis().is_some() {
+                eprintln!("aegis is already running (pid {})", find_running_aegis().unwrap());
+                eprintln!("hint: use 'aegis restart' to restart");
+                return;
+            }
+            start_aegis_background();
+        }
+        "restart" => {
+            if kill_running_aegis() {
+                eprintln!("aegis stopped (waiting for clean shutdown...)");
+                std::thread::sleep(std::time::Duration::from_secs(2));
+            }
+            start_aegis_background();
+        }
+        _ => {
+            eprintln!("unknown action: {action}");
+        }
+    }
+}
+
+/// Find a running aegis proxy process (not this CLI process).
+fn find_running_aegis() -> Option<u32> {
+    let output = std::process::Command::new("pgrep")
+        .args(["-f", "aegis --config"])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let my_pid = std::process::id();
+    for line in stdout.lines() {
+        if let Ok(pid) = line.trim().parse::<u32>() {
+            if pid != my_pid {
+                return Some(pid);
+            }
+        }
+    }
+    None
+}
+
+/// Kill running aegis process.
+fn kill_running_aegis() -> bool {
+    if let Some(pid) = find_running_aegis() {
+        let _ = std::process::Command::new("kill")
+            .arg(pid.to_string())
+            .status();
+        // Wait for it to exit
+        for _ in 0..10 {
+            std::thread::sleep(std::time::Duration::from_millis(500));
+            if find_running_aegis().is_none() {
+                return true;
+            }
+        }
+        // Force kill if still alive
+        let _ = std::process::Command::new("kill")
+            .args(["-9", &pid.to_string()])
+            .status();
+        std::thread::sleep(std::time::Duration::from_millis(500));
+        true
+    } else {
+        false
+    }
+}
+
+/// Start aegis as a background process with nohup.
+fn start_aegis_background() {
+    // Resolve config path
+    let config_path = if let Some(home) = dirs::home_dir() {
+        let p = home.join(".aegis/config/config.toml");
+        if p.exists() { p.to_string_lossy().to_string() } else { ".aegis/config/config.toml".to_string() }
+    } else {
+        ".aegis/config/config.toml".to_string()
+    };
+
+    let aegis_bin = std::env::current_exe()
+        .unwrap_or_else(|_| std::path::PathBuf::from("aegis"));
+
+    let log_path = "/tmp/aegis.log";
+
+    let result = std::process::Command::new("nohup")
+        .args([
+            aegis_bin.to_str().unwrap_or("aegis"),
+            "--config",
+            &config_path,
+        ])
+        .stdout(std::fs::File::create(log_path).unwrap_or_else(|_| {
+            std::fs::File::create("/dev/null").unwrap()
+        }))
+        .stderr(std::fs::File::create(log_path).unwrap_or_else(|_| {
+            std::fs::File::create("/dev/null").unwrap()
+        }))
+        .spawn();
+
+    match result {
+        Ok(child) => {
+            eprintln!("aegis started (pid {}, log: {})", child.id(), log_path);
+            // Wait and verify it's actually listening
+            std::thread::sleep(std::time::Duration::from_secs(3));
+            match reqwest::blocking::get("http://127.0.0.1:3141/aegis/status") {
+                Ok(resp) if resp.status().is_success() => {
+                    eprintln!("aegis is ready (http://127.0.0.1:3141)");
+                }
+                _ => {
+                    eprintln!("aegis started but not yet responding — check {log_path}");
+                }
+            }
+        }
+        Err(e) => {
+            eprintln!("error: failed to start aegis: {e}");
+            std::process::exit(1);
         }
     }
 }

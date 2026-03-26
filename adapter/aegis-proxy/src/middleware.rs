@@ -140,7 +140,7 @@ pub enum SlmDecision {
 
 /// Rich SLM screening verdict — provider-agnostic, carries timing and scores
 /// for dashboard transparency. Only primitive types (no aegis-slm dependency).
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct SlmVerdict {
     /// Action taken: "admit", "quarantine", or "reject".
     pub action: String,

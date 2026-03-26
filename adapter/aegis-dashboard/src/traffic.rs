@@ -20,9 +20,9 @@ pub struct TrafficEntry {
     pub path: String,
     /// HTTP status code of the response.
     pub status: u16,
-    /// Request body (UTF-8 text, truncated to 32KB).
+    /// Request body (UTF-8 text, truncated to 256KB).
     pub request_body: String,
-    /// Response body (UTF-8 text, truncated to 32KB).
+    /// Response body (UTF-8 text, truncated to 256KB).
     pub response_body: String,
     /// Request body size in bytes (original, before truncation).
     pub request_size: usize,
@@ -38,6 +38,15 @@ pub struct TrafficEntry {
     pub slm_verdict: Option<String>,
     /// SLM threat score in basis points 0–10000 (None if not run).
     pub slm_threat_score: Option<u32>,
+    /// Channel identifier (e.g. "telegram:direct:123", "openclaw:web:session1").
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub channel: Option<String>,
+    /// Channel trust level (e.g. "full", "trusted", "unknown").
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub trust_level: Option<String>,
+    /// LLM model used (e.g. "gpt-4o-mini").
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
 }
 
 const MAX_BODY_CAPTURE: usize = 256 * 1024; // 256KB per body — large enough for streaming responses with tool schemas
@@ -58,7 +67,7 @@ impl TrafficStore {
         }
     }
 
-    /// Record a request/response pair with optional SLM screening data.
+    /// Record a request/response pair with full context.
     pub fn record(
         &self,
         method: &str,
@@ -71,6 +80,9 @@ impl TrafficStore {
         slm_duration_ms: Option<u64>,
         slm_verdict: Option<&str>,
         slm_threat_score: Option<u32>,
+        channel: Option<&str>,
+        trust_level: Option<&str>,
+        model: Option<&str>,
     ) {
         let req_str = String::from_utf8_lossy(
             &req_body[..req_body.len().min(MAX_BODY_CAPTURE)]
@@ -104,6 +116,9 @@ impl TrafficStore {
             slm_duration_ms,
             slm_verdict: slm_verdict.map(|s| s.to_string()),
             slm_threat_score,
+            channel: channel.map(|s| s.to_string()),
+            trust_level: trust_level.map(|s| s.to_string()),
+            model: model.map(|s| s.to_string()),
         };
 
         let mut entries = self.entries.write().unwrap();
