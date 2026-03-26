@@ -15,16 +15,22 @@ struct TrafficList {
 struct TrafficSummary {
     id: u64,
     ts_ms: i64,
+    #[allow(dead_code)]
     method: String,
+    #[allow(dead_code)]
     path: String,
     status: u16,
     request_size: usize,
     response_size: usize,
     duration_ms: u64,
+    #[allow(dead_code)]
     is_streaming: bool,
     slm_duration_ms: Option<u64>,
     slm_verdict: Option<String>,
     slm_threat_score: Option<u32>,
+    channel: Option<String>,
+    trust_level: Option<String>,
+    model: Option<String>,
 }
 
 #[derive(Deserialize, Debug)]
@@ -49,6 +55,9 @@ struct TrafficDetailEntry {
     slm_duration_ms: Option<u64>,
     slm_verdict: Option<String>,
     slm_threat_score: Option<u32>,
+    channel: Option<String>,
+    trust_level: Option<String>,
+    model: Option<String>,
 }
 
 #[derive(Deserialize, Debug)]
@@ -187,17 +196,18 @@ fn show_table(
         })
         .map(|mins| now_ms - mins * 60_000);
 
-    // For channel/model extraction, we need detail for each entry
-    // But that's expensive — for table view, get SLM entries for channel info
-    let slm_entries: Vec<SlmEntry> = fetch_json::<SlmList>(&format!("{}/slm", base))
-        .and_then(|s| s.entries)
-        .unwrap_or_default();
-
     let mut entries: Vec<&TrafficSummary> = traffic.entries.iter().rev().collect();
 
     // Apply time filter
     if let Some(cutoff) = cutoff_ms {
         entries.retain(|e| e.ts_ms >= cutoff);
+    }
+
+    // Apply channel filter
+    if let Some(cf) = channel_filter {
+        entries.retain(|e| {
+            e.channel.as_deref().map(|c| c.contains(cf)).unwrap_or(false)
+        });
     }
 
     // Apply verdict filter
@@ -215,9 +225,9 @@ fn show_table(
 
     // Header
     println!();
-    println!(" {:<5} {:<10} {:<8} {:<14} {:>8} {:>8} {:<12} {:>8}",
-        "#", "Time", "Status", "Model", "Req tok", "Rsp tok", "SLM", "Duration");
-    println!("{}", "━".repeat(82));
+    println!(" {:<5} {:<10} {:<18} {:<9} {:<14} {:>7} {:>7} {:<8} {:>8}",
+        "#", "Time", "Channel", "Trust", "Model", "Req", "Rsp", "SLM", "Duration");
+    println!("{}", "━".repeat(102));
 
     for entry in &entries {
         let time = {
@@ -229,7 +239,18 @@ fn show_table(
             format!("{:02}:{:02}:{:02}", h, m, s)
         };
 
-        let model = "—"; // Can't extract without detail fetch
+        let channel = entry.channel.as_deref()
+            .map(|c| {
+                // Shorten "telegram:direct:123" -> "tg:123", "openclaw:web:x" -> "web:x"
+                if c.starts_with("telegram:direct:") { format!("tg:{}", &c[16..]) }
+                else if c.starts_with("openclaw:web:") { format!("web:{}", &c[13..]) }
+                else if c.starts_with("cron:") { c.to_string() }
+                else { c.chars().take(18).collect() }
+            })
+            .unwrap_or_else(|| "—".to_string());
+
+        let trust = entry.trust_level.as_deref().unwrap_or("—");
+        let model = entry.model.as_deref().unwrap_or("—");
         let req_tok = estimate_tokens(entry.request_size);
         let resp_tok = estimate_tokens(entry.response_size);
 
@@ -247,16 +268,8 @@ fn show_table(
             format!("{}ms", entry.duration_ms)
         };
 
-        let status_str = if entry.status == 200 {
-            format!("{}", entry.status)
-        } else if entry.status == 403 {
-            format!("{} BLK", entry.status)
-        } else {
-            format!("{}", entry.status)
-        };
-
-        println!(" {:<5} {:<10} {:<8} {:<14} {:>8} {:>8} {:<12} {:>8}",
-            entry.id, time, status_str, model, req_tok, resp_tok, slm, dur);
+        println!(" {:<5} {:<10} {:<18} {:<9} {:<14} {:>7} {:>7} {:<8} {:>8}",
+            entry.id, time, channel, trust, model, req_tok, resp_tok, slm, dur);
     }
 
     println!();
@@ -274,19 +287,29 @@ fn show_detail(base: &str, id: u64, show_body: bool) {
     };
 
     let e = &detail.entry;
-    let model = e.request_body.as_deref().and_then(extract_model).unwrap_or_else(|| "—".to_string());
+    let model = e.model.as_deref()
+        .or_else(|| e.request_body.as_deref().and_then(extract_model).as_deref().map(|_| ""))
+        .unwrap_or("—");
+    let model_display = if model.is_empty() {
+        e.request_body.as_deref().and_then(extract_model).unwrap_or_else(|| "—".to_string())
+    } else {
+        model.to_string()
+    };
     let req_tok = estimate_tokens(e.request_size);
     let resp_tok = estimate_tokens(e.response_size);
     let total_tok = req_tok + resp_tok;
     let streaming = if e.is_streaming { "yes" } else { "no" };
+    let channel = e.channel.as_deref().unwrap_or("—");
+    let trust = e.trust_level.as_deref().unwrap_or("—");
 
     let upstream = if e.status == 403 { "BLOCKED (never forwarded)".to_string() } else { format!("→ {}", e.status) };
 
     println!();
     println!("━━━ Request #{} {}", e.id, "━".repeat(58));
     println!("  Time       {}                Duration   {}ms", format_ts(e.ts_ms), e.duration_ms);
+    println!("  Channel    {:<28} Trust      {}", channel, trust);
     println!("  Route      {} {} {}", e.method, e.path, upstream);
-    println!("  Model      {:<28} Streaming  {}", model, streaming);
+    println!("  Model      {:<28} Streaming  {}", model_display, streaming);
 
     // Tokens
     println!();
