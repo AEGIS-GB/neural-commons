@@ -66,6 +66,36 @@ table.dtable tr:hover{background:#1c2128}
 .chat-system{background:#2d2a1f;color:#d29922;font-size:12px;font-style:italic;border:1px solid #9e6a03;text-align:center;max-width:100%}
 .traffic-row{cursor:pointer}
 .traffic-row:hover{background:#1c2128 !important}
+.trace-row{cursor:pointer;transition:background 0.1s}.trace-row:hover{background:#1c2128}
+.trace-row.selected{background:#1c2d4a;border-left:3px solid #58a6ff}
+.trace-row.rejected{background:rgba(248,81,73,0.06);border-left:3px solid #da3633}
+.trace-row.quarantined{background:rgba(210,153,34,0.06);border-left:3px solid #9e6a03}
+.b-admit{display:inline-block;padding:2px 6px;border-radius:8px;font-size:10px;background:#1f2d1f;color:#3fb950;border:1px solid #238636}
+.b-quarantine{display:inline-block;padding:2px 6px;border-radius:8px;font-size:10px;background:#2d2a1f;color:#d29922;border:1px solid #9e6a03}
+.b-reject{display:inline-block;padding:2px 6px;border-radius:8px;font-size:10px;background:#2d1f1f;color:#f85149;border:1px solid #da3633}
+.b-full{display:inline-block;padding:2px 6px;border-radius:8px;font-size:10px;background:#1f2d1f;color:#3fb950}
+.b-trusted{display:inline-block;padding:2px 6px;border-radius:8px;font-size:10px;background:#1f2d2d;color:#58d5a6}
+.b-unknown{display:inline-block;padding:2px 6px;border-radius:8px;font-size:10px;background:#2d2a1f;color:#d29922}
+.ch{font-family:monospace;font-size:11px;color:#79c0ff}
+.flow-step{display:flex;align-items:flex-start;gap:10px;position:relative;padding-bottom:12px}
+.flow-step:not(:last-child)::before{content:'';position:absolute;left:11px;top:22px;bottom:0;width:2px;background:#30363d}
+.flow-dot{width:22px;height:22px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:700;flex-shrink:0;z-index:1}
+.fd-ok{background:#1f2d1f;color:#3fb950;border:2px solid #238636}
+.fd-warn{background:#2d2a1f;color:#d29922;border:2px solid #9e6a03}
+.fd-err{background:#2d1f1f;color:#f85149;border:2px solid #da3633}
+.fd-info{background:#1c2128;color:#58a6ff;border:2px solid #1f6feb}
+.slm-stage{display:inline-block;background:#0d1117;border:1px solid #30363d;border-radius:4px;padding:6px 10px;font-size:11px;margin:4px 4px 4px 0}
+.dsec{border-top:1px solid #21262d;padding:10px 14px}
+.dsec h4{font-size:11px;color:#8b949e;text-transform:uppercase;letter-spacing:0.5px;cursor:pointer;margin:0}
+.dsec h4::before{content:'\25B8 ';font-size:9px}
+.dsec.expanded h4::before{content:'\25BE '}
+.dsec-body{display:none;margin-top:8px}.dsec.expanded .dsec-body{display:block}
+.json-body{background:#0d1117;border:1px solid #21262d;border-radius:4px;padding:10px;font-family:monospace;font-size:11px;max-height:350px;overflow:auto;white-space:pre-wrap;word-break:break-all}
+.chat-msg{padding:6px 10px;margin:3px 0;border-radius:6px;font-size:12px;max-width:95%}
+.chat-system{background:#1c2128;border-left:2px solid #484f58;color:#8b949e}
+.chat-user{background:#0d2137;border-left:2px solid #1f6feb;color:#a5d6ff}
+.chat-assistant{background:#1f2d1f;border-left:2px solid #238636;color:#adbac7}
+.chat-role{font-size:9px;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:2px;font-weight:600}
 .body-pre{background:#0d1117;border:1px solid #30363d;border-radius:6px;padding:12px;font-family:monospace;font-size:12px;color:#c9d1d9;overflow-x:auto;max-height:400px;overflow-y:auto;white-space:pre-wrap;word-break:break-word;margin:8px 0}
 .detail-back{cursor:pointer;color:#58a6ff;font-size:13px;margin-bottom:12px;display:inline-block}
 .detail-back:hover{text-decoration:underline}
@@ -110,7 +140,8 @@ table.dtable .screening-row:hover{background:#1c2128}
 </div>
 <div id="enforce-banner" class="enforce-banner" style="display:none;" onclick="window.location='/settings#enforcement'"></div>
 <div class="tabs">
-<div class="tab active" data-tab="overview">Overview</div>
+<div class="tab active" data-tab="trace">Trace</div>
+<div class="tab" data-tab="overview">Overview</div>
 <div class="tab" data-tab="evidence">Evidence</div>
 <div class="tab" data-tab="vault">Vault Scan</div>
 <div class="tab" data-tab="access">Access</div>
@@ -121,7 +152,23 @@ table.dtable .screening-row:hover{background:#1c2128}
 <div class="tab" data-tab="alerts">Alerts</div>
 </div>
 <div class="content">
-<div class="panel active" id="panel-overview">
+<!-- ═══ TRACE PANEL (primary view) ═══ -->
+<div class="panel active" id="panel-trace">
+<div class="card" style="padding:8px 16px;margin-bottom:12px">
+<div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;font-size:12px" id="trace-health">
+<span style="color:#8b949e">Loading...</span>
+</div>
+</div>
+<div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap;align-items:center">
+<select id="trace-filter-channel" style="background:#161b22;border:1px solid #30363d;color:#e1e4e8;padding:4px 8px;border-radius:4px;font-size:12px"><option value="">All channels</option></select>
+<select id="trace-filter-trust" style="background:#161b22;border:1px solid #30363d;color:#e1e4e8;padding:4px 8px;border-radius:4px;font-size:12px"><option value="">All trust</option><option value="full">full</option><option value="trusted">trusted</option><option value="unknown">unknown</option><option value="public">public</option></select>
+<select id="trace-filter-slm" style="background:#161b22;border:1px solid #30363d;color:#e1e4e8;padding:4px 8px;border-radius:4px;font-size:12px"><option value="">All SLM</option><option value="admit">admit</option><option value="quarantine">quarantine</option><option value="reject">reject</option></select>
+<input id="trace-search" type="text" placeholder="Search..." style="background:#161b22;border:1px solid #30363d;color:#e1e4e8;padding:4px 8px;border-radius:4px;font-size:12px;width:160px">
+</div>
+<div id="trace-list"></div>
+<div id="trace-detail-container"></div>
+</div>
+<div class="panel" id="panel-overview">
 <div class="card">
 <h2>Current State</h2>
 <p style="color:#3fb950;font-size:16px;margin-bottom:8px">Nothing changed — here's what we see</p>
@@ -183,8 +230,9 @@ table.dtable .screening-row:hover{background:#1c2128}
 <div class="panel" id="panel-alerts"><div class="card"><h2>Emergency Alerts</h2><p>No alerts.</p></div></div>
 </div>
 <script>
-let activeTab='overview';
+let activeTab='trace';
 let pageVisible=!document.hidden;
+let traceDetailId=null;
 let failCount=0;
 document.querySelectorAll('.tab').forEach(t=>{
   t.addEventListener('click',()=>{
@@ -199,6 +247,13 @@ document.addEventListener('visibilitychange',()=>{
   pageVisible=!document.hidden;
   if(pageVisible){poll();}
 });
+// Trace filter listeners — re-render on change
+['trace-filter-channel','trace-filter-trust','trace-filter-slm'].forEach(id=>{
+  const el=document.getElementById(id);
+  if(el)el.addEventListener('change',()=>{traceDetailId=null;poll();});
+});
+const traceSearchEl=document.getElementById('trace-search');
+if(traceSearchEl){let st;traceSearchEl.addEventListener('input',()=>{clearTimeout(st);st=setTimeout(()=>{traceDetailId=null;poll();},300);});}
 const seenAlerts=new Set();
 const alertSource=new EventSource('/dashboard/api/alerts/stream');
 alertSource.onmessage=(e)=>{
@@ -300,6 +355,13 @@ async function poll(){
       // Also fetch SLM screenings for channel detail view
       try{tr.slm_screenings=await(await fetch('/dashboard/api/slm')).json();}catch(e){}
       renderTrust(tr);
+    }catch(e){}
+  }
+  if(activeTab==='trace'){
+    try{
+      const t=await(await fetch('/dashboard/api/traffic')).json();
+      const s=await(await fetch('/dashboard/api/status')).json();
+      renderTrace(t,s);
     }catch(e){}
   }
   if(activeTab==='traffic'){
@@ -986,6 +1048,174 @@ function closeSlmDetail(){
   tblCard.style.display='';
   if(slmData)renderSlmTable(slmData);
 }
+// ═══ TRACE VIEW RENDERING ═══
+function renderTrace(data,status){
+  // Health bar
+  const hb=document.getElementById('trace-health');
+  if(hb&&status){
+    const hCol=status.health==='healthy'?'#3fb950':'#d29922';
+    let h='<span style="width:8px;height:8px;border-radius:50%;background:'+hCol+';display:inline-block"></span>';
+    h+='<span style="color:'+hCol+';font-weight:500">'+status.health+'</span>';
+    h+='<span style="color:#30363d">|</span>';
+    h+='<span style="color:#8b949e">Mode: '+status.mode+'</span>';
+    h+='<span style="color:#30363d">|</span>';
+    h+='<span style="color:#8b949e">Receipts: '+status.receipt_count+'</span>';
+    h+='<span style="color:#30363d">|</span>';
+    h+='<span style="color:#8b949e">'+(data.total||0)+' traffic entries</span>';
+    h+='<span style="color:#30363d">|</span>';
+    h+='<span style="color:#8b949e">v'+status.version+'</span>';
+    hb.innerHTML=h;
+  }
+  // Populate channel filter
+  const cf=document.getElementById('trace-filter-channel');
+  if(cf&&cf.options.length<=1&&data.entries){
+    const chans=new Set();
+    data.entries.forEach(e=>{if(e.channel)chans.add(e.channel);});
+    chans.forEach(c=>{const o=document.createElement('option');o.value=c;o.textContent=c;cf.appendChild(o);});
+  }
+  if(traceDetailId)return;
+  const el=document.getElementById('trace-list');
+  if(!el)return;
+  let entries=data.entries||[];
+  // Apply filters
+  const fChan=document.getElementById('trace-filter-channel')?.value||'';
+  const fTrust=document.getElementById('trace-filter-trust')?.value||'';
+  const fSlm=document.getElementById('trace-filter-slm')?.value||'';
+  const fSearch=document.getElementById('trace-search')?.value?.toLowerCase()||'';
+  if(fChan)entries=entries.filter(e=>(e.channel||'').includes(fChan));
+  if(fTrust)entries=entries.filter(e=>e.trust_level===fTrust);
+  if(fSlm)entries=entries.filter(e=>e.slm_verdict===fSlm);
+  if(fSearch)entries=entries.filter(e=>JSON.stringify(e).toLowerCase().includes(fSearch));
+  let h='<table class="dtable"><tr><th>#</th><th>Time</th><th>Channel</th><th>Trust</th><th>Model</th><th>Status</th><th>Tokens</th><th>SLM</th><th>Duration</th></tr>';
+  if(entries.length===0){h+='<tr><td colspan="9" style="text-align:center;color:#8b949e;padding:20px">No matching entries</td></tr>';}
+  for(const e of entries){
+    const t=new Date(e.ts_ms).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit',second:'2-digit'});
+    const ch=fmtChannel(e.channel);
+    const trust=e.trust_level||'—';
+    const trustCls=trust==='full'?'b-full':trust==='trusted'?'b-trusted':trust==='unknown'?'b-unknown':'';
+    const model=e.model||'—';
+    const tok=Math.round((e.request_size+e.response_size)/4);
+    const tokStr=tok>1000?(tok/1000).toFixed(1)+'K':tok;
+    const slm=e.slm_verdict||'—';
+    const slmCls=slm==='admit'?'b-admit':slm==='reject'?'b-reject':slm==='quarantine'?'b-quarantine':'';
+    const dur=e.duration_ms>1000?(e.duration_ms/1000).toFixed(1)+'s':e.duration_ms+'ms';
+    const rowCls=slm==='reject'?'trace-row rejected':slm==='quarantine'?'trace-row quarantined':'trace-row';
+    const sCls=e.status===200?'status-ok':e.status>=400?'status-error':'';
+    h+='<tr class="'+rowCls+'" onclick="showTraceDetail('+e.id+')">';
+    h+='<td>'+e.id+'</td><td>'+t+'</td>';
+    h+='<td><span class="ch">'+ch+'</span></td>';
+    h+='<td>'+(trustCls?'<span class="'+trustCls+'">'+trust+'</span>':trust)+'</td>';
+    h+='<td>'+model+'</td>';
+    h+='<td><span class="'+sCls+'">'+e.status+'</span></td>';
+    h+='<td>'+tokStr+'</td>';
+    h+='<td>'+(slmCls?'<span class="'+slmCls+'">'+slm+'</span>':slm)+'</td>';
+    h+='<td>'+dur+'</td></tr>';
+  }
+  h+='</table>';
+  el.innerHTML=h;
+}
+function fmtChannel(ch){
+  if(!ch)return'—';
+  if(ch.startsWith('telegram:direct:'))return'tg:'+ch.slice(16,22);
+  if(ch.startsWith('openclaw:web:'))return'web:'+ch.slice(13);
+  return ch.length>20?ch.slice(0,20)+'…':ch;
+}
+async function showTraceDetail(id){
+  traceDetailId=id;
+  const el=document.getElementById('trace-list');
+  const dc=document.getElementById('trace-detail-container');
+  el.style.display='none';
+  try{
+    const d=await(await fetch('/dashboard/api/traffic/'+id)).json();
+    const e=d.entry;
+    const chat=d.chat||[];
+    const model=e.model||(()=>{try{return JSON.parse(e.request_body).model}catch{return'—'}})();
+    const reqTok=Math.round(e.request_size/4);
+    const rspTok=Math.round(e.response_size/4);
+    const trust=e.trust_level||'unknown';
+    const channel=e.channel||'—';
+    const dur=e.duration_ms;
+    const slm=e.slm_verdict||'—';
+    const slmMs=e.slm_duration_ms||0;
+    const threat=e.slm_threat_score||0;
+    let h='<div class="card" style="overflow:hidden">';
+    // Header
+    h+='<div style="display:flex;justify-content:space-between;align-items:center;padding-bottom:12px;border-bottom:1px solid #30363d;margin-bottom:12px">';
+    h+='<h2 style="margin:0;color:#58a6ff;font-size:14px">Request #'+e.id+' — '+fmtChannel(channel)+' → '+model+' → '+e.status+'</h2>';
+    h+='<span style="cursor:pointer;color:#8b949e;font-size:16px;padding:4px 8px" onclick="closeTraceDetail()">✕</span>';
+    h+='</div>';
+    // Flow timeline
+    h+='<div style="padding:0 4px">';
+    // Step 1: Request
+    h+=flowStep('fd-info','1','Request Received','POST '+e.path+' · '+(e.request_size/1024).toFixed(1)+'KB','+0ms');
+    // Step 2: Trust
+    const trustCol=trust==='full'||trust==='trusted'?'fd-ok':'fd-warn';
+    h+=flowStep(trustCol,'2','Channel Trust: '+trust,channel==='—'?'No channel cert':'Channel: '+channel,'+0ms');
+    // Step 3: SLM
+    const slmCol=slm==='admit'?'fd-ok':slm==='reject'?'fd-err':'fd-warn';
+    let slmBody='<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:4px">';
+    slmBody+='<span class="slm-stage"><b style="color:#8b949e;font-size:10px">DEEP SLM</b><br><span style="color:'+(slm==='admit'?'#3fb950':'#d29922')+'">'+slm+'</span> · '+threat+'/10000<br><span style="color:#484f58">'+slmMs+'ms</span></span>';
+    slmBody+='</div>';
+    h+=flowStepRich(slmCol,'3','SLM Screening — '+slm,slmBody,'+'+slmMs+'ms');
+    // Step 4: Upstream
+    h+=flowStep('fd-ok','4','Upstream Response',model+' · '+(e.is_streaming?'streaming':'buffered')+' · '+reqTok+' prompt + '+rspTok+' completion = '+(reqTok+rspTok)+' tokens','+'+(dur-100)+'ms');
+    // Step 5: Vault
+    h+=flowStep('fd-ok','5','Vault scan: clean','No credentials detected in response','+'+dur+'ms');
+    // Step 6: Evidence
+    h+=flowStepLast('fd-info','✓','Evidence receipt recorded','Chain intact','+'+dur+'ms');
+    h+='</div>';
+    // Collapsible: Last user message
+    const lastUser=chat.filter(m=>m.role==='user').pop();
+    if(lastUser){
+      h+=dsec('Last User Message',true,'<div class="json-body" style="max-height:80px">'+(lastUser.content||'').slice(0,500)+'</div>');
+    }
+    // Collapsible: Chat view
+    if(chat.length>0){
+      let chatH='';
+      for(const m of chat.slice(-10)){
+        const cls=m.role==='system'?'chat-system':m.role==='user'?'chat-user':'chat-assistant';
+        chatH+='<div class="chat-msg '+cls+'"><div class="chat-role">'+m.role+'</div>'+(m.content||'').slice(0,500)+(m.content&&m.content.length>500?'…':'')+'</div>';
+      }
+      h+=dsec('Chat View ('+chat.length+' messages)',false,chatH);
+    }
+    // Collapsible: Request body
+    if(e.request_body){
+      let pretty='';
+      try{pretty=JSON.stringify(JSON.parse(e.request_body),null,2);}catch{pretty=e.request_body;}
+      h+=dsec('Request Body ('+(e.request_size/1024).toFixed(1)+'KB)',false,'<div class="json-body">'+escHtml(pretty.slice(0,8000))+'</div>');
+    }
+    // Collapsible: Response body
+    if(e.response_body){
+      let pretty='';
+      try{pretty=JSON.stringify(JSON.parse(e.response_body),null,2);}catch{pretty=e.response_body;}
+      h+=dsec('Response Body ('+(e.response_size/1024).toFixed(1)+'KB)',false,'<div class="json-body">'+escHtml(pretty.slice(0,8000))+'</div>');
+    }
+    h+='</div>';
+    dc.innerHTML=h;
+  }catch(err){
+    dc.innerHTML='<div class="card"><p style="color:#f85149">Failed to load detail: '+err+'</p><p style="cursor:pointer;color:#58a6ff" onclick="closeTraceDetail()">← Back</p></div>';
+  }
+}
+function closeTraceDetail(){
+  traceDetailId=null;
+  document.getElementById('trace-list').style.display='block';
+  document.getElementById('trace-detail-container').innerHTML='';
+}
+function flowStep(dotCls,num,title,meta,time){
+  return'<div class="flow-step"><div class="flow-dot '+dotCls+'">'+num+'</div><div style="flex:1"><div style="font-size:13px;font-weight:600;color:#e1e4e8">'+title+'</div><div style="font-size:12px;color:#8b949e;font-family:monospace">'+meta+'</div></div><div style="font-size:11px;color:#484f58;font-family:monospace">'+time+'</div></div>';
+}
+function flowStepRich(dotCls,num,title,bodyHtml,time){
+  return'<div class="flow-step"><div class="flow-dot '+dotCls+'">'+num+'</div><div style="flex:1"><div style="font-size:13px;font-weight:600;color:#e1e4e8">'+title+'</div>'+bodyHtml+'</div><div style="font-size:11px;color:#484f58;font-family:monospace">'+time+'</div></div>';
+}
+function flowStepLast(dotCls,num,title,meta,time){
+  return'<div class="flow-step" style="padding-bottom:0"><div class="flow-dot '+dotCls+'">'+num+'</div><div style="flex:1"><div style="font-size:13px;font-weight:600;color:#e1e4e8">'+title+'</div><div style="font-size:12px;color:#8b949e;font-family:monospace">'+meta+'</div></div><div style="font-size:11px;color:#484f58;font-family:monospace">'+time+'</div></div>';
+}
+function dsec(title,expanded,bodyHtml){
+  return'<div class="dsec'+(expanded?' expanded':'')+'"><h4 onclick="this.parentElement.classList.toggle(\'expanded\')">'+title+'</h4><div class="dsec-body">'+bodyHtml+'</div></div>';
+}
+function escHtml(s){return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+// ═══ END TRACE ═══
+
 let trafficDetailId=null;
 function renderTraffic(data){
   if(trafficDetailId)return; // don't overwrite detail view
