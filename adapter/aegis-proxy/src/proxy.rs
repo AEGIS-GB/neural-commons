@@ -200,6 +200,11 @@ pub async fn start_with_traffic_full(
 /// Extract user-authored content from any JSON request format for SLM screening.
 /// Handles: OpenAI messages format, Responses API input format, plain strings.
 /// Only includes user messages and tool results — skips assistant responses.
+/// Maximum characters of extracted content to send to the SLM.
+/// The SLM screening prompt adds ~500 tokens of template overhead.
+/// With a 32K context SLM, this leaves headroom for the prompt wrapper.
+const SLM_CONTENT_MAX_CHARS: usize = 24_000;
+
 fn extract_user_content_from_json(body: &str) -> String {
     if let Ok(json) = serde_json::from_str::<serde_json::Value>(body) {
         let mut parts = Vec::new();
@@ -208,7 +213,8 @@ fn extract_user_content_from_json(body: &str) -> String {
         if let Some(messages) = json.get("messages").and_then(|m| m.as_array()) {
             for msg in messages {
                 let role = msg.get("role").and_then(|r| r.as_str()).unwrap_or("");
-                if role == "assistant" { continue; } // skip self-generated
+                // Skip assistant (self-generated) and system (agent config, not attack surface)
+                if role == "assistant" || role == "system" { continue; }
                 if let Some(content) = msg.get("content").and_then(|c| c.as_str()) {
                     parts.push(format!("[{role}] {content}"));
                 }
@@ -239,7 +245,16 @@ fn extract_user_content_from_json(body: &str) -> String {
         }
 
         if !parts.is_empty() {
-            return parts.join("\n");
+            let joined = parts.join("\n");
+            // Truncate to fit SLM context window. Keep the tail (most recent
+            // messages) since that's where injection attacks appear.
+            if joined.len() > SLM_CONTENT_MAX_CHARS {
+                // Find a safe split point (newline boundary) near the truncation point
+                let skip = joined.len() - SLM_CONTENT_MAX_CHARS;
+                let split_at = joined[skip..].find('\n').map(|i| skip + i + 1).unwrap_or(skip);
+                return format!("[...truncated...]\n{}", &joined[split_at..]);
+            }
+            return joined;
         }
     }
 

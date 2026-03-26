@@ -37,6 +37,8 @@ use std::path::Path;
 use clap::{Parser, Subcommand};
 
 use aegis_adapter::config::AdapterConfig;
+
+mod trace;
 use aegis_adapter::Mode;
 
 #[derive(Parser)]
@@ -181,6 +183,40 @@ enum Commands {
 
     /// Open the dashboard in a browser
     Dashboard,
+
+    /// Trace request flow end-to-end (channel → SLM → upstream → response)
+    Trace {
+        /// Traffic entry ID to show in detail (omit for table view)
+        id: Option<u64>,
+
+        /// Filter by channel (e.g. "telegram", "web", "cron")
+        #[arg(long)]
+        channel: Option<String>,
+
+        /// Filter by SLM verdict ("admit", "reject", "quarantine")
+        #[arg(long)]
+        verdict: Option<String>,
+
+        /// Show last N minutes of traffic
+        #[arg(long)]
+        last: Option<String>,
+
+        /// Include request/response bodies
+        #[arg(long)]
+        body: bool,
+
+        /// Show SLM health status
+        #[arg(long)]
+        health: bool,
+
+        /// Aegis proxy URL
+        #[arg(long, default_value = "http://127.0.0.1:3141")]
+        aegis_url: String,
+
+        /// Number of entries to show in table view (default: 10)
+        #[arg(short, long, default_value = "10")]
+        num: usize,
+    },
 
     /// Show version information
     Version,
@@ -890,6 +926,19 @@ fn main() {
                     .args(["/C", "start", &url])
                     .spawn();
             }
+        }
+
+        Some(Commands::Trace { id, channel, verdict, last, body, health, aegis_url, num }) => {
+            trace::run(
+                &aegis_url,
+                id,
+                channel.as_deref(),
+                verdict.as_deref(),
+                last.as_deref(),
+                body,
+                health,
+                num,
+            );
         }
 
         Some(Commands::Version) => {
