@@ -294,6 +294,87 @@ pub async fn start(
             aegis_barrier::snapshot::SnapshotStore::load(&watcher_workspace, &critical_paths)
         );
 
+        // Layer 2: Periodic hash verification (60s safety net).
+        // If inotify drops events (overflow, race), this catches tampering.
+        let layer2_snapshot = snapshot_store.clone();
+        let layer2_workspace = watcher_workspace.clone();
+        let layer2_recorder = barrier_recorder.clone();
+        let layer2_alert_tx = barrier_alert_tx.clone();
+        let layer2_mode = barrier_mode;
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
+            interval.tick().await; // skip immediate first tick
+
+            loop {
+                interval.tick().await;
+                let mismatches = layer2_snapshot.verify_all(&layer2_workspace);
+                for (rel_path, mismatch) in &mismatches {
+                    let mismatch_desc = match mismatch {
+                        aegis_barrier::snapshot::SnapshotMismatch::HashChanged { expected, actual } => {
+                            format!("hash_changed expected={} actual={}", &expected[..16.min(expected.len())], &actual[..16.min(actual.len())])
+                        }
+                        aegis_barrier::snapshot::SnapshotMismatch::Missing => "file_missing".to_string(),
+                    };
+
+                    // In enforce mode, restore from snapshot
+                    let reverted = if layer2_mode == Mode::Enforce {
+                        match layer2_snapshot.restore(&layer2_workspace, rel_path) {
+                            Ok(true) => {
+                                tracing::warn!(
+                                    path = %rel_path.display(),
+                                    layer = 2,
+                                    "barrier: RESTORED critical file from snapshot (periodic check)"
+                                );
+                                true
+                            }
+                            Ok(false) => false,
+                            Err(e) => {
+                                tracing::error!(path = %rel_path.display(), error = %e, "barrier: Layer 2 restore failed");
+                                false
+                            }
+                        }
+                    } else {
+                        false
+                    };
+
+                    let action = format!("periodic_hash_check {}", rel_path.display());
+                    let outcome = if reverted {
+                        format!("{mismatch_desc} reverted=true")
+                    } else {
+                        format!("{mismatch_desc} reverted=false")
+                    };
+
+                    if let Err(e) = layer2_recorder.record_simple(
+                        aegis_schemas::ReceiptType::WriteBarrier,
+                        &action,
+                        &outcome,
+                    ) {
+                        tracing::warn!("failed to record Layer 2 barrier event: {e}");
+                    }
+
+                    let msg = if reverted {
+                        format!("Layer 2: Critical file tampered and REVERTED: {} ({})", rel_path.display(), mismatch_desc)
+                    } else {
+                        format!("Layer 2: Critical file tampered: {} ({})", rel_path.display(), mismatch_desc)
+                    };
+                    let alert = aegis_dashboard::DashboardAlert {
+                        ts_ms: std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .as_millis() as u64,
+                        kind: "periodic_hash_check".to_string(),
+                        message: msg,
+                        receipt_seq: layer2_recorder.chain_head().head_seq,
+                    };
+                    let _ = layer2_alert_tx.send(alert);
+                }
+                if !mismatches.is_empty() {
+                    tracing::warn!(count = mismatches.len(), "Layer 2 periodic check found mismatches");
+                }
+            }
+        });
+        info!("barrier Layer 2 periodic hash check started (60s interval)");
+
         tokio::spawn(async move {
             use notify::{Watcher, RecursiveMode, Config};
             use aegis_barrier::watcher::{FileWatcher, map_notify_event, is_excluded};
