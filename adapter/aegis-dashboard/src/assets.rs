@@ -1103,11 +1103,14 @@ function renderTrustmark(tm){
     h+='<div style="width:'+w+'%;height:100%;background:'+bc+';border-radius:3px;transition:width 0.3s"></div></div>';
     // Description
     h+='<div style="font-size:11px;color:#8b949e;margin-bottom:4px">'+hint.desc+'</div>';
-    // Reason from scoring engine
-    h+='<div style="font-size:11px;color:'+tcol+'">'+d.reason+'</div>';
-    // Hint: what to do
-    if(!isGood){
-      h+='<div style="font-size:11px;color:#58a6ff;margin-top:4px">\uD83D\uDCA1 '+hint.fix+'</div>';
+    // Formula and inputs from scoring engine
+    if(d.formula)h+='<div style="font-size:10px;color:#484f58;font-family:monospace;margin-top:4px">Formula: '+d.formula+'</div>';
+    if(d.inputs)h+='<div style="font-size:10px;color:#8b949e;font-family:monospace">Inputs: '+d.inputs+'</div>';
+    // Result
+    h+='<div style="font-size:11px;color:'+tcol+';margin-top:2px">'+d.reason+'</div>';
+    // How to improve (from scoring engine, not hardcoded hints)
+    if(d.improve&&d.improve.length>0){
+      h+='<div style="font-size:11px;color:#58a6ff;margin-top:4px">\u2192 '+d.improve+'</div>';
     }
     h+='</div>';
   }

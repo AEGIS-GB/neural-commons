@@ -72,7 +72,12 @@ pub fn run(aegis_url: &str, json_output: bool) {
             else { "\x1b[31m" };
         println!("  {:<25} {dcolor}{:.3}\x1b[0m × {:.2} = {:.4}  [{dbar}]",
             d.name, d.value, d.weight, d.contribution);
-        println!("  {:<25} \x1b[90m{}\x1b[0m", "", d.reason);
+        println!("  {:<25} \x1b[90mFormula: {}\x1b[0m", "", d.formula);
+        println!("  {:<25} \x1b[90mInputs:  {}\x1b[0m", "", d.inputs);
+        if !d.improve.is_empty() {
+            println!("  {:<25} \x1b[36m→ {}\x1b[0m", "", d.improve);
+        }
+        println!();
     }
     println!();
     println!("  Source: {} (read-only, no server required)", data_dir.display());

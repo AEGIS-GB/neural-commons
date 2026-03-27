@@ -21,6 +21,12 @@ pub struct DimensionScore {
     pub contribution: f64,
     /// Human-readable reason for the score.
     pub reason: String,
+    /// Formula used to compute this score.
+    pub formula: String,
+    /// Raw input values (for display).
+    pub inputs: String,
+    /// How to improve this score.
+    pub improve: String,
 }
 
 /// Complete TRUSTMARK score with all dimensions.
@@ -113,7 +119,26 @@ impl TrustmarkScore {
             ))
         };
 
-        dim("persona_integrity", value, WEIGHT_PERSONA_INTEGRITY, reason)
+        let formula = if s.between_session_tampers > 0 {
+            "1.0 - (tampers × 0.3)".into()
+        } else {
+            "intact_ratio + manifest_adjustment".into()
+        };
+        let inputs = format!(
+            "{}/{} files intact · manifest {} · {} between-session tampers",
+            s.protected_files_intact, s.protected_files_total,
+            match s.manifest_signature_valid { Some(true) => "valid", Some(false) => "INVALID", None => "absent" },
+            s.between_session_tampers,
+        );
+        let improve = if value >= 0.95 { String::new() }
+        else if s.between_session_tampers > 0 {
+            "Investigate between-session tampering. Check barrier alerts. Verify no unauthorized access while Aegis was offline.".into()
+        } else if s.manifest_signature_valid.is_none() {
+            "Run Aegis once to generate the signed manifest (automatic on first startup).".into()
+        } else {
+            "Ensure all protected files match their startup hashes. Run: aegis scan".into()
+        };
+        dim("persona_integrity", value, WEIGHT_PERSONA_INTEGRITY, reason, formula, inputs, improve)
     }
 
     fn score_chain_integrity(s: &LocalSignals) -> DimensionScore {
@@ -128,7 +153,16 @@ impl TrustmarkScore {
                 }
             }
         };
-        dim("chain_integrity", value, WEIGHT_CHAIN_INTEGRITY, reason)
+        let formula = "1.0 if verified, 0.7 if unverified with receipts, 0.0 if broken".into();
+        let inputs = format!("{} receipts · verified: {}", s.chain_receipt_count,
+            match s.chain_verified { Some(true) => "yes", Some(false) => "FAILED", None => "not checked" });
+        let improve = if value >= 0.95 { String::new() }
+        else if s.chain_verified == Some(false) {
+            "Evidence chain is broken. Run: aegis export --verify to diagnose. May need to restart the chain.".into()
+        } else {
+            "Start Aegis to begin recording evidence receipts. Chain verifies automatically on startup.".into()
+        };
+        dim("chain_integrity", value, WEIGHT_CHAIN_INTEGRITY, reason, formula, inputs, improve)
     }
 
     fn score_vault_hygiene(s: &LocalSignals) -> DimensionScore {
@@ -147,7 +181,16 @@ impl TrustmarkScore {
                 s.vault_leaks_detected, s.vault_scans_total, leak_rate * 100.0, s.vault_leaks_redacted,
             ))
         };
-        dim("vault_hygiene", value, WEIGHT_VAULT_HYGIENE, reason)
+        let formula = "(1 - leak_rate) × 0.7 + redaction_rate × 0.3".into();
+        let inputs = format!("{} detections / {} scans · {} redacted",
+            s.vault_leaks_detected, s.vault_scans_total, s.vault_leaks_redacted);
+        let improve = if value >= 0.95 { String::new() }
+        else if s.vault_leaks_redacted == 0 && s.vault_leaks_detected > 0 {
+            "Enable enforce mode (aegis --enforce) to auto-redact credentials. Or add known-safe tokens to [vault] allowlist in config.toml.".into()
+        } else {
+            "Reduce credential exposure. Check which requests contain API keys or tokens in the Trace tab.".into()
+        };
+        dim("vault_hygiene", value, WEIGHT_VAULT_HYGIENE, reason, formula, inputs, improve)
     }
 
     fn score_temporal_consistency(s: &LocalSignals) -> DimensionScore {
@@ -172,7 +215,15 @@ impl TrustmarkScore {
                 ))
             }
         };
-        dim("temporal_consistency", value, WEIGHT_TEMPORAL_CONSISTENCY, reason)
+        let formula = "1.0 - clamp((CV - 0.5) / 1.5, 0, 0.8) where CV = stddev/mean of intervals".into();
+        let inputs = format!("{} receipt timestamps in scoring window", s.receipt_timestamps.len());
+        let improve = if value >= 0.95 { String::new() }
+        else if s.receipt_timestamps.len() < 3 {
+            "Send more traffic through Aegis. Need at least 3 requests for temporal scoring.".into()
+        } else {
+            "Traffic is bursty. Consistent request patterns (e.g. regular cron, steady usage) improve this score.".into()
+        };
+        dim("temporal_consistency", value, WEIGHT_TEMPORAL_CONSISTENCY, reason, formula, inputs, improve)
     }
 
     fn score_relay_reliability(s: &LocalSignals) -> DimensionScore {
@@ -183,7 +234,14 @@ impl TrustmarkScore {
             let rate = s.relay_forwarded as f64 / total as f64;
             (rate, format!("{}/{} relayed ({:.0}%)", s.relay_forwarded, total, rate * 100.0))
         };
-        dim("relay_reliability", value, WEIGHT_RELAY_RELIABILITY, reason)
+        let formula = "forwarded / (forwarded + failed), default 0.5 if inactive".into();
+        let inputs = format!("{} forwarded, {} failed", s.relay_forwarded, s.relay_failed);
+        let improve = if total > 0 && value < 0.95 {
+            "Investigate relay failures. Check mesh connectivity.".into()
+        } else {
+            "Mesh relay activates in Tier 3. Default score 0.5 until then.".into()
+        };
+        dim("relay_reliability", value, WEIGHT_RELAY_RELIABILITY, reason, formula, inputs, improve)
     }
 
     fn score_contribution_volume(s: &LocalSignals) -> DimensionScore {
@@ -194,17 +252,26 @@ impl TrustmarkScore {
             let ratio = (s.receipts_last_24h as f64 / baseline as f64).min(1.0);
             (ratio, format!("{} receipts in 24h (baseline: {})", s.receipts_last_24h, baseline))
         };
-        dim("contribution_volume", value, WEIGHT_CONTRIBUTION_VOLUME, reason)
+        let formula = "min(receipts_24h / baseline, 1.0)".into();
+        let inputs = format!("{} receipts in 24h, baseline: {}", s.receipts_last_24h, baseline);
+        let improve = if value >= 0.95 { String::new() }
+        else {
+            format!("Route more traffic through Aegis. Any channel counts. Need {} receipts/day for full score.", baseline)
+        };
+        dim("contribution_volume", value, WEIGHT_CONTRIBUTION_VOLUME, reason, formula, inputs, improve)
     }
 }
 
-fn dim(name: &str, value: f64, weight: f64, reason: String) -> DimensionScore {
+fn dim(name: &str, value: f64, weight: f64, reason: String, formula: String, inputs: String, improve: String) -> DimensionScore {
     DimensionScore {
         name: name.to_string(),
         value,
         weight,
         contribution: value * weight,
         reason,
+        formula,
+        inputs,
+        improve,
     }
 }
 
