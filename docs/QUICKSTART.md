@@ -30,7 +30,7 @@ That's it. No Rust compiler, no build tools, no package manager, no runtime depe
 ## Install
 
 ```bash
-curl -fsSL https://github.com/LCatGA12/neural-commons/releases/latest/download/install.sh | bash
+curl -fsSL https://github.com/AEGIS-GB/neural-commons/releases/latest/download/install.sh | bash
 ```
 
 The installer:
@@ -45,7 +45,7 @@ The installer:
 **Build from source** (requires Rust 1.85+):
 
 ```bash
-git clone https://github.com/LCatGA12/neural-commons.git
+git clone https://github.com/AEGIS-GB/neural-commons.git
 cd neural-commons
 cargo install --path adapter/aegis-cli
 ```
@@ -221,7 +221,7 @@ After starting Aegis, send a test request through your OpenClaw agent. Then chec
 3. `aegis memory status` shows your monitored files
 4. `aegis scan` reports any credential findings
 
-If all four work, you're protected. If something's off, [open an issue](https://github.com/LCatGA12/neural-commons/issues).
+If all four work, you're protected. If something's off, [open an issue](https://github.com/AEGIS-GB/neural-commons/issues).
 
 ## How It Works
 
@@ -304,4 +304,4 @@ Set the environment variable: `export ANTHROPIC_API_KEY=sk-ant-...` and restart 
 **SLM parse failures with thinking models (e.g., Qwen3)**
 Aegis v0.2.30+ handles Qwen3 thinking models natively. If using an older version, upgrade: `cargo install --path adapter/aegis-cli`.
 
-Full documentation: `docs/tier1/` | Issues: [GitHub](https://github.com/LCatGA12/neural-commons/issues)
+Full documentation: `docs/tier1/` | Issues: [GitHub](https://github.com/AEGIS-GB/neural-commons/issues)

@@ -9,7 +9,7 @@ welcome patches of all sizes — from typo fixes to new features.
 You will need Rust 1.85+ (edition 2024).
 
 ```bash
-git clone https://github.com/LCatGA12/neural-commons.git
+git clone https://github.com/AEGIS-GB/neural-commons.git
 cd neural-commons
 cargo build --workspace
 cargo test --workspace

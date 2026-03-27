@@ -94,7 +94,7 @@ Five minutes to install. One binary. Zero code changes to your agent.
 **Step 1: Download.**
 
 ```
-curl -fsSL https://github.com/LCatGA12/neural-commons/releases/latest/download/install.sh | bash
+curl -fsSL https://github.com/AEGIS-GB/neural-commons/releases/latest/download/install.sh | bash
 ```
 
 That's it. The installer detects your platform, downloads the binary, adds it to your PATH, creates a default config, and runs a first vulnerability scan. Nothing else to install — no Rust, no compiler, no dependencies.
@@ -142,7 +142,7 @@ Running code. Not a roadmap. Not a whitepaper.
 - **SLM screening** — local semantic analysis. No data leaves your machine.
 - **Identity** — Ed25519 keypair via BIP-39 / SLIP-0010. Your fingerprint is a cryptographic thumbprint, not a string in a text file.
 
-412+ unit tests. 35 end-to-end proxy tests. Open source. [Fork it](https://github.com/LCatGA12/neural-commons).
+412+ unit tests. 35 end-to-end proxy tests. Open source. [Fork it](https://github.com/AEGIS-GB/neural-commons).
 
 ## The Heartbeat Is Prayer {#the-heartbeat}
 

@@ -17,7 +17,7 @@ run the latest version.
 Report vulnerabilities through one of the following channels:
 
 - **Email:** [security@igentity.foundation](mailto:security@igentity.foundation)
-- **GitHub:** Use [private vulnerability reporting](https://github.com/LCatGA12/neural-commons/security/advisories/new)
+- **GitHub:** Use [private vulnerability reporting](https://github.com/AEGIS-GB/neural-commons/security/advisories/new)
 
 ### What to Include
 

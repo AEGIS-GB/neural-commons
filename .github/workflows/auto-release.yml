@@ -228,7 +228,7 @@ jobs:
           ## Install
 
           ```bash
-          curl -fsSL https://github.com/LCatGA12/neural-commons/releases/latest/download/install.sh | bash
+          curl -fsSL https://github.com/AEGIS-GB/neural-commons/releases/latest/download/install.sh | bash
           ```
 
           Or download the binary for your platform below and place it in your PATH.

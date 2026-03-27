@@ -7,7 +7,7 @@ set -euo pipefail
 VERSION="${AEGIS_VERSION:-latest}"
 INSTALL_DIR="${AEGIS_INSTALL_DIR:-$HOME/.aegis/bin}"
 DATA_DIR="${AEGIS_DATA_DIR:-$HOME/.aegis/data}"
-REPO="LCatGA12/neural-commons"
+REPO="AEGIS-GB/neural-commons"
 
 # Colors (if terminal supports them)
 if [ -t 1 ]; then
