@@ -27,6 +27,10 @@ pub struct DimensionScore {
     pub inputs: String,
     /// How to improve this score.
     pub improve: String,
+    /// Target value for "healthy" (green threshold).
+    pub target: f64,
+    /// Status label: "healthy", "attention", "critical".
+    pub status: String,
 }
 
 /// Complete TRUSTMARK score with all dimensions.
@@ -262,7 +266,28 @@ impl TrustmarkScore {
     }
 }
 
+/// Target thresholds per dimension.
+fn target_for(name: &str) -> f64 {
+    match name {
+        "persona_integrity" => 0.95,     // all files intact + valid manifest
+        "chain_integrity" => 0.95,       // chain verified
+        "vault_hygiene" => 0.90,         // < 3% leak rate or credentials redacted
+        "temporal_consistency" => 0.80,  // regular traffic pattern (CV < 1.0)
+        "relay_reliability" => 0.50,     // placeholder until mesh
+        "contribution_volume" => 0.50,   // at least half the baseline
+        _ => 0.80,
+    }
+}
+
+fn status_label(value: f64, target: f64) -> String {
+    if value >= target { "healthy".into() }
+    else if value >= target * 0.6 { "attention".into() }
+    else { "critical".into() }
+}
+
 fn dim(name: &str, value: f64, weight: f64, reason: String, formula: String, inputs: String, improve: String) -> DimensionScore {
+    let target = target_for(name);
+    let status = status_label(value, target);
     DimensionScore {
         name: name.to_string(),
         value,
@@ -272,6 +297,8 @@ fn dim(name: &str, value: f64, weight: f64, reason: String, formula: String, inp
         formula,
         inputs,
         improve,
+        target,
+        status,
     }
 }
 

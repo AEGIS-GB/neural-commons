@@ -1076,39 +1076,45 @@ function renderTrustmark(tm){
   const tier=document.getElementById('trustmark-tier');
   const dims=document.getElementById('trustmark-dims');
   if(!total)return;
-  const pct=Math.round(tm.total*100);
-  const col=tm.total>=0.7?'#3fb950':tm.total>=0.4?'#d29922':'#f85149';
-  total.style.color=col;
-  total.textContent=pct+'%';
-  // Tier info
-  const tierLabel=pct>=70?'Healthy':'Needs attention';
-  tier.innerHTML='<span style="color:'+col+'">'+tierLabel+'</span><span style="color:#484f58;margin-left:8px">|</span><span style="color:#8b949e;margin-left:8px">6 dimensions, weighted sum</span>';
+  // Summary line (small, at top)
+  const col=tm.total>=0.8?'#3fb950':tm.total>=0.5?'#d29922':'#f85149';
+  const statusLabel=tm.total>=0.8?'healthy':tm.total>=0.5?'needs attention':'critical';
+  total.style.cssText='font-size:16px;font-weight:600';
+  total.innerHTML='TRUSTMARK <span style="color:'+col+'">'+tm.total.toFixed(3)+'</span> <span style="color:#8b949e;font-weight:400;font-size:13px">'+statusLabel+'</span>';
+  const tierText=tm.tier?(' · '+tm.tier.current+' · Identity: '+Math.round(tm.identity_age_hours||0)+'h'):'';
+  tier.innerHTML='<span style="color:#8b949e;font-size:12px">'+tierText+'</span>';
+  // Dimension cards
   let h='';
   for(const d of tm.dimensions||[]){
-    const w=Math.round(d.value*100);
-    const bc=d.value>=0.8?'#238636':d.value>=0.5?'#9e6a03':'#da3633';
-    const tcol=d.value>=0.8?'#3fb950':d.value>=0.5?'#d29922':'#f85149';
-    const hint=dimHints[d.name]||{icon:'?',label:d.name,desc:'',good:'',bad:'',fix:''};
-    const isGood=d.value>=0.8;
-    h+='<div style="background:#0d1117;border:1px solid #21262d;border-radius:6px;padding:10px 14px;margin-bottom:8px">';
-    // Header row: icon + name + weight + score
+    const hint=dimHints[d.name]||{icon:'?',label:d.name,desc:''};
+    const st=d.status||'attention';
+    const stCol=st==='healthy'?'#3fb950':st==='attention'?'#d29922':'#f85149';
+    const stIcon=st==='healthy'?'\u2713':st==='attention'?'!':'\u2717';
+    const barCol=st==='healthy'?'#238636':st==='attention'?'#9e6a03':'#da3633';
+    const targetPct=Math.round((d.target||0.8)*100);
+    const valuePct=Math.round(d.value*100);
+    h+='<div style="background:#0d1117;border:1px solid '+(st==='healthy'?'#21262d':st==='attention'?'#9e6a03':'#da3633')+';border-radius:6px;padding:10px 14px;margin-bottom:8px">';
+    // Header: icon + label + status + score/target
     h+='<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">';
     h+='<span style="font-size:16px">'+hint.icon+'</span>';
     h+='<span style="font-size:13px;font-weight:600;color:#e1e4e8">'+hint.label+'</span>';
-    h+='<span style="font-size:11px;color:#484f58;margin-left:auto">weight: '+(d.weight*100).toFixed(0)+'%</span>';
-    h+='<span style="font-size:14px;font-weight:700;color:'+tcol+';min-width:40px;text-align:right">'+w+'%</span>';
+    h+='<span style="font-size:11px;color:'+stCol+';margin-left:8px">'+stIcon+' '+st+'</span>';
+    h+='<span style="font-size:12px;color:#8b949e;margin-left:auto">';
+    h+='<span style="color:'+stCol+';font-weight:600">'+d.value.toFixed(3)+'</span>';
+    h+=' / '+d.target.toFixed(2)+' target';
+    h+='<span style="color:#484f58;margin-left:6px">(weight '+(d.weight*100).toFixed(0)+'%)</span>';
+    h+='</span></div>';
+    // Progress bar with target marker
+    h+='<div style="position:relative;height:8px;background:#21262d;border-radius:4px;overflow:visible;margin-bottom:8px">';
+    h+='<div style="width:'+Math.min(valuePct,100)+'%;height:100%;background:'+barCol+';border-radius:4px;transition:width 0.3s"></div>';
+    h+='<div style="position:absolute;left:'+targetPct+'%;top:-2px;width:2px;height:12px;background:#e1e4e8;border-radius:1px" title="target: '+d.target.toFixed(2)+'"></div>';
     h+='</div>';
-    // Progress bar
-    h+='<div style="height:6px;background:#21262d;border-radius:3px;overflow:hidden;margin-bottom:6px">';
-    h+='<div style="width:'+w+'%;height:100%;background:'+bc+';border-radius:3px;transition:width 0.3s"></div></div>';
     // Description
     h+='<div style="font-size:11px;color:#8b949e;margin-bottom:4px">'+hint.desc+'</div>';
-    // Formula and inputs from scoring engine
-    if(d.formula)h+='<div style="font-size:10px;color:#484f58;font-family:monospace;margin-top:4px">Formula: '+d.formula+'</div>';
-    if(d.inputs)h+='<div style="font-size:10px;color:#8b949e;font-family:monospace">Inputs: '+d.inputs+'</div>';
-    // Result
-    h+='<div style="font-size:11px;color:'+tcol+';margin-top:2px">'+d.reason+'</div>';
-    // How to improve (from scoring engine, not hardcoded hints)
+    // Inputs + formula
+    if(d.inputs)h+='<div style="font-size:10px;color:#8b949e;font-family:monospace">'+d.inputs+'</div>';
+    if(d.formula)h+='<div style="font-size:10px;color:#484f58;font-family:monospace">'+d.formula+'</div>';
+    // How to improve
     if(d.improve&&d.improve.length>0){
       h+='<div style="font-size:11px;color:#58a6ff;margin-top:4px">\u2192 '+d.improve+'</div>';
     }

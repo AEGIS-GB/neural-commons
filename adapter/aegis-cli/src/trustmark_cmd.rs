@@ -45,41 +45,55 @@ pub fn run(aegis_url: &str, json_output: bool) {
         return;
     }
 
-    // Visual output
+    // Visual output — dimensions first, total at bottom
     println!();
-    println!("━━━ TRUSTMARK Score ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-    println!();
-
-    let pct = (score.total * 100.0) as u32;
-    let bar_len = (score.total * 30.0) as usize;
-    let bar: String = "█".repeat(bar_len) + &"░".repeat(30 - bar_len);
-    let color = if score.total >= 0.7 { "\x1b[32m" }
-        else if score.total >= 0.4 { "\x1b[33m" }
-        else { "\x1b[31m" };
-    println!("  Total:  {color}{:.4}\x1b[0m  ({pct}%)  [{bar}]", score.total);
-    println!("  Tier:   {}  |  Identity: {:.0}h", tier.current, identity_age);
-    if !tier.next_tier_requirements.is_empty() {
-        println!("  Next:   {}", tier.next_tier_requirements.join(" | "));
-    }
+    println!("━━━ TRUSTMARK ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
     println!();
 
-    println!("  ── Dimensions ─────────────────────────────────────────");
     for d in &score.dimensions {
-        let dbar_len = (d.value * 20.0) as usize;
-        let dbar: String = "█".repeat(dbar_len) + &"░".repeat(20 - dbar_len);
-        let dcolor = if d.value >= 0.8 { "\x1b[32m" }
-            else if d.value >= 0.5 { "\x1b[33m" }
-            else { "\x1b[31m" };
-        println!("  {:<25} {dcolor}{:.3}\x1b[0m × {:.2} = {:.4}  [{dbar}]",
-            d.name, d.value, d.weight, d.contribution);
-        println!("  {:<25} \x1b[90mFormula: {}\x1b[0m", "", d.formula);
-        println!("  {:<25} \x1b[90mInputs:  {}\x1b[0m", "", d.inputs);
+        let status_icon = match d.status.as_str() {
+            "healthy" => "\x1b[32m✓ healthy\x1b[0m",
+            "attention" => "\x1b[33m! attention\x1b[0m",
+            "critical" => "\x1b[31m✗ critical\x1b[0m",
+            _ => "?",
+        };
+        let dcolor = match d.status.as_str() {
+            "healthy" => "\x1b[32m",
+            "attention" => "\x1b[33m",
+            _ => "\x1b[31m",
+        };
+
+        // Header: name + status + score vs target
+        println!("  {:<25} {}  {dcolor}{:.3}\x1b[0m / {:.3} target  (weight: {:.0}%)",
+            d.name, status_icon, d.value, d.target, d.weight * 100.0);
+
+        // Progress bar showing score vs target
+        let bar_len = (d.value * 20.0) as usize;
+        let target_pos = (d.target * 20.0) as usize;
+        let mut bar_chars: Vec<char> = vec!['░'; 20];
+        for i in 0..bar_len.min(20) { bar_chars[i] = '█'; }
+        if target_pos < 20 { bar_chars[target_pos] = '|'; }
+        let bar: String = bar_chars.into_iter().collect();
+        println!("  {:<25} [{bar}]", "");
+
+        // Details
+        println!("  {:<25} \x1b[90m{}\x1b[0m", "", d.inputs);
+        println!("  {:<25} \x1b[90m{}\x1b[0m", "", d.formula);
         if !d.improve.is_empty() {
             println!("  {:<25} \x1b[36m→ {}\x1b[0m", "", d.improve);
         }
         println!();
     }
-    println!();
+
+    // Summary at bottom
+    let total_status = if score.total >= 0.8 { "\x1b[32mhealthy\x1b[0m" }
+        else if score.total >= 0.5 { "\x1b[33mneeds attention\x1b[0m" }
+        else { "\x1b[31mcritical\x1b[0m" };
+    println!("  ── Summary ────────────────────────────────────────────");
+    println!("  TRUSTMARK: {:.3}  {}  |  {}  |  Identity: {:.0}h", score.total, total_status, tier.current, identity_age);
+    if !tier.next_tier_requirements.is_empty() {
+        println!("  Next tier: {}", tier.next_tier_requirements.join(" | "));
+    }
     println!("  Source: {} (read-only, no server required)", data_dir.display());
     println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
     println!();
