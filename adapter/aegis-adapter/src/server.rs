@@ -647,10 +647,12 @@ pub async fn start(
         prompt_guard_model_dir: prompt_guard_dir,
     };
     let slm_enabled = config.slm.enabled;
-    // Vault allowlist: warden-configured tokens to exclude from scanning.
-    // These are exact-match only — no pattern guessing (that's a bypass vector).
-    // Configure via [vault] allowlist = ["token1", "token2"] in config.toml.
-    let vault_allowlist: Vec<String> = Vec::new(); // TODO: read from config.toml
+    // Vault allowlist: intentionally empty. Plaintext credentials in config.toml
+    // is worse than the detection noise it would suppress. The real fix is
+    // context-aware scanning (issue #104) — distinguishing authorized credential
+    // usage in tool call results from actual exfiltration. Until then, the scanner
+    // flags everything and the warden interprets the results.
+    let vault_allowlist: Vec<String> = Vec::new();
     let hooks = create_middleware_hooks(recorder.clone(), mode, alert_tx.clone(), slm_config, slm_enabled, vault_allowlist);
 
     // 7. Build proxy config
