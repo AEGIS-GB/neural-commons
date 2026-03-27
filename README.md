@@ -1,7 +1,7 @@
 # Neural Commons
 
-[![CI](https://github.com/LCatGA12/neural-commons/actions/workflows/ci.yml/badge.svg)](https://github.com/LCatGA12/neural-commons/actions/workflows/ci.yml)
-[![Release](https://img.shields.io/github/v/release/LCatGA12/neural-commons)](https://github.com/LCatGA12/neural-commons/releases/latest)
+[![CI](https://github.com/AEGIS-GB/neural-commons/actions/workflows/ci.yml/badge.svg)](https://github.com/AEGIS-GB/neural-commons/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/AEGIS-GB/neural-commons)](https://github.com/AEGIS-GB/neural-commons/releases/latest)
 [![License: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-blue.svg)](LICENSE)
 
 Trust infrastructure for MoltBook bot wardens. A Rust proxy that gives AI agents cryptographic identity, tamper-evident evidence, write protection, credential security, 4-layer prompt injection screening, and channel-aware trust.
@@ -12,7 +12,7 @@ Trust infrastructure for MoltBook bot wardens. A Rust proxy that gives AI agents
 
 ```bash
 # 1. Install
-curl -fsSL https://github.com/LCatGA12/neural-commons/releases/latest/download/install.sh | bash
+curl -fsSL https://github.com/AEGIS-GB/neural-commons/releases/latest/download/install.sh | bash
 
 # 2. Connect to OpenClaw
 aegis setup openclaw
@@ -104,13 +104,25 @@ aegis vault summary                # credential vault overview
 aegis memory status                # memory file health
 aegis export --verify              # export + verify evidence chain
 aegis dashboard                    # open dashboard in browser
+
+# Trace — end-to-end request inspector
+aegis trace                        # table: channel, trust, model, SLM, tokens, duration
+aegis trace 42                     # detail: flow timeline, SLM pipeline, request/response JSON
+aegis trace --channel telegram     # filter by channel
+aegis trace --verdict reject       # filter by SLM verdict
+aegis trace 42 --body              # include full request/response bodies
+aegis trace --health               # SLM health status
+
+# Service management
+aegis restart                      # restart (systemd or process-level)
 ```
 
 ## Building
 
 ```bash
 cargo check --workspace            # type-check
-cargo test --workspace             # run all 461+ tests
+cargo test --workspace             # run all 537+ unit tests
+./tests/trace_e2e.sh              # 51 E2E tests (API + CLI + dashboard)
 cargo test -p aegis-barrier        # test a specific crate
 cargo build --release -p aegis-cli # release binary
 ```
@@ -166,7 +178,7 @@ All decisions documented in [`DECISIONS.md`](DECISIONS.md). Highlights:
 
 ## Project Status
 
-See the full [Roadmap](ROADMAP.md) and [GitHub Milestones](https://github.com/LCatGA12/neural-commons/milestones).
+See the full [Roadmap](ROADMAP.md) and [GitHub Milestones](https://github.com/AEGIS-GB/neural-commons/milestones).
 
 **Tier 1 — Local Adapter:** Shipped (v0.2.33+, 461+ tests)
 All adapter crates implemented and tested. Proxy, evidence chain, 4-layer SLM screening (heuristic + ProtectAI classifier + SLM + metaprompt), credential vault, write barrier, memory monitor, channel trust with signed certificates, 9-tab dashboard, OpenClaw plugin, CLI, CI/CD, install script.
@@ -174,11 +186,11 @@ All adapter crates implemented and tested. Proxy, evidence chain, 4-layer SLM sc
 **Channel Trust (TRUSTMARK v0.3):** Shipped in v0.2.29–v0.2.33
 Ed25519 signed channel registration, trust-based screening policy, per-channel dashboard, 100% detection on 76 security + 71 CVE tests.
 
-**Tier 1 Hardening (v0.3.0):** [In progress](https://github.com/LCatGA12/neural-commons/milestone/1) — target April 2026
+**Tier 1 Hardening (v0.3.0):** [In progress](https://github.com/AEGIS-GB/neural-commons/milestone/1) — target April 2026
 
-**Cluster Foundation (v0.4.0):** [Planned](https://github.com/LCatGA12/neural-commons/milestone/2) — target June 2026
+**Cluster Foundation (v0.4.0):** [Planned](https://github.com/AEGIS-GB/neural-commons/milestone/2) — target June 2026
 
-**Mesh & Intelligence (v0.5.0):** [Planned](https://github.com/LCatGA12/neural-commons/milestone/3)
+**Mesh & Intelligence (v0.5.0):** [Planned](https://github.com/AEGIS-GB/neural-commons/milestone/3)
 
 ## Documentation
 
@@ -187,13 +199,13 @@ Ed25519 signed channel registration, trust-based screening policy, per-channel d
 - [Roadmap](ROADMAP.md) — what's shipped, what's next
 - [Decisions Register](DECISIONS.md) — architectural decisions with rationale
 - [OpenClaw Integration](docs/OPENCLAW_INTEGRATION.md) — detailed integration guide
-- [Channel Trust (Issue #83)](https://github.com/LCatGA12/neural-commons/issues/83) — TRUSTMARK channel trust design and implementation
+- [Channel Trust (Issue #83)](https://github.com/AEGIS-GB/neural-commons/issues/83) — TRUSTMARK channel trust design and implementation
 
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, code style, and PR process.
 
-Pick any issue from the [v0.3.0 milestone](https://github.com/LCatGA12/neural-commons/milestone/1) — issues labeled `good first issue` are self-contained with clear scope.
+Pick any issue from the [v0.3.0 milestone](https://github.com/AEGIS-GB/neural-commons/milestone/1) — issues labeled `good first issue` are self-contained with clear scope.
 
 ## Security
 

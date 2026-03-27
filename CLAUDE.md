@@ -256,6 +256,19 @@ aegis memory status                # Memory file health
 aegis export                       # Export evidence chain as JSON
 aegis export --verify              # Export with integrity check
 aegis dashboard                    # Open dashboard in browser
+
+aegis trace                        # Last 10 requests — table with channel, trust, model, SLM, tokens
+aegis trace 42                     # Full detail for request #42 — flow timeline, SLM pipeline, tokens
+aegis trace --channel telegram     # Filter by channel
+aegis trace --verdict reject       # Filter by SLM verdict (admit/quarantine/reject)
+aegis trace --last 30m             # Filter by time window
+aegis trace --health               # Include SLM health status
+aegis trace 42 --body              # Include full request/response JSON bodies
+aegis trace -n 20                  # Show last 20 entries (default: 10)
+
+aegis start                        # Start Aegis (systemd or nohup fallback)
+aegis stop                         # Stop Aegis
+aegis restart                      # Restart Aegis (kill + start, systemd or process-level)
 ```
 
 ## Dashboard API Endpoints
@@ -272,8 +285,8 @@ All mounted under the dashboard path (default `/dashboard`):
 | `GET /api/access` | Last 50 API call entries |
 | `GET /api/alerts` | Recent critical alerts (REST fallback) |
 | `GET /api/alerts/stream` | SSE stream for real-time critical alerts |
-| `GET /api/traffic` | Traffic inspector summary (no bodies) |
-| `GET /api/traffic/{id}` | Traffic entry detail with bodies + chat view |
+| `GET /api/traffic` | Traffic inspector: id, ts, method, path, status, tokens, SLM verdict, channel, trust, model |
+| `GET /api/traffic/{id}` | Traffic entry detail: full request/response bodies + parsed chat view |
 | `GET /api/slm` | SLM screening entries with verdicts, timing, trust |
 | `GET /api/trust` | Channel trust overview + screening by trust level |
 
