@@ -8,7 +8,6 @@ use aegis_trustmark::tiers::resolve_tier;
 
 /// Resolve the Aegis data directory.
 fn resolve_data_dir() -> std::path::PathBuf {
-    // Check common locations
     let candidates = [
         std::path::PathBuf::from(".aegis"),
         dirs::home_dir().map(|h| h.join(".aegis")).unwrap_or_default(),
@@ -19,15 +18,12 @@ fn resolve_data_dir() -> std::path::PathBuf {
             return c.clone();
         }
     }
-    // Default
     candidates[0].clone()
 }
 
-/// Run the trustmark command.
-pub fn run(aegis_url: &str, json_output: bool) {
-    let _ = aegis_url; // Not used — we read from local data directly
+/// Run the trustmark command (current score).
+pub fn run(json_output: bool) {
     let data_dir = resolve_data_dir();
-
     let signals = gather::gather_local_signals(&data_dir);
     let score = TrustmarkScore::compute(&signals);
     let identity_age = gather::get_identity_age_hours(&data_dir);
@@ -45,7 +41,6 @@ pub fn run(aegis_url: &str, json_output: bool) {
         return;
     }
 
-    // Visual output — dimensions first, total at bottom
     println!();
     println!("━━━ TRUSTMARK ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
     println!();
@@ -54,8 +49,7 @@ pub fn run(aegis_url: &str, json_output: bool) {
         let status_icon = match d.status.as_str() {
             "healthy" => "\x1b[32m✓ healthy\x1b[0m",
             "attention" => "\x1b[33m! attention\x1b[0m",
-            "critical" => "\x1b[31m✗ critical\x1b[0m",
-            _ => "?",
+            _ => "\x1b[31m✗ critical\x1b[0m",
         };
         let dcolor = match d.status.as_str() {
             "healthy" => "\x1b[32m",
@@ -63,11 +57,9 @@ pub fn run(aegis_url: &str, json_output: bool) {
             _ => "\x1b[31m",
         };
 
-        // Header: name + status + score vs target
         println!("  {:<25} {}  {dcolor}{:.3}\x1b[0m / {:.3} target  (weight: {:.0}%)",
             d.name, status_icon, d.value, d.target, d.weight * 100.0);
 
-        // Progress bar showing score vs target
         let bar_len = (d.value * 20.0) as usize;
         let target_pos = (d.target * 20.0) as usize;
         let mut bar_chars: Vec<char> = vec!['░'; 20];
@@ -76,7 +68,6 @@ pub fn run(aegis_url: &str, json_output: bool) {
         let bar: String = bar_chars.into_iter().collect();
         println!("  {:<25} [{bar}]", "");
 
-        // Details
         println!("  {:<25} \x1b[90m{}\x1b[0m", "", d.inputs);
         println!("  {:<25} \x1b[90m{}\x1b[0m", "", d.formula);
         if !d.improve.is_empty() {
@@ -85,7 +76,6 @@ pub fn run(aegis_url: &str, json_output: bool) {
         println!();
     }
 
-    // Summary at bottom
     let total_status = if score.total >= 0.8 { "\x1b[32mhealthy\x1b[0m" }
         else if score.total >= 0.5 { "\x1b[33mneeds attention\x1b[0m" }
         else { "\x1b[31mcritical\x1b[0m" };
@@ -96,5 +86,68 @@ pub fn run(aegis_url: &str, json_output: bool) {
     }
     println!("  Source: {} (read-only, no server required)", data_dir.display());
     println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+    println!();
+}
+
+/// Run the trustmark history command.
+pub fn run_history(limit: usize, json_output: bool) {
+    let data_dir = resolve_data_dir();
+    let history = aegis_trustmark::persist::load_history(&data_dir, limit);
+
+    if history.is_empty() {
+        eprintln!("No TRUSTMARK snapshots recorded yet.");
+        eprintln!("Start Aegis to begin recording (snapshots every hour).");
+        return;
+    }
+
+    if json_output {
+        println!("{}", serde_json::to_string_pretty(&history).unwrap());
+        return;
+    }
+
+    println!();
+    println!("━━━ TRUSTMARK History ({} snapshots) ━━━━━━━━━━━━━━━━━━━━━━", history.len());
+    println!();
+    println!("  {:<22} {:<8} {:<8} {:<8} {:<8} {:<8} {:<8} {:<8}",
+        "Time", "Total", "Person", "Chain", "Vault", "Temprl", "Relay", "Volume");
+    println!("  {}", "─".repeat(76));
+
+    for score in &history {
+        let time = {
+            let secs = (score.computed_at_ms / 1000) as i64;
+            let total = secs % 86400;
+            let h = (total / 3600) % 24;
+            let m = (total % 3600) / 60;
+            // Days ago
+            let now_ms = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis() as i64;
+            let age_h = (now_ms - score.computed_at_ms as i64) / 3_600_000;
+            if age_h < 24 {
+                format!("{:02}:{:02} ({}h ago)", h, m, age_h)
+            } else {
+                format!("{:02}:{:02} ({}d ago)", h, m, age_h / 24)
+            }
+        };
+
+        let dims: Vec<f64> = score.dimensions.iter().map(|d| d.value).collect();
+        let (p, c, v, t, r, vol) = (
+            dims.first().unwrap_or(&0.0),
+            dims.get(1).unwrap_or(&0.0),
+            dims.get(2).unwrap_or(&0.0),
+            dims.get(3).unwrap_or(&0.0),
+            dims.get(4).unwrap_or(&0.0),
+            dims.get(5).unwrap_or(&0.0),
+        );
+
+        let col = if score.total >= 0.8 { "\x1b[32m" }
+            else if score.total >= 0.5 { "\x1b[33m" }
+            else { "\x1b[31m" };
+
+        println!("  {:<22} {col}{:<8.3}\x1b[0m {:<8.3} {:<8.3} {:<8.3} {:<8.3} {:<8.3} {:<8.3}",
+            time, score.total, p, c, v, t, r, vol);
+    }
+
     println!();
 }

@@ -167,13 +167,8 @@ enum Commands {
 
     /// TRUSTMARK score — 6-dimension trust score
     Trustmark {
-        /// Show full dimension breakdown (default if no subcommand)
-        #[arg(long)]
-        json: bool,
-
-        /// Aegis proxy URL
-        #[arg(long, default_value = "http://127.0.0.1:3141")]
-        aegis_url: String,
+        #[command(subcommand)]
+        action: Option<TrustmarkCommands>,
     },
 
     /// Set the upstream LLM provider
@@ -318,6 +313,25 @@ enum MemoryCommands {
     },
     /// List tracked memory files
     List,
+}
+
+#[derive(Subcommand)]
+enum TrustmarkCommands {
+    /// Show current score (default)
+    Show {
+        /// JSON output
+        #[arg(long)]
+        json: bool,
+    },
+    /// Show score history over time
+    History {
+        /// Number of snapshots to show (default: 20)
+        #[arg(short, long, default_value = "20")]
+        limit: usize,
+        /// JSON output
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -958,8 +972,12 @@ fn main() {
             );
         }
 
-        Some(Commands::Trustmark { json, aegis_url }) => {
-            trustmark_cmd::run(&aegis_url, json);
+        Some(Commands::Trustmark { action }) => {
+            match action {
+                Some(TrustmarkCommands::Show { json }) => trustmark_cmd::run(json),
+                Some(TrustmarkCommands::History { limit, json }) => trustmark_cmd::run_history(limit, json),
+                None => trustmark_cmd::run(false),
+            }
         }
 
         Some(Commands::Version) => {

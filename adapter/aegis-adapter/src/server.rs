@@ -690,6 +690,37 @@ pub async fn start(
         warn!("failed to record startup receipt: {e}");
     }
 
+    // 10b. Record initial TRUSTMARK snapshot and start periodic recording (every hour)
+    {
+        let tm_data_dir = data_dir.clone();
+        let tm_recorder = recorder.clone();
+        tokio::spawn(async move {
+            // Initial snapshot at startup
+            let signals = aegis_trustmark::gather::gather_local_signals(&tm_data_dir);
+            let score = aegis_trustmark::scoring::TrustmarkScore::compute(&signals);
+            if let Err(e) = aegis_trustmark::persist::record_snapshot(&tm_recorder, &score) {
+                tracing::warn!("failed to record initial TRUSTMARK snapshot: {e}");
+            } else {
+                tracing::info!(score = format!("{:.3}", score.total), "TRUSTMARK snapshot recorded");
+            }
+
+            // Hourly snapshots
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(3600));
+            interval.tick().await; // skip immediate tick
+            loop {
+                interval.tick().await;
+                let signals = aegis_trustmark::gather::gather_local_signals(&tm_data_dir);
+                let score = aegis_trustmark::scoring::TrustmarkScore::compute(&signals);
+                if let Err(e) = aegis_trustmark::persist::record_snapshot(&tm_recorder, &score) {
+                    tracing::warn!("failed to record TRUSTMARK snapshot: {e}");
+                } else {
+                    tracing::info!(score = format!("{:.3}", score.total), "TRUSTMARK hourly snapshot");
+                }
+            }
+        });
+        info!("TRUSTMARK scoring started (snapshot every 1h)");
+    }
+
     // 11. Start proxy server (blocks until shutdown)
     info!(
         listen = %proxy_config.listen_addr,
