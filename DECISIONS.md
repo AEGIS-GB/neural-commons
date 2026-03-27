@@ -626,30 +626,93 @@ These decisions calibrate the trust engine and define the tier system.
 
 ### D13: TRUSTMARK v1 Dimension Weights
 
+**Status:** ✅ CONFIRMED
+
 **What:** The TRUSTMARK score is a weighted sum of 6 dimensions, normalized to [0, 1]. What are the weights?
 
 **Why it matters:** These weights define what "trustworthy" means in the network. Overweighting volume rewards spam. Overweighting integrity rewards inactivity. The calibration is a policy decision.
 
 **Blocks:** `trustmark` crate (scoring function)
 
-**Default:**
+**Answer:**
 ```
-relay_reliability:     0.15  — does this bot reliably relay mesh messages?
-persona_integrity:     0.25  — is SOUL.md intact, no unauthorized changes?
+persona_integrity:     0.20  — is SOUL.md intact, no unauthorized changes?
 chain_integrity:       0.20  — is the evidence chain unbroken?
-contribution_volume:   0.10  — how active is this bot?
-temporal_consistency:  0.15  — is activity consistent over time?
+relay_reliability:     0.20  — does this bot reliably relay mesh messages?
 vault_hygiene:         0.15  — are credentials properly secured?
+contribution_volume:   0.15  — how active is this bot?
+temporal_consistency:  0.10  — is activity consistent over time?
 
 Sum: 1.00
-Output: weighted sum → [0.0, 1.0]
+Output: weighted sum × 10000 → [0, 10000] basis points
+Storage: integer basis points in signed data (D2)
 ```
 
-**What I need from you:**
-1. Confirm the 6 dimensions and weights
-2. Should persona_integrity really be the highest weight (0.25)?
-3. Is contribution_volume at 0.10 too low or too high?
-4. Any dimension you'd add or remove?
+**Reasoning:**
+
+1. **persona_integrity 0.25 → 0.20 (still joint-highest):** Identity protection
+   is already enforced unconditionally by D30 (`memory_write` always-enforce) and
+   D5 (write barrier protects SOUL.md, IDENTITY.md, etc.). TRUSTMARK doesn't need
+   to double down on what the enforcement layer already guarantees. At 0.20 it
+   remains joint-highest, reflecting that identity is foundational to trust, but
+   no longer dominates a score that is largely binary (intact or compromised).
+
+2. **chain_integrity stays at 0.20:** The evidence chain (D1) is the cryptographic
+   backbone of the entire system. Every receipt, every claim, every trustmark
+   computation depends on an unbroken hash chain. This weight is non-negotiable.
+
+3. **relay_reliability 0.15 → 0.20 (elevated to joint-highest):** The mesh network
+   (Phase 3) is critical infrastructure. D24 gives mesh the highest rate limits of
+   any service (5,000/hr at T3). D21 uses TRUSTMARK² for routing weight — meaning
+   reliable relayers get preferential message routing. A bot that reliably relays
+   is literally holding the network together. This dimension deserves parity with
+   identity and evidence.
+
+4. **vault_hygiene stays at 0.15:** Credential security matters, but D30 already
+   always-enforces `vault_block` (redaction). Like persona_integrity, the
+   enforcement layer handles the hard guarantee. TRUSTMARK reflects ongoing
+   hygiene (e.g., percentage of detected credentials secured — aligned with the
+   D16 Vault Hygiene badge at 50%/80%/100% thresholds).
+
+5. **contribution_volume 0.10 → 0.15 (raised):** The system depends on 17,000+
+   active participants. D19 (locked) rewards contribution through credits
+   (Botawiki writes = 10 credits, mesh relay = 0.1/KB, quarantine validation =
+   5 credits). D16 badges track Evidence Depth (100/1,000/10,000 receipts) and
+   Knowledge Contrib (1/10/50 Botawiki claims). At 0.10, TRUSTMARK contradicts
+   the gamification layer — badges and credits say "participate more" while the
+   trust score says "participation barely matters." Raising to 0.15 aligns the
+   signals without making volume gameable (credits remain the primary
+   participation reward).
+
+6. **temporal_consistency 0.15 → 0.10 (reduced):** This dimension overlaps with
+   relay_reliability — a bot that reliably relays messages is by definition
+   temporally consistent. Additionally, D15's 90-day decay half-life already
+   penalizes inactive bots by decaying their entire score over time. With decay
+   handling the "ghost bot" problem and relay_reliability handling the "shows up
+   consistently" signal, temporal_consistency becomes partially redundant. At 0.10
+   it still catches bursty/suspicious activity patterns without double-counting
+   consistent presence.
+
+**Design philosophy:**
+
+TRUSTMARK answers "can I trust this bot?" while the credit economy (D19) answers
+"is this bot contributing?" These are complementary, not competing. TRUSTMARK
+weights should reflect trust-relevant behavior, but must not ignore participation
+entirely — a network of passive-but-secure bots is useless. The confirmed weights
+create a balanced triangle: security (persona + chain + vault = 0.55), network
+health (relay = 0.20), and engagement (volume + temporal = 0.25).
+
+**Interaction with other decisions:**
+- D14 (tier thresholds): TRUSTMARK ≥ 0.4 gates Tier 3 admission
+- D15 (temporal decay): 90-day half-life applies to all dimensions equally
+- D16 (badges): Badge categories map to TRUSTMARK dimensions but are independent metrics
+- D19 (credits): Credits reward participation; TRUSTMARK rewards trustworthiness
+- D21 (mesh routing): Routing weight = TRUSTMARK², so these weights directly affect network topology
+- D24 (rate limits): Tier-aware limits gate access; TRUSTMARK gates tier admission
+
+**Code changes required:**
+1. `trustmark/src/scoring.rs` — implement `compute_trustmark()` with confirmed weights
+2. `trustmark/src/lib.rs` — update dimension weight constants and documentation
 
 ---
 
@@ -1149,7 +1212,7 @@ has been moved to the backlog and is not part of this decision.
 | D12 | 1 | Dashboard refresh | ✅ CONFIRMED |
 | D30 | 1 | Observe-only enforcement points | 🔒 LOCKED |
 | D31 | 1 | OpenClaw fixture requirements — Anthropic-only, 3 formats, coverage gate | 🔒 LOCKED |
-| D13 | 2 | TRUSTMARK weights | ⏳ Pending |
+| D13 | 2 | TRUSTMARK weights: participation-aware trust (0.20/0.20/0.20/0.15/0.15/0.10) | ✅ CONFIRMED |
 | D14 | 2 | Tier thresholds | ⏳ Pending |
 | D15 | 2 | Temporal decay half-life | ⏳ Pending |
 | D16 | 2 | Gamification badges | ⏳ Pending |
