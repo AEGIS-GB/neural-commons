@@ -69,6 +69,8 @@ pub struct DashboardSharedState {
     pub start_time: Instant,
     /// In-memory traffic inspector ring buffer.
     pub traffic: Arc<TrafficStore>,
+    /// Aegis data directory path (for TRUSTMARK signal gathering).
+    pub data_dir: std::path::PathBuf,
 }
 
 // ── Router ───────────────────────────────────────────────────────────────────
@@ -89,6 +91,7 @@ pub fn routes(state: Arc<DashboardSharedState>) -> Router {
         .route("/api/traffic", get(api_traffic))
         .route("/api/traffic/{id}", get(api_traffic_detail))
         .route("/api/trust", get(api_trust))
+        .route("/api/trustmark", get(api_trustmark))
         .with_state(state)
 }
 
@@ -389,8 +392,8 @@ async fn api_vault(
     let mut by_type = std::collections::HashMap::new();
     let mut recent_findings = Vec::new();
 
-    // Query recent receipts for vault-related entries
-    let start_seq = chain_head.head_seq.saturating_sub(200).max(1);
+    // Query ALL receipts for vault-related entries (full chain, not a window)
+    let start_seq: u64 = 1;
     if let Ok(receipts) = state.evidence.export(Some(start_seq), None) {
         for receipt in &receipts {
             if receipt.core.receipt_type != aegis_schemas::ReceiptType::VaultDetection {
@@ -950,6 +953,30 @@ fn parse_sse_response_text(sse_body: &str) -> Option<String> {
     }
 
     if text.is_empty() { None } else { Some(text) }
+}
+
+/// GET /dashboard/api/trustmark — TRUSTMARK score from local data.
+/// Uses the same gather function as the CLI — single source of truth.
+async fn api_trustmark(
+    State(state): State<Arc<DashboardSharedState>>,
+) -> Json<serde_json::Value> {
+    let signals = aegis_trustmark::gather::gather_local_signals(&state.data_dir);
+    let score = aegis_trustmark::scoring::TrustmarkScore::compute(&signals);
+    let identity_age = aegis_trustmark::gather::get_identity_age_hours(&state.data_dir);
+    let tier = aegis_trustmark::tiers::resolve_tier(
+        score.total, identity_age,
+        signals.vault_scans_total > 0,
+        signals.chain_verified.unwrap_or(false),
+        0,
+    );
+
+    Json(serde_json::json!({
+        "total": score.total,
+        "dimensions": score.dimensions,
+        "computed_at_ms": score.computed_at_ms,
+        "tier": tier,
+        "identity_age_hours": identity_age,
+    }))
 }
 
 /// GET /dashboard/api/alerts/stream — SSE stream for critical alert push.

@@ -180,6 +180,14 @@ table.dtable .screening-row:hover{background:#1c2128}
 <div class="card"><div class="stat" id="stat-memory">0</div><div class="stat-label">Memory Files</div></div>
 <div class="card"><div class="stat status-ok" id="stat-health">Healthy</div><div class="stat-label">System Health</div></div>
 </div>
+<div class="card" id="trustmark-card" style="margin-top:16px">
+<h2>TRUSTMARK Score</h2>
+<div style="display:flex;align-items:center;gap:16px;margin-bottom:12px">
+<div style="font-size:36px;font-weight:700" id="trustmark-total">—</div>
+<div id="trustmark-tier" style="font-size:14px;color:#8b949e"></div>
+</div>
+<div id="trustmark-dims"></div>
+</div>
 </div>
 <div class="panel" id="panel-evidence">
 <div class="card"><h2>Evidence Chain</h2>
@@ -332,6 +340,12 @@ async function poll(){
       const m=await(await fetch('/dashboard/api/memory')).json();
       document.getElementById('stat-memory').textContent=m.tracked_files;
       if(activeTab==='memory'){renderMemory(m);}
+    }catch(e){}
+  }
+  if(activeTab==='overview'){
+    try{
+      const tm=await(await fetch('/dashboard/api/trustmark')).json();
+      renderTrustmark(tm);
     }catch(e){}
   }
   if(activeTab==='slm'){
@@ -1048,6 +1062,58 @@ function closeSlmDetail(){
   tblCard.style.display='';
   if(slmData)renderSlmTable(slmData);
 }
+// ═══ TRUSTMARK RENDERING ═══
+const dimHints={
+  persona_integrity:{icon:'\uD83D\uDEE1',label:'Persona Integrity',desc:'Are your identity files (SOUL.md, AGENTS.md) intact and untampered?',good:'All protected files match their startup hashes. Manifest signature valid.',bad:'Files were modified between sessions or manifest signature is invalid.',fix:'Check barrier alerts in the Trace tab. Run aegis scan to verify file integrity.'},
+  chain_integrity:{icon:'\uD83D\uDD17',label:'Chain Integrity',desc:'Is your evidence chain unbroken? Every receipt links to the previous one via SHA-256.',good:'Full chain verified — no gaps, no tampering.',bad:'Chain verification failed or no receipts recorded yet.',fix:'Ensure Aegis is running continuously. Check aegis export --verify.'},
+  vault_hygiene:{icon:'\uD83D\uDD10',label:'Vault Hygiene',desc:'Are credentials being leaked through the proxy? Lower leak rate = higher score.',good:'No credentials detected in traffic. Your secrets stay on your machine.',bad:'Credentials found in request or response bodies.',fix:'Check which requests contain API keys. Rotate leaked credentials immediately.'},
+  temporal_consistency:{icon:'\u23F0',label:'Temporal Consistency',desc:'Is traffic arriving at regular intervals? Consistent patterns indicate healthy operation.',good:'Regular request intervals — your agent is operating on a stable rhythm.',bad:'Bursty or irregular traffic patterns detected.',fix:'This improves naturally as more traffic flows through Aegis. Send requests consistently.'},
+  relay_reliability:{icon:'\uD83D\uDD04',label:'Relay Reliability',desc:'Mesh relay performance. Not active until mesh network is enabled (Tier 3 feature).',good:'Relay is forwarding messages successfully.',bad:'Not applicable yet — mesh is not active.',fix:'This dimension activates when mesh networking is enabled. Default score: 50%.'},
+  contribution_volume:{icon:'\uD83D\uDCCA',label:'Contribution Volume',desc:'How active is this adapter? Measured against a baseline of 100 receipts/day.',good:'Meeting or exceeding the activity baseline.',bad:'Low activity — the adapter is installed but underutilized.',fix:'Route more traffic through Aegis. Any channel (web, Telegram, cron) counts equally.'}
+};
+function renderTrustmark(tm){
+  const total=document.getElementById('trustmark-total');
+  const tier=document.getElementById('trustmark-tier');
+  const dims=document.getElementById('trustmark-dims');
+  if(!total)return;
+  const pct=Math.round(tm.total*100);
+  const col=tm.total>=0.7?'#3fb950':tm.total>=0.4?'#d29922':'#f85149';
+  total.style.color=col;
+  total.textContent=pct+'%';
+  // Tier info
+  const tierLabel=pct>=70?'Healthy':'Needs attention';
+  tier.innerHTML='<span style="color:'+col+'">'+tierLabel+'</span><span style="color:#484f58;margin-left:8px">|</span><span style="color:#8b949e;margin-left:8px">6 dimensions, weighted sum</span>';
+  let h='';
+  for(const d of tm.dimensions||[]){
+    const w=Math.round(d.value*100);
+    const bc=d.value>=0.8?'#238636':d.value>=0.5?'#9e6a03':'#da3633';
+    const tcol=d.value>=0.8?'#3fb950':d.value>=0.5?'#d29922':'#f85149';
+    const hint=dimHints[d.name]||{icon:'?',label:d.name,desc:'',good:'',bad:'',fix:''};
+    const isGood=d.value>=0.8;
+    h+='<div style="background:#0d1117;border:1px solid #21262d;border-radius:6px;padding:10px 14px;margin-bottom:8px">';
+    // Header row: icon + name + weight + score
+    h+='<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">';
+    h+='<span style="font-size:16px">'+hint.icon+'</span>';
+    h+='<span style="font-size:13px;font-weight:600;color:#e1e4e8">'+hint.label+'</span>';
+    h+='<span style="font-size:11px;color:#484f58;margin-left:auto">weight: '+(d.weight*100).toFixed(0)+'%</span>';
+    h+='<span style="font-size:14px;font-weight:700;color:'+tcol+';min-width:40px;text-align:right">'+w+'%</span>';
+    h+='</div>';
+    // Progress bar
+    h+='<div style="height:6px;background:#21262d;border-radius:3px;overflow:hidden;margin-bottom:6px">';
+    h+='<div style="width:'+w+'%;height:100%;background:'+bc+';border-radius:3px;transition:width 0.3s"></div></div>';
+    // Description
+    h+='<div style="font-size:11px;color:#8b949e;margin-bottom:4px">'+hint.desc+'</div>';
+    // Reason from scoring engine
+    h+='<div style="font-size:11px;color:'+tcol+'">'+d.reason+'</div>';
+    // Hint: what to do
+    if(!isGood){
+      h+='<div style="font-size:11px;color:#58a6ff;margin-top:4px">\uD83D\uDCA1 '+hint.fix+'</div>';
+    }
+    h+='</div>';
+  }
+  dims.innerHTML=h;
+}
+
 // ═══ TRACE VIEW RENDERING ═══
 function renderTrace(data,status){
   // Health bar

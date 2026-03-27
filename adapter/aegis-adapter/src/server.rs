@@ -181,6 +181,7 @@ pub async fn start(
             }
         }),
         start_time,
+        data_dir: data_dir.clone(),
     });
     let dashboard_router = aegis_dashboard::routes::routes(dashboard_state);
     let dashboard_path = config.dashboard.path.clone();
@@ -646,7 +647,11 @@ pub async fn start(
         prompt_guard_model_dir: prompt_guard_dir,
     };
     let slm_enabled = config.slm.enabled;
-    let hooks = create_middleware_hooks(recorder.clone(), mode, alert_tx.clone(), slm_config, slm_enabled);
+    // Vault allowlist: warden-configured tokens to exclude from scanning.
+    // These are exact-match only — no pattern guessing (that's a bypass vector).
+    // Configure via [vault] allowlist = ["token1", "token2"] in config.toml.
+    let vault_allowlist: Vec<String> = Vec::new(); // TODO: read from config.toml
+    let hooks = create_middleware_hooks(recorder.clone(), mode, alert_tx.clone(), slm_config, slm_enabled, vault_allowlist);
 
     // 7. Build proxy config
     let proxy_config = ProxyConfig {
@@ -757,6 +762,7 @@ fn create_middleware_hooks(
     alert_tx: tokio::sync::broadcast::Sender<aegis_dashboard::DashboardAlert>,
     slm_config: aegis_slm::loopback::LoopbackConfig,
     slm_enabled: bool,
+    vault_allowlist: Vec<String>,
 ) -> MiddlewareHooks {
     match mode {
         Mode::PassThrough => {
@@ -794,7 +800,7 @@ fn create_middleware_hooks(
                     alert_tx,
                 })),
                 slm: slm_hook,
-                vault: Some(Arc::new(VaultHookImpl)),
+                vault: Some(Arc::new(VaultHookImpl { allowlist: vault_allowlist })),
             }
         }
     }
@@ -901,7 +907,7 @@ mod tests {
         let key = ed25519::generate_keypair();
         let recorder = Arc::new(EvidenceRecorder::new_in_memory(key).unwrap());
         let (alert_tx, _) = tokio::sync::broadcast::channel(32);
-        let hooks = create_middleware_hooks(recorder, Mode::ObserveOnly, alert_tx, test_slm_config(), true);
+        let hooks = create_middleware_hooks(recorder, Mode::ObserveOnly, alert_tx, test_slm_config(), true, vec![]);
         assert!(hooks.evidence.is_some());
         assert!(hooks.barrier.is_some());
         assert!(hooks.slm.is_some());
@@ -913,7 +919,7 @@ mod tests {
         let key = ed25519::generate_keypair();
         let recorder = Arc::new(EvidenceRecorder::new_in_memory(key).unwrap());
         let (alert_tx, _) = tokio::sync::broadcast::channel(32);
-        let hooks = create_middleware_hooks(recorder, Mode::ObserveOnly, alert_tx, test_slm_config(), false);
+        let hooks = create_middleware_hooks(recorder, Mode::ObserveOnly, alert_tx, test_slm_config(), false, vec![]);
         assert!(hooks.evidence.is_some());
         assert!(hooks.barrier.is_some());
         assert!(hooks.slm.is_none());
@@ -925,7 +931,7 @@ mod tests {
         let key = ed25519::generate_keypair();
         let recorder = Arc::new(EvidenceRecorder::new_in_memory(key).unwrap());
         let (alert_tx, _) = tokio::sync::broadcast::channel(32);
-        let hooks = create_middleware_hooks(recorder, Mode::PassThrough, alert_tx, test_slm_config(), true);
+        let hooks = create_middleware_hooks(recorder, Mode::PassThrough, alert_tx, test_slm_config(), true, vec![]);
         assert!(hooks.evidence.is_none());
         assert!(hooks.barrier.is_none());
         assert!(hooks.slm.is_none());

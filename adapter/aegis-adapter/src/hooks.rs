@@ -162,7 +162,12 @@ impl EvidenceHook for EvidenceHookImpl {
 ///
 /// Scans request/response bodies for plaintext credentials.
 /// Detection is always on; enforcement depends on mode.
-pub struct VaultHookImpl;
+/// Known-safe tokens (proxy API key, agent bearer tokens) are excluded.
+pub struct VaultHookImpl {
+    /// Tokens to exclude from vault scanning (known-safe credentials
+    /// that appear in every request — e.g. upstream API key, agent auth tokens).
+    pub allowlist: Vec<String>,
+}
 
 impl VaultHook for VaultHookImpl {
     fn scan<'a>(
@@ -170,7 +175,8 @@ impl VaultHook for VaultHookImpl {
         content: &'a str,
     ) -> Pin<Box<dyn Future<Output = VaultDecision> + Send + 'a>> {
         Box::pin(async move {
-            let result = scanner::scan_text(content);
+            let allowlist_refs: Vec<&str> = self.allowlist.iter().map(|s| s.as_str()).collect();
+            let result = scanner::scan_text_filtered(content, &allowlist_refs);
             if result.findings.is_empty() {
                 VaultDecision::Clean
             } else {
@@ -660,7 +666,7 @@ mod tests {
 
     #[tokio::test]
     async fn vault_hook_detects_secrets() {
-        let hook = VaultHookImpl;
+        let hook = VaultHookImpl { allowlist: vec![] };
         let content = "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.test_payload_data";
         let decision = hook.scan(content).await;
         match decision {
@@ -673,7 +679,7 @@ mod tests {
 
     #[tokio::test]
     async fn vault_hook_clean_content() {
-        let hook = VaultHookImpl;
+        let hook = VaultHookImpl { allowlist: vec![] };
         let decision = hook.scan("Hello, how are you?").await;
         assert_eq!(decision, VaultDecision::Clean);
     }

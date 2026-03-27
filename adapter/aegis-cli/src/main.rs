@@ -39,6 +39,7 @@ use clap::{Parser, Subcommand};
 use aegis_adapter::config::AdapterConfig;
 
 mod trace;
+mod trustmark_cmd;
 use aegis_adapter::Mode;
 
 #[derive(Parser)]
@@ -162,6 +163,17 @@ enum Commands {
     Trust {
         #[command(subcommand)]
         action: TrustCommands,
+    },
+
+    /// TRUSTMARK score — 6-dimension trust score
+    Trustmark {
+        /// Show full dimension breakdown (default if no subcommand)
+        #[arg(long)]
+        json: bool,
+
+        /// Aegis proxy URL
+        #[arg(long, default_value = "http://127.0.0.1:3141")]
+        aegis_url: String,
     },
 
     /// Set the upstream LLM provider
@@ -471,6 +483,11 @@ fn main() {
             } else {
                 eprintln!("  chain: not initialized (no evidence.db)");
             }
+
+            // TRUSTMARK score (from local data — no server needed)
+            let signals = aegis_trustmark::gather::gather_local_signals(&config.data_dir);
+            let score = aegis_trustmark::scoring::TrustmarkScore::compute(&signals);
+            eprintln!("  trustmark: {:.1}%", score.total * 100.0);
         }
 
         Some(Commands::Scan { path }) => {
@@ -939,6 +956,10 @@ fn main() {
                 health,
                 num,
             );
+        }
+
+        Some(Commands::Trustmark { json, aegis_url }) => {
+            trustmark_cmd::run(&aegis_url, json);
         }
 
         Some(Commands::Version) => {

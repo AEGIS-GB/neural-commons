@@ -206,7 +206,18 @@ pub fn redact_text(content: &str) -> (String, ScanResult) {
 }
 
 /// Scan arbitrary text for plaintext credentials.
+/// Scan text for credentials. Use `scan_text_filtered` to exclude known-safe tokens.
 pub fn scan_text(content: &str) -> ScanResult {
+    scan_text_filtered(content, &[])
+}
+
+/// Scan text for credentials, excluding matches that contain any of the `allowlist` strings.
+///
+/// Use this to skip known-safe patterns like:
+/// - The proxy's own upstream API key (appears in every request)
+/// - The agent's authorized bearer tokens (e.g. MoltBook API key in tool calls)
+/// - Known example patterns from documentation
+pub fn scan_text_filtered(content: &str, allowlist: &[&str]) -> ScanResult {
     let mut findings = Vec::new();
 
     for pdef in PATTERNS {
@@ -219,6 +230,12 @@ pub fn scan_text(content: &str) -> ScanResult {
             let full_match = caps.get(0).unwrap();
             let secret_match = caps.get(pdef.secret_group).unwrap_or(full_match);
             let secret_text = secret_match.as_str();
+
+            // Skip only explicitly allowlisted tokens (warden-configured).
+            // No pattern guessing — that's a bypass vector.
+            if allowlist.iter().any(|safe| secret_text == *safe) {
+                continue;
+            }
 
             findings.push(Finding {
                 credential_type: pdef.credential_type.clone(),
@@ -236,6 +253,7 @@ pub fn scan_text(content: &str) -> ScanResult {
 
     ScanResult { findings }
 }
+
 
 /// Scan a file on disk for plaintext credentials.
 pub fn scan_file(path: &Path) -> Result<ScanResult, VaultError> {
