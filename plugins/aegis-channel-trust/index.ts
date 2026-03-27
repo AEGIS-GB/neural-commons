@@ -74,7 +74,9 @@ const plugin: OpenClawPluginDefinition = {
       api.config?.plugins?.entries?.["aegis-channel-trust"]?.identityKeyPath ??
       DEFAULT_KEY_PATH;
 
-    let lastRegistered = "";
+    // No caching — always register. Aegis may restart and lose the
+    // ACTIVE_CHANNEL state. The registration call is <2ms and signed,
+    // so repeating it is cheap and safe.
     let secretKey: Buffer | null = null;
 
     // Try to load the identity key for signing — search multiple paths
@@ -106,8 +108,6 @@ const plugin: OpenClawPluginDefinition = {
     }
 
     async function registerChannel(channel: string, user: string) {
-      const key = `${channel}:${user}`;
-      if (key === lastRegistered) return;
 
       const ts = Date.now();
       const body: Record<string, unknown> = { channel, user, ts };
@@ -134,7 +134,6 @@ const plugin: OpenClawPluginDefinition = {
             trust_level: string;
             ssrf_allowed: boolean;
           };
-          lastRegistered = key;
           api.log?.debug?.(
             `Aegis: registered ${channel} → trust=${data.trust_level} signed=${!!secretKey}`
           );
