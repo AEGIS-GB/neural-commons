@@ -694,11 +694,18 @@ pub async fn start(
     let traffic_recorder: Arc<aegis_proxy::proxy::TrafficRecorder> = {
         let ts = traffic_store.clone();
         Arc::new(move |method: &str, path: &str, status: u16, req: &[u8], resp: &[u8], dur: u64, streaming: bool, slm_verdict: Option<&aegis_proxy::middleware::SlmVerdict>, channel: Option<&str>, trust_level: Option<&str>, model: Option<&str>| {
-            let (slm_dur, slm_action, slm_score) = match slm_verdict {
-                Some(v) => (Some(v.screening_ms), Some(v.action.as_str()), Some(v.threat_score)),
-                None => (None, None, None),
+            let (slm_dur, slm_action, slm_score, slm_reason, slm_explanation, slm_annotations) = match slm_verdict {
+                Some(v) => {
+                    let annotations = v.annotations.as_ref().map(|a| {
+                        serde_json::to_string(a).unwrap_or_default()
+                    });
+                    (Some(v.screening_ms), Some(v.action.as_str()), Some(v.threat_score),
+                     v.reason.as_deref(), v.explanation.as_deref(), annotations)
+                }
+                None => (None, None, None, None, None, None),
             };
-            ts.record(method, path, status, req, resp, dur, streaming, slm_dur, slm_action, slm_score, channel, trust_level, model);
+            ts.record(method, path, status, req, resp, dur, streaming, slm_dur, slm_action, slm_score, channel, trust_level, model,
+                slm_reason, slm_explanation, slm_annotations.as_deref());
             ts.last_id()
         })
     };

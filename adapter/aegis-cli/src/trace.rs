@@ -196,7 +196,7 @@ fn show_table(
         })
         .map(|mins| now_ms - mins * 60_000);
 
-    let mut entries: Vec<&TrafficSummary> = traffic.entries.iter().rev().collect();
+    let mut entries: Vec<&TrafficSummary> = traffic.entries.iter().collect();
 
     // Apply time filter
     if let Some(cutoff) = cutoff_ms {

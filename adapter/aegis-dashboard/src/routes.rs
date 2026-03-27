@@ -763,6 +763,9 @@ async fn api_traffic(
             "channel": e.channel,
             "trust_level": e.trust_level,
             "model": e.model,
+            "slm_reason": e.slm_reason,
+            "slm_explanation": e.slm_explanation,
+            "slm_annotations": e.slm_annotations,
         })
     }).collect();
 

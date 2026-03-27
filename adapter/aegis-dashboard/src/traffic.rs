@@ -47,6 +47,15 @@ pub struct TrafficEntry {
     /// LLM model used (e.g. "gpt-4o-mini").
     #[serde(skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
+    /// SLM screening reason (for quarantine/reject).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub slm_reason: Option<String>,
+    /// SLM explanation text.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub slm_explanation: Option<String>,
+    /// SLM detected patterns as JSON string (annotations).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub slm_annotations: Option<String>,
 }
 
 const MAX_BODY_CAPTURE: usize = 256 * 1024; // 256KB per body — large enough for streaming responses with tool schemas
@@ -83,6 +92,9 @@ impl TrafficStore {
         channel: Option<&str>,
         trust_level: Option<&str>,
         model: Option<&str>,
+        slm_reason: Option<&str>,
+        slm_explanation: Option<&str>,
+        slm_annotations: Option<&str>,
     ) {
         let req_str = String::from_utf8_lossy(
             &req_body[..req_body.len().min(MAX_BODY_CAPTURE)]
@@ -119,6 +131,9 @@ impl TrafficStore {
             channel: channel.map(|s| s.to_string()),
             trust_level: trust_level.map(|s| s.to_string()),
             model: model.map(|s| s.to_string()),
+            slm_reason: slm_reason.map(|s| s.to_string()),
+            slm_explanation: slm_explanation.map(|s| s.to_string()),
+            slm_annotations: slm_annotations.map(|s| s.to_string()),
         };
 
         let mut entries = self.entries.write().unwrap();

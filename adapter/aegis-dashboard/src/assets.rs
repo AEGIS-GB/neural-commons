@@ -1153,12 +1153,36 @@ async function showTraceDetail(id){
     h+=flowStep(trustCol,'2','Channel Trust: '+trust,channel==='—'?'No channel cert':'Channel: '+channel,'+0ms');
     // Step 3: SLM
     const slmCol=slm==='admit'?'fd-ok':slm==='reject'?'fd-err':'fd-warn';
+    const slmCol2=slm==='admit'?'#3fb950':slm==='reject'?'#f85149':'#d29922';
     let slmBody='<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:4px">';
-    slmBody+='<span class="slm-stage"><b style="color:#8b949e;font-size:10px">DEEP SLM</b><br><span style="color:'+(slm==='admit'?'#3fb950':'#d29922')+'">'+slm+'</span> · '+threat+'/10000<br><span style="color:#484f58">'+slmMs+'ms</span></span>';
+    slmBody+='<span class="slm-stage"><b style="color:#8b949e;font-size:10px">DEEP SLM</b><br><span style="color:'+slmCol2+'">'+slm+'</span> · '+threat+'/10000<br><span style="color:#484f58">'+slmMs+'ms</span></span>';
     slmBody+='</div>';
+    // SLM detail: reason, explanation, annotations
+    const slmReason=e.slm_reason||'';
+    const slmExplanation=e.slm_explanation||'';
+    const slmAnnotations=e.slm_annotations||'';
+    if(slmReason||slmExplanation||slmAnnotations){
+      slmBody+='<div style="margin-top:8px;padding:8px 10px;background:#0d1117;border:1px solid #21262d;border-radius:4px;font-size:12px">';
+      if(slmReason)slmBody+='<div style="margin-bottom:4px"><b style="color:#8b949e">Reason:</b> <span style="color:'+slmCol2+'">'+escHtml(slmReason)+'</span></div>';
+      if(slmExplanation)slmBody+='<div style="margin-bottom:4px"><b style="color:#8b949e">Explanation:</b> '+escHtml(slmExplanation)+'</div>';
+      if(slmAnnotations){
+        try{
+          const anns=JSON.parse(slmAnnotations);
+          if(anns.length>0){
+            slmBody+='<div><b style="color:#8b949e">Detected patterns:</b><ul style="margin:4px 0 0 16px;padding:0">';
+            for(const a of anns){slmBody+='<li><span style="color:#79c0ff">'+escHtml(a.pattern||'')+'</span>: <span style="color:#e1e4e8">"'+escHtml(a.excerpt||'')+'"</span></li>';}
+            slmBody+='</ul></div>';
+          }
+        }catch(ex){}
+      }
+      slmBody+='</div>';
+    }
     h+=flowStepRich(slmCol,'3','SLM Screening — '+slm,slmBody,'+'+slmMs+'ms');
     // Step 4: Upstream
-    h+=flowStep('fd-ok','4','Upstream Response',model+' · '+(e.is_streaming?'streaming':'buffered')+' · '+reqTok+' prompt + '+rspTok+' completion = '+(reqTok+rspTok)+' tokens','+'+(dur-100)+'ms');
+    const reqTokStr=reqTok>1000?(reqTok/1000).toFixed(1)+'K':reqTok;
+    const rspTokStr=rspTok>1000?(rspTok/1000).toFixed(1)+'K':rspTok;
+    const totTokStr=(reqTok+rspTok)>1000?((reqTok+rspTok)/1000).toFixed(1)+'K':(reqTok+rspTok);
+    h+=flowStep('fd-ok','4','Response: '+e.status+' '+(e.is_streaming?'(streaming)':''),model+' · Request: '+reqTokStr+' tokens · Response: '+rspTokStr+' tokens · Total: '+totTokStr+' tokens','+'+(dur-100)+'ms');
     // Step 5: Vault
     h+=flowStep('fd-ok','5','Vault scan: clean','No credentials detected in response','+'+dur+'ms');
     // Step 6: Evidence
