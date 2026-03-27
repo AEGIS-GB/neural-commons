@@ -1,23 +1,19 @@
-# Auto-release — bumps version, builds cross-platform binaries, publishes GitHub Release
+# Release — builds cross-platform binaries and publishes GitHub Release
 #
-# Flow: PR merged to main → this workflow does everything:
-#   1. Run tests
-#   2. Bump version in Cargo.toml (patch by default)
-#   3. Commit + tag
-#   4. Cross-compile 4 platforms
-#   5. Publish GitHub Release with binaries + checksums
+# Triggered by pushing a version tag (not every merge to main).
 #
-# To control bump type, add a label to the PR:
-#   "release:minor" → 0.2.0 → 0.3.0
-#   "release:major" → 0.2.0 → 1.0.0
-#   "release:skip"  → no release
-#   (no label)      → patch bump: 0.2.0 → 0.2.1
+# Flow:
+#   1. You bump version in Cargo.toml and merge the PR
+#   2. You push a tag: git tag v0.3.0 && git push origin v0.3.0
+#   3. This workflow runs: test → build 4 platforms → publish release
+#
+# Or use GitHub UI: Releases → Draft new release → Create tag
 
-name: Auto Release
+name: Release
 
 on:
   push:
-    branches: [main]
+    tags: ['v*']
 
 permissions:
   contents: write
@@ -37,112 +33,10 @@ jobs:
       - name: Run workspace tests
         run: cargo test --workspace
 
-  # ── Bump Version ──────────────────────────────────────────
-  bump:
-    name: Bump Version & Tag
-    needs: test
-    runs-on: ubuntu-latest
-    outputs:
-      skip: ${{ steps.skip_check.outputs.skip }}
-      tag: ${{ steps.version.outputs.tag }}
-      next: ${{ steps.version.outputs.next }}
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          token: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Check for release:skip label on merged PR
-        id: skip_check
-        run: |
-          COMMIT_SHA="${{ github.sha }}"
-          PR_NUMBER=$(gh pr list --state merged --search "$COMMIT_SHA" --json number --jq '.[0].number // empty')
-
-          if [ -n "$PR_NUMBER" ]; then
-            LABELS=$(gh pr view "$PR_NUMBER" --json labels --jq '.labels[].name' 2>/dev/null || echo "")
-            echo "pr=$PR_NUMBER" >> "$GITHUB_OUTPUT"
-            echo "labels=$LABELS" >> "$GITHUB_OUTPUT"
-
-            if echo "$LABELS" | grep -q "release:skip"; then
-              echo "skip=true" >> "$GITHUB_OUTPUT"
-              echo "::notice::Skipping release (release:skip label found on PR #$PR_NUMBER)"
-            else
-              echo "skip=false" >> "$GITHUB_OUTPUT"
-            fi
-          else
-            echo "skip=false" >> "$GITHUB_OUTPUT"
-            echo "labels=" >> "$GITHUB_OUTPUT"
-          fi
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Determine bump type
-        if: steps.skip_check.outputs.skip != 'true'
-        id: bump
-        run: |
-          LABELS="${{ steps.skip_check.outputs.labels }}"
-          if echo "$LABELS" | grep -q "release:major"; then
-            echo "type=major" >> "$GITHUB_OUTPUT"
-          elif echo "$LABELS" | grep -q "release:minor"; then
-            echo "type=minor" >> "$GITHUB_OUTPUT"
-          else
-            echo "type=patch" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Read current version and compute next
-        if: steps.skip_check.outputs.skip != 'true'
-        id: version
-        run: |
-          CURRENT=$(grep '^version = ' Cargo.toml | head -1 | sed 's/version = "\(.*\)"/\1/')
-          IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT"
-          BUMP="${{ steps.bump.outputs.type }}"
-
-          case "$BUMP" in
-            major) MAJOR=$((MAJOR + 1)); MINOR=0; PATCH=0 ;;
-            minor) MINOR=$((MINOR + 1)); PATCH=0 ;;
-            patch) PATCH=$((PATCH + 1)) ;;
-          esac
-
-          NEXT="${MAJOR}.${MINOR}.${PATCH}"
-          echo "current=$CURRENT" >> "$GITHUB_OUTPUT"
-          echo "next=$NEXT" >> "$GITHUB_OUTPUT"
-          echo "tag=v$NEXT" >> "$GITHUB_OUTPUT"
-          echo "::notice::Version bump: $CURRENT → $NEXT ($BUMP)"
-
-      - name: Check tag doesn't already exist
-        if: steps.skip_check.outputs.skip != 'true'
-        run: |
-          TAG="${{ steps.version.outputs.tag }}"
-          if git rev-parse "$TAG" >/dev/null 2>&1; then
-            echo "::error::Tag $TAG already exists — skipping"
-            exit 1
-          fi
-
-      - name: Bump version in Cargo.toml
-        if: steps.skip_check.outputs.skip != 'true'
-        run: |
-          CURRENT="${{ steps.version.outputs.current }}"
-          NEXT="${{ steps.version.outputs.next }}"
-          sed -i "s/^version = \"$CURRENT\"/version = \"$NEXT\"/" Cargo.toml
-          echo "Updated Cargo.toml:"
-          grep '^version = ' Cargo.toml
-
-      - name: Commit and tag
-        if: steps.skip_check.outputs.skip != 'true'
-        run: |
-          TAG="${{ steps.version.outputs.tag }}"
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add Cargo.toml
-          git commit -m "release: $TAG"
-          git tag -a "$TAG" -m "Release $TAG"
-          git push origin main --follow-tags
-
   # ── Build Cross-Platform Binaries ─────────────────────────
   build-release:
     name: Build (${{ matrix.target }})
-    needs: bump
-    if: needs.bump.outputs.skip != 'true'
+    needs: test
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -166,8 +60,6 @@ jobs:
             binary: aegis.exe
     steps:
       - uses: actions/checkout@v4
-        with:
-          ref: ${{ needs.bump.outputs.tag }}
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -202,8 +94,7 @@ jobs:
   # ── Publish GitHub Release ────────────────────────────────
   publish-release:
     name: Publish GitHub Release
-    needs: [bump, build-release]
-    if: needs.bump.outputs.skip != 'true'
+    needs: [build-release]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -263,8 +154,8 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ needs.bump.outputs.tag }}
-          name: "Aegis ${{ needs.bump.outputs.tag }}"
+          tag_name: ${{ github.ref_name }}
+          name: "Aegis ${{ github.ref_name }}"
           body_path: release-notes.md
           files: |
             release-files/aegis-linux-x86_64
