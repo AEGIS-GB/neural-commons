@@ -11,4 +11,5 @@ pub mod scoring;
 pub mod decay;
 pub mod tiers;
 pub mod gather;
+pub mod persist;
 
