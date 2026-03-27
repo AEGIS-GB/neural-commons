@@ -936,17 +936,30 @@ fn parse_sse_response_text(sse_body: &str) -> Option<String> {
         }
     }
 
-    // Second pass: reassemble from delta events (if response.completed was truncated)
+    // Second pass: reassemble from delta events
     let mut text = String::new();
     for line in sse_body.lines() {
         let data = match line.strip_prefix("data: ").or_else(|| line.strip_prefix("data:")) {
-            Some(d) => d,
+            Some(d) => d.trim(),
             None => continue,
         };
+        if data == "[DONE]" { continue; }
         if let Ok(evt) = serde_json::from_str::<serde_json::Value>(data) {
+            // Responses API: response.output_text.delta
             if evt.get("type").and_then(|t| t.as_str()) == Some("response.output_text.delta") {
                 if let Some(delta) = evt.get("delta").and_then(|d| d.as_str()) {
                     text.push_str(delta);
+                }
+            }
+            // Chat Completions API: choices[].delta.content
+            if let Some(choices) = evt.get("choices").and_then(|c| c.as_array()) {
+                for choice in choices {
+                    if let Some(content) = choice.get("delta")
+                        .and_then(|d| d.get("content"))
+                        .and_then(|c| c.as_str())
+                    {
+                        text.push_str(content);
+                    }
                 }
             }
         }
