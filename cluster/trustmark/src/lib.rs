@@ -10,7 +10,5 @@
 pub mod scoring;
 pub mod decay;
 pub mod tiers;
+pub mod gather;
 
-// TODO(D13): Confirm dimension weights
-// TODO(D14): Confirm tier thresholds
-// TODO(D15): Confirm temporal decay half-life
