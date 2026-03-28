@@ -238,6 +238,8 @@ table.dtable .screening-row:hover{background:#1c2128}
 <div class="panel" id="panel-alerts"><div class="card"><h2>Emergency Alerts</h2><p>No alerts.</p></div></div>
 </div>
 <script>
+// Auth: cookie-based. Token is set via ?token= on first visit,
+// server sets HttpOnly cookie and redirects. No JS token handling needed.
 let activeTab='trace';
 let pageVisible=!document.hidden;
 let traceDetailId=null;
