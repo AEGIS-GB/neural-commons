@@ -26,7 +26,8 @@ import fs from "node:fs";
 import path from "node:path";
 
 const DEFAULT_AEGIS_URL = "http://127.0.0.1:3141";
-const DEFAULT_KEY_PATH = "/home/aegis/aegis/neural-commons/.aegis/identity.key";
+// No hardcoded default — must be configured or found via standard search paths.
+// The old default was a dev machine path that silently fell through on any other machine.
 
 /**
  * Sign a channel registration payload with Ed25519.
@@ -72,18 +73,16 @@ const plugin: OpenClawPluginDefinition = {
       DEFAULT_AEGIS_URL;
     const keyPath =
       api.config?.plugins?.entries?.["aegis-channel-trust"]?.identityKeyPath ??
-      DEFAULT_KEY_PATH;
+      null;
 
     let lastRegistered = "";
     let secretKey: Buffer | null = null;
 
-    // Try to load the identity key for signing — search multiple paths
-    const searchPaths = [
-      keyPath,
-      path.join(process.cwd(), ".aegis", "identity.key"),
-      path.join(process.env.HOME || "", ".aegis", "data", "identity.key"),
-      path.join(process.env.HOME || "", "aegis", "neural-commons", ".aegis", "identity.key"),
-    ];
+    // Search for identity key — configured path first, then standard locations only.
+    const searchPaths: string[] = [];
+    if (keyPath) searchPaths.push(keyPath);
+    searchPaths.push(path.join(process.cwd(), ".aegis", "identity.key"));
+    if (process.env.HOME) searchPaths.push(path.join(process.env.HOME, ".aegis", "identity.key"));
     console.log("[aegis-channel-trust] searching for identity key:", searchPaths.map(p => path.resolve(p)).join(", "));
     for (const candidate of searchPaths) {
       try {
@@ -102,7 +101,8 @@ const plugin: OpenClawPluginDefinition = {
       }
     }
     if (!secretKey) {
-      console.log("[aegis-channel-trust] WARNING: identity key not found — registrations will be unsigned");
+      console.error("[aegis-channel-trust] ERROR: identity key not found — registrations will be UNSIGNED, trust verification bypassed!");
+      console.error("[aegis-channel-trust] Configure identityKeyPath in plugins.entries.aegis-channel-trust or ensure .aegis/identity.key exists");
     }
 
     async function registerChannel(channel: string, user: string) {
