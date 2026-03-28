@@ -65,7 +65,10 @@ pub fn resolve_tier(
     } else if is_tier2 {
         // Show what's needed for Tier 3
         if trustmark_score < 0.4 {
-            missing.push(format!("TRUSTMARK score {:.2} < 0.40 required", trustmark_score));
+            missing.push(format!(
+                "TRUSTMARK score {:.2} < 0.40 required",
+                trustmark_score
+            ));
         }
         if evaluator_vouches < 2 {
             missing.push(format!("{}/2 evaluator vouches", evaluator_vouches));
@@ -74,7 +77,10 @@ pub fn resolve_tier(
     } else {
         // Show what's needed for Tier 2
         if identity_age_hours < 72.0 {
-            missing.push(format!("identity age {:.0}h < 72h required", identity_age_hours));
+            missing.push(format!(
+                "identity age {:.0}h < 72h required",
+                identity_age_hours
+            ));
         }
         if !vault_active {
             missing.push("vault scanning not active".into());
@@ -117,8 +123,16 @@ mod tests {
     fn tier2_shows_tier3_requirements() {
         let s = resolve_tier(0.35, 100.0, true, true, 1);
         assert_eq!(s.current, Tier::Tier2);
-        assert!(s.next_tier_requirements.iter().any(|r| r.contains("TRUSTMARK")));
-        assert!(s.next_tier_requirements.iter().any(|r| r.contains("vouches")));
+        assert!(
+            s.next_tier_requirements
+                .iter()
+                .any(|r| r.contains("TRUSTMARK"))
+        );
+        assert!(
+            s.next_tier_requirements
+                .iter()
+                .any(|r| r.contains("vouches"))
+        );
     }
 
     #[test]

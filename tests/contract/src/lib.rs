@@ -6,14 +6,13 @@
 
 #[cfg(test)]
 mod receipt_tests {
-    use aegis_schemas::receipt::{
-        Receipt, ReceiptCore, ReceiptContext, ReceiptType, EnterpriseContext,
-        RollupDetail, RollupHistogram, GENESIS_PREV_HASH,
-        generate_blinding_nonce,
-    };
     use aegis_crypto::rfc8785;
-    use uuid::Uuid;
+    use aegis_schemas::receipt::{
+        EnterpriseContext, GENESIS_PREV_HASH, Receipt, ReceiptContext, ReceiptCore, ReceiptType,
+        RollupDetail, RollupHistogram, generate_blinding_nonce,
+    };
     use std::collections::HashMap;
+    use uuid::Uuid;
 
     fn sample_receipt_core() -> ReceiptCore {
         ReceiptCore {
@@ -68,7 +67,10 @@ mod receipt_tests {
         let core = sample_receipt_core();
         let canonical1 = rfc8785::canonicalize(&core).unwrap();
         let canonical2 = rfc8785::canonicalize(&core).unwrap();
-        assert_eq!(canonical1, canonical2, "Canonical JSON must be deterministic");
+        assert_eq!(
+            canonical1, canonical2,
+            "Canonical JSON must be deterministic"
+        );
     }
 
     #[test]
@@ -85,7 +87,12 @@ mod receipt_tests {
     fn blinding_nonce_is_mandatory_and_hex() {
         let context = sample_receipt_context();
         assert_eq!(context.blinding_nonce.len(), 64); // 32 bytes = 64 hex chars
-        assert!(context.blinding_nonce.chars().all(|c| c.is_ascii_hexdigit()));
+        assert!(
+            context
+                .blinding_nonce
+                .chars()
+                .all(|c| c.is_ascii_hexdigit())
+        );
     }
 
     #[test]
@@ -116,7 +123,10 @@ mod receipt_tests {
         };
         let json = serde_json::to_value(&context).unwrap();
         // These fields should NOT be present (omitted, not null)
-        assert!(json.get("action").is_none(), "None fields must be omitted, not null");
+        assert!(
+            json.get("action").is_none(),
+            "None fields must be omitted, not null"
+        );
         assert!(json.get("subject").is_none());
         assert!(json.get("trigger").is_none());
         assert!(json.get("outcome").is_none());
@@ -147,7 +157,9 @@ mod receipt_tests {
         };
         let json = serde_json::to_value(&context).unwrap();
         // Enterprise is a nested object, not flattened
-        let enterprise = json.get("enterprise").expect("enterprise should be present");
+        let enterprise = json
+            .get("enterprise")
+            .expect("enterprise should be present");
         assert!(enterprise.is_object());
         assert_eq!(
             enterprise.get("fleet_id").unwrap().as_str().unwrap(),
@@ -203,7 +215,10 @@ mod receipt_tests {
         let core = sample_receipt_core();
         let json = serde_json::to_value(&core).unwrap();
         let ts = json.get("ts_ms").unwrap();
-        assert!(ts.is_i64() || ts.is_u64(), "ts_ms must be integer, not float");
+        assert!(
+            ts.is_i64() || ts.is_u64(),
+            "ts_ms must be integer, not float"
+        );
     }
 
     #[test]
@@ -240,8 +255,8 @@ mod receipt_tests {
 
 #[cfg(test)]
 mod claim_tests {
-    use aegis_schemas::claim::{Claim, ClaimType, TemporalScope};
     use aegis_crypto::rfc8785;
+    use aegis_schemas::claim::{Claim, ClaimType, TemporalScope};
     use uuid::Uuid;
 
     fn sample_claim() -> Claim {
@@ -301,7 +316,10 @@ mod claim_tests {
         assert!(json.get("distinct_warden_count").is_none());
         // end_ms is inside temporal_scope, not at top level // end_ms is inside temporal_scope
         let scope = json.get("temporal_scope").unwrap();
-        assert!(scope.get("end_ms").is_none(), "None end_ms should be omitted");
+        assert!(
+            scope.get("end_ms").is_none(),
+            "None end_ms should be omitted"
+        );
     }
 
     #[test]
@@ -310,14 +328,17 @@ mod claim_tests {
         let json = serde_json::to_value(&claim).unwrap();
         let scope = json.get("temporal_scope").unwrap();
         let start = scope.get("start_ms").unwrap();
-        assert!(start.is_i64() || start.is_u64(), "start_ms must be integer epoch ms");
+        assert!(
+            start.is_i64() || start.is_u64(),
+            "start_ms must be integer epoch ms"
+        );
     }
 }
 
 #[cfg(test)]
 mod trustmark_tests {
-    use aegis_schemas::trustmark::{TrustmarkScore, TrustmarkDimensions, Tier};
     use aegis_crypto::rfc8785;
+    use aegis_schemas::trustmark::{Tier, TrustmarkDimensions, TrustmarkScore};
 
     #[test]
     fn trustmark_round_trip() {
@@ -381,8 +402,12 @@ mod trustmark_tests {
         // Check all dimension values are integers
         let dims = json.get("dimensions").unwrap();
         for key in [
-            "relay_reliability", "persona_integrity", "chain_integrity",
-            "contribution_volume", "temporal_consistency", "vault_hygiene",
+            "relay_reliability",
+            "persona_integrity",
+            "chain_integrity",
+            "contribution_volume",
+            "temporal_consistency",
+            "vault_hygiene",
         ] {
             let val = dims.get(key).unwrap();
             assert!(val.is_u64(), "{} must be integer basis points", key);
@@ -406,8 +431,8 @@ mod trustmark_tests {
 #[cfg(test)]
 mod crypto_tests {
     use aegis_crypto::bip39::{
-        create_identity, restore_from_mnemonic, generate_mnemonic,
-        mnemonic_to_seed, derive_signing_key, KeyPurpose, KDF_VERSION,
+        KDF_VERSION, KeyPurpose, create_identity, derive_signing_key, generate_mnemonic,
+        mnemonic_to_seed, restore_from_mnemonic,
     };
     use aegis_crypto::ed25519::{fingerprint_hex, pubkey_hex};
     use ed25519_dalek::Signer;
@@ -439,10 +464,19 @@ mod crypto_tests {
         let mesh = derive_signing_key(&seed, KeyPurpose::MeshEncryption).unwrap();
 
         // All four purposes produce different keys
-        let keys = [signing.to_bytes(), transport.to_bytes(), vault.to_bytes(), mesh.to_bytes()];
+        let keys = [
+            signing.to_bytes(),
+            transport.to_bytes(),
+            vault.to_bytes(),
+            mesh.to_bytes(),
+        ];
         for i in 0..keys.len() {
             for j in (i + 1)..keys.len() {
-                assert_ne!(keys[i], keys[j], "Keys at purpose {} and {} must differ", i, j);
+                assert_ne!(
+                    keys[i], keys[j],
+                    "Keys at purpose {} and {} must differ",
+                    i, j
+                );
             }
         }
     }
@@ -452,7 +486,10 @@ mod crypto_tests {
         let (_, key, _) = create_identity("").unwrap();
         let fp = fingerprint_hex(&key.verifying_key());
         assert_eq!(fp.len(), 64); // 32 bytes = 64 hex chars
-        assert!(fp.chars().all(|c| c.is_ascii_hexdigit() && !c.is_uppercase()));
+        assert!(
+            fp.chars()
+                .all(|c| c.is_ascii_hexdigit() && !c.is_uppercase())
+        );
     }
 
     #[test]
@@ -460,7 +497,10 @@ mod crypto_tests {
         let (_, key, _) = create_identity("").unwrap();
         let pk = pubkey_hex(&key.verifying_key());
         assert_eq!(pk.len(), 64);
-        assert!(pk.chars().all(|c| c.is_ascii_hexdigit() && !c.is_uppercase()));
+        assert!(
+            pk.chars()
+                .all(|c| c.is_ascii_hexdigit() && !c.is_uppercase())
+        );
     }
 
     #[test]

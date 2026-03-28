@@ -9,10 +9,10 @@ use std::sync::Mutex;
 use aegis_crypto::ed25519::{self, SigningKey};
 use aegis_schemas::{Receipt, ReceiptContext, ReceiptType, receipt::generate_blinding_nonce};
 
+use crate::EvidenceError;
 use crate::chain::{self, ChainState};
 use crate::merkle;
 use crate::store::EvidenceStore;
-use crate::EvidenceError;
 
 /// Default number of receipts before an automatic Merkle rollup.
 pub const DEFAULT_ROLLUP_THRESHOLD: u64 = 100;
@@ -81,7 +81,9 @@ impl EvidenceRecorder {
         receipt_type: ReceiptType,
         context: ReceiptContext,
     ) -> Result<Receipt, EvidenceError> {
-        let mut chain_state = self.chain_state.lock()
+        let mut chain_state = self
+            .chain_state
+            .lock()
             .map_err(|e| EvidenceError::ChainError(format!("lock poisoned: {e}")))?;
 
         let receipt = chain::create_receipt(
@@ -94,7 +96,9 @@ impl EvidenceRecorder {
 
         let new_state = chain::advance_chain_state(&chain_state, &receipt);
 
-        let store = self.store.lock()
+        let store = self
+            .store
+            .lock()
             .map_err(|e| EvidenceError::StoreError(format!("lock poisoned: {e}")))?;
         store.append_receipt(&receipt, &new_state)?;
 
@@ -125,11 +129,17 @@ impl EvidenceRecorder {
 
     /// Create a Merkle rollup covering receipts since the last rollup.
     pub fn rollup(&self) -> Result<Receipt, EvidenceError> {
-        let store = self.store.lock()
+        let store = self
+            .store
+            .lock()
             .map_err(|e| EvidenceError::StoreError(format!("lock poisoned: {e}")))?;
-        let mut chain_state = self.chain_state.lock()
+        let mut chain_state = self
+            .chain_state
+            .lock()
             .map_err(|e| EvidenceError::ChainError(format!("lock poisoned: {e}")))?;
-        let mut last_rollup = self.last_rollup_seq.lock()
+        let mut last_rollup = self
+            .last_rollup_seq
+            .lock()
             .map_err(|e| EvidenceError::ChainError(format!("lock poisoned: {e}")))?;
 
         let start_seq = *last_rollup + 1;
@@ -181,7 +191,9 @@ impl EvidenceRecorder {
 
     /// Verify the entire evidence chain from genesis.
     pub fn verify_chain(&self) -> Result<bool, EvidenceError> {
-        let store = self.store.lock()
+        let store = self
+            .store
+            .lock()
             .map_err(|e| EvidenceError::StoreError(format!("lock poisoned: {e}")))?;
         store.verify_full_chain()
     }
@@ -192,9 +204,13 @@ impl EvidenceRecorder {
         start_seq: Option<u64>,
         end_seq: Option<u64>,
     ) -> Result<Vec<Receipt>, EvidenceError> {
-        let store = self.store.lock()
+        let store = self
+            .store
+            .lock()
             .map_err(|e| EvidenceError::StoreError(format!("lock poisoned: {e}")))?;
-        let chain_state = self.chain_state.lock()
+        let chain_state = self
+            .chain_state
+            .lock()
             .map_err(|e| EvidenceError::ChainError(format!("lock poisoned: {e}")))?;
 
         let start = start_seq.unwrap_or(1);
@@ -204,7 +220,8 @@ impl EvidenceRecorder {
 
     /// Get the current chain head info.
     pub fn chain_head(&self) -> ChainState {
-        self.chain_state.lock()
+        self.chain_state
+            .lock()
             .map(|s| s.clone())
             .unwrap_or_else(|_| chain::init_genesis())
     }
@@ -232,20 +249,16 @@ mod tests {
         assert_eq!(head.head_hash, GENESIS_PREV_HASH);
 
         // Record first receipt
-        let r1 = recorder.record_simple(
-            ReceiptType::ApiCall,
-            "chat_completion",
-            "forwarded",
-        ).unwrap();
+        let r1 = recorder
+            .record_simple(ReceiptType::ApiCall, "chat_completion", "forwarded")
+            .unwrap();
         assert_eq!(r1.core.seq, 1);
         assert_eq!(r1.core.prev_hash, GENESIS_PREV_HASH);
 
         // Record second
-        let r2 = recorder.record_simple(
-            ReceiptType::SlmAnalysis,
-            "screen_prompt",
-            "admitted",
-        ).unwrap();
+        let r2 = recorder
+            .record_simple(ReceiptType::SlmAnalysis, "screen_prompt", "admitted")
+            .unwrap();
         assert_eq!(r2.core.seq, 2);
 
         // Chain head updated
@@ -260,11 +273,9 @@ mod tests {
         let recorder = EvidenceRecorder::new_in_memory(key).unwrap();
 
         for i in 0..5 {
-            recorder.record_simple(
-                ReceiptType::ApiCall,
-                &format!("action_{i}"),
-                "ok",
-            ).unwrap();
+            recorder
+                .record_simple(ReceiptType::ApiCall, &format!("action_{i}"), "ok")
+                .unwrap();
         }
 
         assert!(recorder.verify_chain().unwrap());
@@ -276,7 +287,9 @@ mod tests {
         let recorder = EvidenceRecorder::new_in_memory(key).unwrap();
 
         for _ in 0..10 {
-            recorder.record_simple(ReceiptType::ApiCall, "test", "ok").unwrap();
+            recorder
+                .record_simple(ReceiptType::ApiCall, "test", "ok")
+                .unwrap();
         }
 
         let rollup_receipt = recorder.rollup().unwrap();
@@ -293,7 +306,9 @@ mod tests {
         let recorder = EvidenceRecorder::new_in_memory(key).unwrap();
 
         for _ in 0..5 {
-            recorder.record_simple(ReceiptType::ApiCall, "test", "ok").unwrap();
+            recorder
+                .record_simple(ReceiptType::ApiCall, "test", "ok")
+                .unwrap();
         }
 
         let all = recorder.export(None, None).unwrap();

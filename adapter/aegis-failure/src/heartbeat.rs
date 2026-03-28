@@ -23,9 +23,15 @@ pub struct HeartbeatConfig {
     pub timeout_secs: u64,
 }
 
-fn default_interval() -> u64 { 30 }
-fn default_failure_threshold() -> u32 { 3 }
-fn default_timeout() -> u64 { 5 }
+fn default_interval() -> u64 {
+    30
+}
+fn default_failure_threshold() -> u32 {
+    3
+}
+fn default_timeout() -> u64 {
+    5
+}
 
 impl Default for HeartbeatConfig {
     fn default() -> Self {

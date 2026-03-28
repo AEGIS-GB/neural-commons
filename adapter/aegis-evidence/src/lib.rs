@@ -5,12 +5,12 @@
 
 pub mod chain;
 pub mod merkle;
-pub mod store;
 pub mod recorder;
+pub mod store;
 
 pub use chain::ChainState;
-pub use store::EvidenceStore;
 pub use recorder::EvidenceRecorder;
+pub use store::EvidenceStore;
 
 use thiserror::Error;
 

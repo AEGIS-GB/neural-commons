@@ -121,7 +121,12 @@ impl Default for ChannelTrust {
 
 impl ChannelTrust {
     /// Create a resolved trust context from a trust level.
-    pub fn from_level(level: TrustLevel, channel: Option<String>, user: Option<String>, verified: bool) -> Self {
+    pub fn from_level(
+        level: TrustLevel,
+        channel: Option<String>,
+        user: Option<String>,
+        verified: bool,
+    ) -> Self {
         let ssrf_allowed = matches!(level, TrustLevel::Full);
         Self {
             channel,

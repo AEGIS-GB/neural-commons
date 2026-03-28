@@ -89,8 +89,7 @@ impl FileManifest {
     /// Write the manifest to the data directory.
     pub fn write_to(&self, data_dir: &Path) -> Result<(), std::io::Error> {
         let manifest_path = data_dir.join(MANIFEST_FILENAME);
-        let json = serde_json::to_string_pretty(self)
-            .map_err(std::io::Error::other)?;
+        let json = serde_json::to_string_pretty(self).map_err(std::io::Error::other)?;
 
         // Atomic write: tmp then rename
         let tmp_path = manifest_path.with_extension("tmp");
@@ -137,10 +136,7 @@ impl FileManifest {
     }
 
     /// Verify the Ed25519 signature on this manifest.
-    pub fn verify_signature(
-        &self,
-        verifying_key: &aegis_crypto::ed25519::VerifyingKey,
-    ) -> bool {
+    pub fn verify_signature(&self, verifying_key: &aegis_crypto::ed25519::VerifyingKey) -> bool {
         use aegis_crypto::ed25519::Signature;
 
         let sig_bytes = match hex::decode(&self.signature) {
@@ -190,9 +186,7 @@ impl FileManifest {
                     }
                 }
                 Err(_) => {
-                    results.push(ManifestCheckResult::Missing {
-                        path: rel_path,
-                    });
+                    results.push(ManifestCheckResult::Missing { path: rel_path });
                 }
             }
         }
@@ -210,7 +204,8 @@ impl FileManifest {
     ) {
         use aegis_crypto::ed25519::Signer;
 
-        self.files.insert(rel_path.to_string(), new_hash.to_string());
+        self.files
+            .insert(rel_path.to_string(), new_hash.to_string());
         self.written_at_ms = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .expect("system clock before Unix epoch")
@@ -243,10 +238,8 @@ mod tests {
         fs::write(ws.join("SOUL.md"), b"soul content").unwrap();
         fs::write(ws.join("AGENTS.md"), b"agents content").unwrap();
 
-        let store = SnapshotStore::load(
-            ws,
-            &[PathBuf::from("SOUL.md"), PathBuf::from("AGENTS.md")],
-        );
+        let store =
+            SnapshotStore::load(ws, &[PathBuf::from("SOUL.md"), PathBuf::from("AGENTS.md")]);
 
         let key = test_signing_key();
         let manifest = FileManifest::from_snapshot(&store, &key);
@@ -267,7 +260,9 @@ mod tests {
         let mut manifest = FileManifest::from_snapshot(&store, &key);
 
         // Tamper with the manifest
-        manifest.files.insert("SOUL.md".to_string(), "deadbeef".to_string());
+        manifest
+            .files
+            .insert("SOUL.md".to_string(), "deadbeef".to_string());
 
         assert!(!manifest.verify_signature(&key.verifying_key()));
     }
@@ -340,7 +335,10 @@ mod tests {
 
         let results = manifest.compare_against_disk(ws);
         assert_eq!(results.len(), 1);
-        assert!(matches!(results[0], ManifestCheckResult::HashChanged { .. }));
+        assert!(matches!(
+            results[0],
+            ManifestCheckResult::HashChanged { .. }
+        ));
     }
 
     #[test]

@@ -62,7 +62,7 @@ pub fn parse_channel_cert(header_value: &str) -> Option<ChannelCert> {
 /// Verify the Ed25519 signature on a channel cert.
 /// Uses ed25519-dalek directly for signature verification.
 pub fn verify_cert(cert: &ChannelCert, pubkey_bytes: &[u8]) -> bool {
-    use ed25519_dalek::{Signature, VerifyingKey, Verifier};
+    use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 
     // Reconstruct the signing payload: canonical JSON of {channel, user, trust, ts}
     let payload = serde_json::json!({
@@ -79,21 +79,33 @@ pub fn verify_cert(cert: &ChannelCert, pubkey_bytes: &[u8]) -> bool {
     // Decode pubkey
     let pubkey_array: [u8; 32] = match pubkey_bytes.try_into() {
         Ok(a) => a,
-        Err(_) => { warn!("verify_cert: pubkey wrong length {}", pubkey_bytes.len()); return false; },
+        Err(_) => {
+            warn!("verify_cert: pubkey wrong length {}", pubkey_bytes.len());
+            return false;
+        }
     };
     let verifying_key = match VerifyingKey::from_bytes(&pubkey_array) {
         Ok(k) => k,
-        Err(e) => { warn!("verify_cert: invalid pubkey: {e}"); return false; },
+        Err(e) => {
+            warn!("verify_cert: invalid pubkey: {e}");
+            return false;
+        }
     };
 
     // Decode signature from hex
     let sig_bytes = match hex::decode(&cert.sig) {
         Ok(b) => b,
-        Err(e) => { warn!("verify_cert: sig hex decode failed: {e}"); return false; },
+        Err(e) => {
+            warn!("verify_cert: sig hex decode failed: {e}");
+            return false;
+        }
     };
     let sig_array: [u8; 64] = match sig_bytes.try_into() {
         Ok(a) => a,
-        Err(v) => { warn!("verify_cert: sig wrong length {}", v.len()); return false; },
+        Err(v) => {
+            warn!("verify_cert: sig wrong length {}", v.len());
+            return false;
+        }
     };
     let signature = Signature::from_bytes(&sig_array);
 
@@ -192,8 +204,8 @@ fn base64_decode_bytes(input: &str) -> Result<Vec<u8>, ()> {
         return Err(());
     }
 
-    let table: Vec<u8> = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
-        .to_vec();
+    let table: Vec<u8> =
+        b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/".to_vec();
     let mut buf = Vec::new();
     let mut acc: u32 = 0;
     let mut bits: u32 = 0;
@@ -285,9 +297,7 @@ mod tests {
     fn resolve_pattern_overrides_claimed_trust() {
         let config = TrustConfig {
             signing_pubkey: None,
-            channels: vec![
-                ("telegram:group:*".into(), TrustLevel::Restricted),
-            ],
+            channels: vec![("telegram:group:*".into(), TrustLevel::Restricted)],
             ..Default::default()
         };
         let cert = ChannelCert {
@@ -339,7 +349,12 @@ mod tests {
 
     #[test]
     fn non_full_trust_blocks_ssrf() {
-        for level in [TrustLevel::Trusted, TrustLevel::Public, TrustLevel::Restricted, TrustLevel::Unknown] {
+        for level in [
+            TrustLevel::Trusted,
+            TrustLevel::Public,
+            TrustLevel::Restricted,
+            TrustLevel::Unknown,
+        ] {
             let trust = ChannelTrust::from_level(level, None, None, false);
             assert!(!trust.ssrf_allowed, "level {:?} should block SSRF", level);
         }

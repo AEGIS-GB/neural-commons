@@ -6,11 +6,11 @@
 //! Storage: PostgreSQL + pgvector
 //! 6 claim types: lore, skills, cognition, peers, reputation, provenance
 
-pub mod storage;
-pub mod read;
-pub mod write;
-pub mod quarantine;
 pub mod dispute;
+pub mod quarantine;
+pub mod read;
+pub mod storage;
+pub mod write;
 
 // TODO(D2): Confirm per-type claim payload schemas
 // TODO(D22): Confirm quarantine quorum (3 validators, 2/3 approve)

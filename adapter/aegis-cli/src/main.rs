@@ -378,11 +378,7 @@ fn main() {
     let cli = Cli::parse();
 
     // Initialize tracing
-    let filter = if cli.verbose {
-        "debug"
-    } else {
-        "info"
-    };
+    let filter = if cli.verbose { "debug" } else { "info" };
 
     tracing_subscriber::fmt()
         .with_env_filter(filter)
@@ -415,7 +411,11 @@ fn main() {
             p.to_path_buf()
         } else if let Some(home) = dirs::home_dir() {
             let resolved = home.join(p);
-            if resolved.exists() { resolved } else { p.to_path_buf() }
+            if resolved.exists() {
+                resolved
+            } else {
+                p.to_path_buf()
+            }
         } else {
             p.to_path_buf()
         }
@@ -551,10 +551,7 @@ fn main() {
         }) => {
             let db_path = config.data_dir.join("evidence.db");
             if !db_path.exists() {
-                eprintln!(
-                    "error: no evidence database found at {}",
-                    db_path.display()
-                );
+                eprintln!("error: no evidence database found at {}", db_path.display());
                 eprintln!("hint: start the adapter first to create an evidence chain");
                 std::process::exit(1);
             }
@@ -602,13 +599,8 @@ fn main() {
                         let json = serde_json::to_string_pretty(&receipts)
                             .expect("failed to serialize receipts");
                         if let Some(ref out_path) = output {
-                            std::fs::write(out_path, &json)
-                                .expect("failed to write export file");
-                            eprintln!(
-                                "  exported {} receipts to {}",
-                                receipts.len(),
-                                out_path
-                            );
+                            std::fs::write(out_path, &json).expect("failed to write export file");
+                            eprintln!("  exported {} receipts to {}", receipts.len(), out_path);
                         } else {
                             println!("{json}");
                         }
@@ -622,7 +614,11 @@ fn main() {
         }
 
         Some(Commands::Setup { target }) => match target {
-            SetupTarget::Openclaw { dry_run, revert, proxy_url } => {
+            SetupTarget::Openclaw {
+                dry_run,
+                revert,
+                proxy_url,
+            } => {
                 setup_openclaw(dry_run, revert, &proxy_url);
             }
         },
@@ -711,7 +707,9 @@ fn main() {
                             );
                             eprint!("  confirm (y/N): ");
                             let mut input = String::new();
-                            if std::io::stdin().read_line(&mut input).is_err() || !input.trim().eq_ignore_ascii_case("y") {
+                            if std::io::stdin().read_line(&mut input).is_err()
+                                || !input.trim().eq_ignore_ascii_case("y")
+                            {
                                 eprintln!("  cancelled");
                                 return;
                             }
@@ -739,8 +737,9 @@ fn main() {
                 }
             }
             VaultCommands::Scan { path, extensions } => {
-                let exts_str =
-                    extensions.as_deref().unwrap_or("env,toml,json,yaml,yml,cfg,conf,ini");
+                let exts_str = extensions
+                    .as_deref()
+                    .unwrap_or("env,toml,json,yaml,yml,cfg,conf,ini");
                 let exts: Vec<&str> = exts_str.split(',').collect();
                 eprintln!(
                     "scanning {} for credentials (extensions: {})...",
@@ -751,8 +750,7 @@ fn main() {
                         if results.is_empty() {
                             eprintln!("  no credentials found");
                         } else {
-                            let total: usize =
-                                results.iter().map(|(_, r)| r.findings.len()).sum();
+                            let total: usize = results.iter().map(|(_, r)| r.findings.len()).sum();
                             eprintln!(
                                 "  found {} credential(s) in {} file(s)",
                                 total,
@@ -848,8 +846,14 @@ fn main() {
                 eprintln!("  engine:               {}", config.slm.engine);
                 eprintln!("  model:                {}", config.slm.model);
                 eprintln!("  server url:           {}", config.slm.server_url);
-                eprintln!("  heuristic fallback:   {}", config.slm.fallback_to_heuristics);
-                eprintln!("  metaprompt hardening: {}", config.slm.metaprompt_hardening);
+                eprintln!(
+                    "  heuristic fallback:   {}",
+                    config.slm.fallback_to_heuristics
+                );
+                eprintln!(
+                    "  metaprompt hardening: {}",
+                    config.slm.metaprompt_hardening
+                );
                 eprintln!("  screening:            2-pass (injection + reconnaissance)");
             }
             SlmCommands::Recommend => {
@@ -866,19 +870,44 @@ fn main() {
 
                 // Hardware tier table
                 eprintln!("all tiers:");
-                eprintln!("  {:12} {:8} {:28} {:12} {:10}", "TIER", "VRAM", "MODEL", "DETECTION", "LATENCY");
-                eprintln!("  {:=<12} {:=>8} {:=<28} {:=>12} {:=>10}", "", "", "", "", "");
-                eprintln!("  {:12} {:>8} {:28} {:>12} {:>10}", "optimal", "12GB+", "qwen/qwen3-30b-a3b (MoE 3B)", "100%", "3-8s");
-                eprintln!("  {:12} {:>8} {:28} {:>12} {:>10}", "good", "6-12GB", "qwen/qwen3-8b", "~70%", "4-10s");
-                eprintln!("  {:12} {:>8} {:28} {:>12} {:>10}", "basic", "3-6GB", "qwen/qwen3-1.7b", "~45%", "1-3s");
-                eprintln!("  {:12} {:>8} {:28} {:>12} {:>10}", "cpu-only", "none", "heuristic + classifier only", "~65%", "<10ms");
-                eprintln!("  {:12} {:>8} {:28} {:>12} {:>10}", "api", "cloud", "claude-haiku-4-5-20251001", "~95%", "0.5-2s");
+                eprintln!(
+                    "  {:12} {:8} {:28} {:12} {:10}",
+                    "TIER", "VRAM", "MODEL", "DETECTION", "LATENCY"
+                );
+                eprintln!(
+                    "  {:=<12} {:=>8} {:=<28} {:=>12} {:=>10}",
+                    "", "", "", "", ""
+                );
+                eprintln!(
+                    "  {:12} {:>8} {:28} {:>12} {:>10}",
+                    "optimal", "12GB+", "qwen/qwen3-30b-a3b (MoE 3B)", "100%", "3-8s"
+                );
+                eprintln!(
+                    "  {:12} {:>8} {:28} {:>12} {:>10}",
+                    "good", "6-12GB", "qwen/qwen3-8b", "~70%", "4-10s"
+                );
+                eprintln!(
+                    "  {:12} {:>8} {:28} {:>12} {:>10}",
+                    "basic", "3-6GB", "qwen/qwen3-1.7b", "~45%", "1-3s"
+                );
+                eprintln!(
+                    "  {:12} {:>8} {:28} {:>12} {:>10}",
+                    "cpu-only", "none", "heuristic + classifier only", "~65%", "<10ms"
+                );
+                eprintln!(
+                    "  {:12} {:>8} {:28} {:>12} {:>10}",
+                    "api", "cloud", "claude-haiku-4-5-20251001", "~95%", "0.5-2s"
+                );
                 eprintln!();
                 eprintln!("  * cpu-only uses no LLM — heuristic patterns + ProtectAI classifier.");
-                eprintln!("  * api tier uses Anthropic Haiku — no local GPU needed, requires ANTHROPIC_API_KEY.");
+                eprintln!(
+                    "  * api tier uses Anthropic Haiku — no local GPU needed, requires ANTHROPIC_API_KEY."
+                );
                 eprintln!("  * All tiers include heuristic + classifier. SLM adds on top.");
                 eprintln!("  * Metaprompt hardening is always available regardless of tier.");
-                eprintln!("  * Apple Silicon uses unified memory — 32GB Mac ≈ 24GB effective for models.");
+                eprintln!(
+                    "  * Apple Silicon uses unified memory — 32GB Mac ≈ 24GB effective for models."
+                );
             }
             SlmCommands::Use { model } => {
                 update_slm_config(&config_path.display().to_string(), "model", &model);
@@ -887,7 +916,9 @@ fn main() {
                 if engine != "ollama" && engine != "openai" && engine != "anthropic" {
                     eprintln!("error: engine must be 'ollama', 'openai', or 'anthropic'");
                     eprintln!("  ollama     — Ollama API (http://localhost:11434)");
-                    eprintln!("  openai     — OpenAI-compatible API (LM Studio, vLLM, llama.cpp, LocalAI)");
+                    eprintln!(
+                        "  openai     — OpenAI-compatible API (LM Studio, vLLM, llama.cpp, LocalAI)"
+                    );
                     eprintln!("  anthropic  — Anthropic Messages API (requires ANTHROPIC_API_KEY)");
                     std::process::exit(1);
                 }
@@ -904,7 +935,11 @@ fn main() {
         },
 
         Some(Commands::Trust { action }) => match action {
-            TrustCommands::Register { channel, user, aegis_url } => {
+            TrustCommands::Register {
+                channel,
+                user,
+                aegis_url,
+            } => {
                 trust_register(&config, &channel, &user, &aegis_url);
             }
             TrustCommands::Unregister { channel, aegis_url } => {
@@ -937,9 +972,7 @@ fn main() {
         Some(Commands::Dashboard) => {
             let url = format!(
                 "http://{}/dashboard",
-                cli.listen
-                    .as_deref()
-                    .unwrap_or(&config.proxy.listen_addr)
+                cli.listen.as_deref().unwrap_or(&config.proxy.listen_addr)
             );
             eprintln!("dashboard URL: {}", url);
             // Attempt to open in browser
@@ -959,7 +992,16 @@ fn main() {
             }
         }
 
-        Some(Commands::Trace { id, channel, verdict, last, body, health, aegis_url, num }) => {
+        Some(Commands::Trace {
+            id,
+            channel,
+            verdict,
+            last,
+            body,
+            health,
+            aegis_url,
+            num,
+        }) => {
             trace::run(
                 &aegis_url,
                 id,
@@ -972,13 +1014,13 @@ fn main() {
             );
         }
 
-        Some(Commands::Trustmark { action }) => {
-            match action {
-                Some(TrustmarkCommands::Show { json }) => trustmark_cmd::run(&config.data_dir, json),
-                Some(TrustmarkCommands::History { limit, json }) => trustmark_cmd::run_history(&config.data_dir, limit, json),
-                None => trustmark_cmd::run(&config.data_dir, false),
+        Some(Commands::Trustmark { action }) => match action {
+            Some(TrustmarkCommands::Show { json }) => trustmark_cmd::run(&config.data_dir, json),
+            Some(TrustmarkCommands::History { limit, json }) => {
+                trustmark_cmd::run_history(&config.data_dir, limit, json)
             }
-        }
+            None => trustmark_cmd::run(&config.data_dir, false),
+        },
 
         Some(Commands::Version) => {
             println!("aegis {}", env!("CARGO_PKG_VERSION"));
@@ -1004,7 +1046,10 @@ fn trust_register(config: &AdapterConfig, channel: &str, user: &str, aegis_url: 
         std::process::exit(1);
     });
     if key_bytes.len() != 32 {
-        eprintln!("error: identity key is {} bytes (expected 32)", key_bytes.len());
+        eprintln!(
+            "error: identity key is {} bytes (expected 32)",
+            key_bytes.len()
+        );
         std::process::exit(1);
     }
 
@@ -1041,7 +1086,11 @@ fn trust_register(config: &AdapterConfig, channel: &str, user: &str, aegis_url: 
     eprintln!("  channel: {channel}");
     eprintln!("  user:    {user}");
     eprintln!("  ts:      {ts}");
-    eprintln!("  sig:     {}...{}", &sig_hex[..16], &sig_hex[sig_hex.len()-16..]);
+    eprintln!(
+        "  sig:     {}...{}",
+        &sig_hex[..16],
+        &sig_hex[sig_hex.len() - 16..]
+    );
 
     // POST to Aegis
     let rt = tokio::runtime::Runtime::new().expect("failed to create runtime");
@@ -1061,8 +1110,14 @@ fn trust_register(config: &AdapterConfig, channel: &str, user: &str, aegis_url: 
             let body_text = rt.block_on(resp.text()).unwrap_or_default();
             if status.is_success() {
                 let json: serde_json::Value = serde_json::from_str(&body_text).unwrap_or_default();
-                let trust_level = json.get("trust_level").and_then(|v| v.as_str()).unwrap_or("unknown");
-                let ssrf = json.get("ssrf_allowed").and_then(|v| v.as_bool()).unwrap_or(false);
+                let trust_level = json
+                    .get("trust_level")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("unknown");
+                let ssrf = json
+                    .get("ssrf_allowed")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
                 eprintln!();
                 eprintln!("  registered!");
                 eprintln!("  trust_level:  {trust_level}");
@@ -1194,26 +1249,28 @@ fn try_systemd(action: &str) -> bool {
         .output();
 
     if let Ok(o) = user_output
-        && o.status.success() {
-            eprintln!("aegis service {action}ed (systemd)");
-            if action != "stop" {
-                std::thread::sleep(std::time::Duration::from_secs(2));
-                let _ = std::process::Command::new("systemctl")
-                    .args(["--user", "status", "aegis", "--no-pager", "-l"])
-                    .status();
-            }
-            return true;
+        && o.status.success()
+    {
+        eprintln!("aegis service {action}ed (systemd)");
+        if action != "stop" {
+            std::thread::sleep(std::time::Duration::from_secs(2));
+            let _ = std::process::Command::new("systemctl")
+                .args(["--user", "status", "aegis", "--no-pager", "-l"])
+                .status();
         }
+        return true;
+    }
 
     let sys_output = std::process::Command::new("systemctl")
         .args([action, "aegis"])
         .output();
 
     if let Ok(o) = sys_output
-        && o.status.success() {
-            eprintln!("aegis service {action}ed (systemd)");
-            return true;
-        }
+        && o.status.success()
+    {
+        eprintln!("aegis service {action}ed (systemd)");
+        return true;
+    }
 
     false
 }
@@ -1230,7 +1287,10 @@ fn run_process_action(action: &str) {
         }
         "start" => {
             if find_running_aegis().is_some() {
-                eprintln!("aegis is already running (pid {})", find_running_aegis().unwrap());
+                eprintln!(
+                    "aegis is already running (pid {})",
+                    find_running_aegis().unwrap()
+                );
                 eprintln!("hint: use 'aegis restart' to restart");
                 return;
             }
@@ -1262,9 +1322,10 @@ fn find_running_aegis() -> Option<u32> {
     let my_pid = std::process::id();
     for line in stdout.lines() {
         if let Ok(pid) = line.trim().parse::<u32>()
-            && pid != my_pid {
-                return Some(pid);
-            }
+            && pid != my_pid
+        {
+            return Some(pid);
+        }
     }
     None
 }
@@ -1298,13 +1359,16 @@ fn start_aegis_background() {
     // Resolve config path
     let config_path = if let Some(home) = dirs::home_dir() {
         let p = home.join(".aegis/config/config.toml");
-        if p.exists() { p.to_string_lossy().to_string() } else { ".aegis/config/config.toml".to_string() }
+        if p.exists() {
+            p.to_string_lossy().to_string()
+        } else {
+            ".aegis/config/config.toml".to_string()
+        }
     } else {
         ".aegis/config/config.toml".to_string()
     };
 
-    let aegis_bin = std::env::current_exe()
-        .unwrap_or_else(|_| std::path::PathBuf::from("aegis"));
+    let aegis_bin = std::env::current_exe().unwrap_or_else(|_| std::path::PathBuf::from("aegis"));
 
     let log_path = "/tmp/aegis.log";
 
@@ -1314,12 +1378,14 @@ fn start_aegis_background() {
             "--config",
             &config_path,
         ])
-        .stdout(std::fs::File::create(log_path).unwrap_or_else(|_| {
-            std::fs::File::create("/dev/null").unwrap()
-        }))
-        .stderr(std::fs::File::create(log_path).unwrap_or_else(|_| {
-            std::fs::File::create("/dev/null").unwrap()
-        }))
+        .stdout(
+            std::fs::File::create(log_path)
+                .unwrap_or_else(|_| std::fs::File::create("/dev/null").unwrap()),
+        )
+        .stderr(
+            std::fs::File::create(log_path)
+                .unwrap_or_else(|_| std::fs::File::create("/dev/null").unwrap()),
+        )
         .spawn();
 
     match result {
@@ -1349,22 +1415,32 @@ fn check_for_update() {
 
     // Quick non-blocking check — don't delay startup if it fails
     let output = std::process::Command::new("gh")
-        .args(["release", "view", "--repo", "LCatGA12/neural-commons", "--json", "tagName", "--jq", ".tagName"])
+        .args([
+            "release",
+            "view",
+            "--repo",
+            "LCatGA12/neural-commons",
+            "--json",
+            "tagName",
+            "--jq",
+            ".tagName",
+        ])
         .output();
 
     if let Ok(o) = output
-        && o.status.success() {
-            let latest_tag = String::from_utf8_lossy(&o.stdout).trim().to_string();
-            let latest_ver = latest_tag.trim_start_matches('v');
+        && o.status.success()
+    {
+        let latest_tag = String::from_utf8_lossy(&o.stdout).trim().to_string();
+        let latest_ver = latest_tag.trim_start_matches('v');
 
-            if latest_ver != current {
-                eprintln!("╔══════════════════════════════════════════════════╗");
-                eprintln!("║  Update available: v{current} → {latest_tag}");
-                eprintln!("║  Run: aegis-update");
-                eprintln!("╚══════════════════════════════════════════════════╝");
-                eprintln!();
-            }
+        if latest_ver != current {
+            eprintln!("╔══════════════════════════════════════════════════╗");
+            eprintln!("║  Update available: v{current} → {latest_tag}");
+            eprintln!("║  Run: aegis-update");
+            eprintln!("╚══════════════════════════════════════════════════╝");
+            eprintln!();
         }
+    }
 }
 
 /// Open the vault storage, deriving the vault key from the identity key.
@@ -1384,7 +1460,10 @@ fn open_vault_storage(config: &AdapterConfig) -> aegis_vault::storage::VaultStor
     });
     let mut key_arr = [0u8; 32];
     if key_bytes.len() < 32 {
-        eprintln!("error: identity key too short ({} bytes, need 32)", key_bytes.len());
+        eprintln!(
+            "error: identity key too short ({} bytes, need 32)",
+            key_bytes.len()
+        );
         std::process::exit(1);
     }
     key_arr.copy_from_slice(&key_bytes[..32]);
@@ -1392,10 +1471,11 @@ fn open_vault_storage(config: &AdapterConfig) -> aegis_vault::storage::VaultStor
     let signing_key = aegis_crypto::ed25519::SigningKey::from_bytes(&key_arr);
     let fingerprint = aegis_crypto::ed25519::fingerprint_hex(&signing_key.verifying_key());
 
-    let vault_key = aegis_vault::kdf::derive_vault_key(&key_arr, &fingerprint).unwrap_or_else(|e| {
-        eprintln!("error: vault key derivation failed: {e}");
-        std::process::exit(1);
-    });
+    let vault_key =
+        aegis_vault::kdf::derive_vault_key(&key_arr, &fingerprint).unwrap_or_else(|e| {
+            eprintln!("error: vault key derivation failed: {e}");
+            std::process::exit(1);
+        });
 
     let db_path = config.data_dir.join("vault.db");
     aegis_vault::storage::VaultStorage::open(&db_path, vault_key).unwrap_or_else(|e| {
@@ -1422,7 +1502,10 @@ fn setup_openclaw(dry_run: bool, revert: bool, proxy_url: &str) {
         }
 
         if dry_run {
-            eprintln!("[dry-run] would restore {} from backup", config_path.display());
+            eprintln!(
+                "[dry-run] would restore {} from backup",
+                config_path.display()
+            );
             return;
         }
 
@@ -1457,7 +1540,11 @@ fn setup_openclaw(dry_run: bool, revert: bool, proxy_url: &str) {
             eprintln!("error: failed to write {}: {e}", config_path.display());
             std::process::exit(1);
         });
-        eprintln!("created {} with baseUrl={}", config_path.display(), proxy_url);
+        eprintln!(
+            "created {} with baseUrl={}",
+            config_path.display(),
+            proxy_url
+        );
         return;
     }
 
@@ -1472,7 +1559,8 @@ fn setup_openclaw(dry_run: bool, revert: bool, proxy_url: &str) {
         std::process::exit(1);
     });
 
-    let old_url = config_json.get("baseUrl")
+    let old_url = config_json
+        .get("baseUrl")
         .and_then(|v| v.as_str())
         .unwrap_or("(not set)")
         .to_string();
@@ -1591,14 +1679,8 @@ fn set_upstream(config_path: &str, target: &str) {
             "https://api.anthropic.com".to_string(),
             "anthropic".to_string(),
         ),
-        "openai" | "gpt" => (
-            "https://api.openai.com".to_string(),
-            "open_ai".to_string(),
-        ),
-        "ollama" => (
-            "http://localhost:11434".to_string(),
-            "ollama".to_string(),
-        ),
+        "openai" | "gpt" => ("https://api.openai.com".to_string(), "open_ai".to_string()),
+        "ollama" => ("http://localhost:11434".to_string(), "ollama".to_string()),
         "lmstudio" | "lms" => (
             "http://localhost:1234".to_string(),
             "open_ai_compat".to_string(),
@@ -1658,17 +1740,24 @@ fn set_upstream(config_path: &str, target: &str) {
 
     let table = doc.as_table_mut().unwrap();
     if !table.contains_key("proxy") {
-        table.insert("proxy".to_string(), toml::Value::Table(toml::map::Map::new()));
+        table.insert(
+            "proxy".to_string(),
+            toml::Value::Table(toml::map::Map::new()),
+        );
     }
     let proxy = table.get_mut("proxy").unwrap().as_table_mut().unwrap();
 
-    let old_url = proxy.get("upstream_url")
+    let old_url = proxy
+        .get("upstream_url")
         .and_then(|v| v.as_str())
         .unwrap_or("(not set)")
         .to_string();
 
     proxy.insert("upstream_url".to_string(), toml::Value::String(url.clone()));
-    proxy.insert("provider".to_string(), toml::Value::String(provider.clone()));
+    proxy.insert(
+        "provider".to_string(),
+        toml::Value::String(provider.clone()),
+    );
 
     let toml_str = toml::to_string_pretty(&doc).unwrap_or_else(|e| {
         eprintln!("error: failed to serialize config: {e}");

@@ -9,9 +9,7 @@
 use aegis_crypto::ed25519::{self, Signer as _, SigningKey};
 use aegis_crypto::rfc8785;
 use aegis_crypto::sha256;
-use aegis_schemas::{
-    Receipt, ReceiptContext, ReceiptCore, ReceiptType, GENESIS_PREV_HASH,
-};
+use aegis_schemas::{GENESIS_PREV_HASH, Receipt, ReceiptContext, ReceiptCore, ReceiptType};
 use serde::Serialize;
 use uuid::Uuid;
 
@@ -46,8 +44,7 @@ struct SigningInput {
 /// Compute the receipt hash: SHA-256 of JCS-serialized core (including sig), lowercase hex.
 /// This hash becomes the prev_hash for the next receipt in the chain.
 pub fn compute_receipt_hash(core: &ReceiptCore) -> String {
-    let canonical = rfc8785::canonicalize(core)
-        .expect("ReceiptCore must be serializable");
+    let canonical = rfc8785::canonicalize(core).expect("ReceiptCore must be serializable");
     let hash_bytes = sha256::hash(&canonical);
     hex::encode(hash_bytes)
 }
@@ -55,8 +52,7 @@ pub fn compute_receipt_hash(core: &ReceiptCore) -> String {
 /// Compute the payload hash: SHA-256 of JCS-serialized context, lowercase hex.
 /// This commits to the context without revealing it.
 pub fn compute_payload_hash(context: &ReceiptContext) -> String {
-    let canonical = rfc8785::canonicalize(context)
-        .expect("ReceiptContext must be serializable");
+    let canonical = rfc8785::canonicalize(context).expect("ReceiptContext must be serializable");
     let hash_bytes = sha256::hash(&canonical);
     hex::encode(hash_bytes)
 }
@@ -182,8 +178,14 @@ mod tests {
         assert!(!receipt.core.sig.is_empty());
         assert!(!receipt.core.payload_hash.is_empty());
         // All hashes are lowercase hex
-        assert_eq!(receipt.core.prev_hash, receipt.core.prev_hash.to_lowercase());
-        assert_eq!(receipt.core.payload_hash, receipt.core.payload_hash.to_lowercase());
+        assert_eq!(
+            receipt.core.prev_hash,
+            receipt.core.prev_hash.to_lowercase()
+        );
+        assert_eq!(
+            receipt.core.payload_hash,
+            receipt.core.payload_hash.to_lowercase()
+        );
         assert_eq!(receipt.core.sig, receipt.core.sig.to_lowercase());
     }
 
@@ -193,10 +195,18 @@ mod tests {
         let bot_id = ed25519::fingerprint_hex(&key.verifying_key());
         let state0 = init_genesis();
 
-        let r1 = create_receipt(&key, &bot_id, ReceiptType::ApiCall, make_context(), &state0).unwrap();
+        let r1 =
+            create_receipt(&key, &bot_id, ReceiptType::ApiCall, make_context(), &state0).unwrap();
         let state1 = advance_chain_state(&state0, &r1);
 
-        let r2 = create_receipt(&key, &bot_id, ReceiptType::WriteBarrier, make_context(), &state1).unwrap();
+        let r2 = create_receipt(
+            &key,
+            &bot_id,
+            ReceiptType::WriteBarrier,
+            make_context(),
+            &state1,
+        )
+        .unwrap();
 
         assert_eq!(r2.core.seq, 2);
         assert!(verify_chain_link(&r2.core, &r1.core));
@@ -208,10 +218,18 @@ mod tests {
         let bot_id = ed25519::fingerprint_hex(&key.verifying_key());
         let state0 = init_genesis();
 
-        let r1 = create_receipt(&key, &bot_id, ReceiptType::ApiCall, make_context(), &state0).unwrap();
+        let r1 =
+            create_receipt(&key, &bot_id, ReceiptType::ApiCall, make_context(), &state0).unwrap();
         let state1 = advance_chain_state(&state0, &r1);
 
-        let mut r2 = create_receipt(&key, &bot_id, ReceiptType::WriteBarrier, make_context(), &state1).unwrap();
+        let mut r2 = create_receipt(
+            &key,
+            &bot_id,
+            ReceiptType::WriteBarrier,
+            make_context(),
+            &state1,
+        )
+        .unwrap();
         // Tamper with prev_hash
         r2.core.prev_hash = "deadbeef".repeat(8);
         assert!(!verify_chain_link(&r2.core, &r1.core));
@@ -247,7 +265,8 @@ mod tests {
         let mut state = init_genesis();
 
         for expected_seq in 1..=5 {
-            let r = create_receipt(&key, &bot_id, ReceiptType::ApiCall, make_context(), &state).unwrap();
+            let r = create_receipt(&key, &bot_id, ReceiptType::ApiCall, make_context(), &state)
+                .unwrap();
             assert_eq!(r.core.seq, expected_seq);
             state = advance_chain_state(&state, &r);
         }

@@ -46,14 +46,24 @@ pub fn run(data_dir: &Path, json_output: bool) {
             _ => "\x1b[31m",
         };
 
-        println!("  {:<25} {}  {dcolor}{:.3}\x1b[0m / {:.3} target  (weight: {:.0}%)",
-            d.name, status_icon, d.value, d.target, d.weight * 100.0);
+        println!(
+            "  {:<25} {}  {dcolor}{:.3}\x1b[0m / {:.3} target  (weight: {:.0}%)",
+            d.name,
+            status_icon,
+            d.value,
+            d.target,
+            d.weight * 100.0
+        );
 
         let bar_len = (d.value * 20.0) as usize;
         let target_pos = (d.target * 20.0) as usize;
         let mut bar_chars: Vec<char> = vec!['░'; 20];
-        for i in 0..bar_len.min(20) { bar_chars[i] = '█'; }
-        if target_pos < 20 { bar_chars[target_pos] = '|'; }
+        for i in 0..bar_len.min(20) {
+            bar_chars[i] = '█';
+        }
+        if target_pos < 20 {
+            bar_chars[target_pos] = '|';
+        }
         let bar: String = bar_chars.into_iter().collect();
         println!("  {:<25} [{bar}]", "");
 
@@ -65,11 +75,18 @@ pub fn run(data_dir: &Path, json_output: bool) {
         println!();
     }
 
-    let total_status = if score.total >= 0.8 { "\x1b[32mhealthy\x1b[0m" }
-        else if score.total >= 0.5 { "\x1b[33mneeds attention\x1b[0m" }
-        else { "\x1b[31mcritical\x1b[0m" };
+    let total_status = if score.total >= 0.8 {
+        "\x1b[32mhealthy\x1b[0m"
+    } else if score.total >= 0.5 {
+        "\x1b[33mneeds attention\x1b[0m"
+    } else {
+        "\x1b[31mcritical\x1b[0m"
+    };
     println!("  ── Summary ────────────────────────────────────────────");
-    println!("  TRUSTMARK: {:.3}  {}  |  {}  |  Identity: {:.0}h", score.total, total_status, tier.current, identity_age);
+    println!(
+        "  TRUSTMARK: {:.3}  {}  |  {}  |  Identity: {:.0}h",
+        score.total, total_status, tier.current, identity_age
+    );
     if !tier.next_tier_requirements.is_empty() {
         println!("  Next tier: {}", tier.next_tier_requirements.join(" | "));
     }
@@ -95,10 +112,15 @@ pub fn run_history(data_dir: &Path, limit: usize, json_output: bool) {
     }
 
     println!();
-    println!("━━━ TRUSTMARK History ({} snapshots) ━━━━━━━━━━━━━━━━━━━━━━", history.len());
+    println!(
+        "━━━ TRUSTMARK History ({} snapshots) ━━━━━━━━━━━━━━━━━━━━━━",
+        history.len()
+    );
     println!();
-    println!("  {:<22} {:<8} {:<8} {:<8} {:<8} {:<8} {:<8} {:<8}",
-        "Time", "Total", "Person", "Chain", "Vault", "Temprl", "Relay", "Volume");
+    println!(
+        "  {:<22} {:<8} {:<8} {:<8} {:<8} {:<8} {:<8} {:<8}",
+        "Time", "Total", "Person", "Chain", "Vault", "Temprl", "Relay", "Volume"
+    );
     println!("  {}", "─".repeat(76));
 
     for score in &history {
@@ -129,12 +151,18 @@ pub fn run_history(data_dir: &Path, limit: usize, json_output: bool) {
             dims.get(5).unwrap_or(&0.0),
         );
 
-        let col = if score.total >= 0.8 { "\x1b[32m" }
-            else if score.total >= 0.5 { "\x1b[33m" }
-            else { "\x1b[31m" };
+        let col = if score.total >= 0.8 {
+            "\x1b[32m"
+        } else if score.total >= 0.5 {
+            "\x1b[33m"
+        } else {
+            "\x1b[31m"
+        };
 
-        println!("  {:<22} {col}{:<8.3}\x1b[0m {:<8.3} {:<8.3} {:<8.3} {:<8.3} {:<8.3} {:<8.3}",
-            time, score.total, p, c, v, t, r, vol);
+        println!(
+            "  {:<22} {col}{:<8.3}\x1b[0m {:<8.3} {:<8.3} {:<8.3} {:<8.3} {:<8.3} {:<8.3}",
+            time, score.total, p, c, v, t, r, vol
+        );
     }
 
     println!();

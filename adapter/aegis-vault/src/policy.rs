@@ -51,7 +51,6 @@ pub enum PolicyAction {
     AllowWithAudit,
 }
 
-
 /// Result of a policy evaluation.
 #[derive(Debug, Clone)]
 pub struct PolicyDecision {
@@ -104,11 +103,7 @@ impl PolicyEngine {
     }
 
     /// Check whether a tool is allowed to access a secret.
-    pub fn check(
-        &mut self,
-        tool_name: &str,
-        secret_id: &str,
-    ) -> PolicyDecision {
+    pub fn check(&mut self, tool_name: &str, secret_id: &str) -> PolicyDecision {
         let cache_key = (tool_name.to_string(), secret_id.to_string());
         if let Some(cached) = self.cache.get(&cache_key) {
             return cached.clone();

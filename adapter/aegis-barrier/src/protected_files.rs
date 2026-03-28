@@ -7,7 +7,7 @@
 use std::path::Path;
 
 use crate::types::{
-    FileScope, ProtectedFileEntry, SensitivityClass, EXCLUDED_DIRS, MAX_WATCHED_PATHS,
+    EXCLUDED_DIRS, FileScope, MAX_WATCHED_PATHS, ProtectedFileEntry, SensitivityClass,
 };
 
 // ═══════════════════════════════════════════════════════════════════
@@ -348,9 +348,10 @@ impl ProtectedFileManager {
             }
             FileScope::DepthLimited => {
                 if let Some(max) = max_depth
-                    && depth as u32 > max {
-                        return false;
-                    }
+                    && depth as u32 > max
+                {
+                    return false;
+                }
             }
         }
 
@@ -390,7 +391,11 @@ impl ProtectedFileManager {
         let file_pattern = parts[1];
 
         // Check that the path has a parent component matching dir_name
-        let parent = match path.parent().and_then(|p| p.file_name()).and_then(|n| n.to_str()) {
+        let parent = match path
+            .parent()
+            .and_then(|p| p.file_name())
+            .and_then(|n| n.to_str())
+        {
             Some(p) => p,
             None => return false,
         };
@@ -421,9 +426,10 @@ impl ProtectedFileManager {
     pub fn is_excluded_dir(path: &Path) -> bool {
         for component in path.components() {
             if let Some(s) = component.as_os_str().to_str()
-                && EXCLUDED_DIRS.contains(&s) {
-                    return true;
-                }
+                && EXCLUDED_DIRS.contains(&s)
+            {
+                return true;
+            }
         }
         false
     }

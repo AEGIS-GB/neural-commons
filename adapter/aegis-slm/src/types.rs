@@ -103,8 +103,7 @@ pub struct EnrichedAnnotation {
 }
 
 /// 5 threat dimensions (D4)
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[derive(Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub struct ThreatDimensions {
     pub injection: u32,
     pub manipulation: u32,
@@ -112,7 +111,6 @@ pub struct ThreatDimensions {
     pub persistence: u32,
     pub evasion: u32,
 }
-
 
 // ═══════════════════════════════════════════════════════════════════
 // Holster Decision (private, never leaves device)
@@ -224,7 +222,6 @@ pub enum HolsterProfile {
     /// Warden-defined thresholds
     Custom,
 }
-
 
 /// Holster action
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

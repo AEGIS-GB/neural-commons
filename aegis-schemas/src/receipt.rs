@@ -201,7 +201,8 @@ pub struct RollupHistogram {
 }
 
 /// The genesis prev_hash — 32 zero bytes as lowercase hex (64 chars)
-pub const GENESIS_PREV_HASH: &str = "0000000000000000000000000000000000000000000000000000000000000000";
+pub const GENESIS_PREV_HASH: &str =
+    "0000000000000000000000000000000000000000000000000000000000000000";
 
 /// Generate a random blinding nonce (32 bytes, lowercase hex)
 pub fn generate_blinding_nonce() -> String {

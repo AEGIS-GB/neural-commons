@@ -3,13 +3,13 @@
 //! Append-only for receipts. Updateable for chain_state.
 //! Single-writer design — only one EvidenceStore per adapter instance.
 
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{Connection, OptionalExtension, params};
 use std::path::Path;
 
-use aegis_schemas::{Receipt, ReceiptCore, ReceiptContext};
+use aegis_schemas::{Receipt, ReceiptContext, ReceiptCore};
 
-use crate::chain::{self, ChainState};
 use crate::EvidenceError;
+use crate::chain::{self, ChainState};
 
 /// SQLite-backed evidence storage.
 pub struct EvidenceStore {
@@ -54,7 +54,9 @@ impl EvidenceStore {
             .unwrap_or_default()
             .as_millis() as i64;
 
-        let tx = self.db.unchecked_transaction()
+        let tx = self
+            .db
+            .unchecked_transaction()
             .map_err(|e| EvidenceError::StoreError(format!("tx start failed: {e}")))?;
 
         tx.execute(
@@ -86,32 +88,38 @@ impl EvidenceStore {
 
     /// Get the current chain state. Returns genesis if no receipts exist.
     pub fn get_chain_state(&self) -> Result<ChainState, EvidenceError> {
-        let result = self.db.query_row(
-            "SELECT head_hash, head_seq, receipt_count FROM chain_state WHERE id = 1",
-            [],
-            |row| {
-                Ok(ChainState {
-                    head_hash: row.get(0)?,
-                    head_seq: row.get::<_, i64>(1)? as u64,
-                    receipt_count: row.get::<_, i64>(2)? as u64,
-                })
-            },
-        ).optional()?;
+        let result = self
+            .db
+            .query_row(
+                "SELECT head_hash, head_seq, receipt_count FROM chain_state WHERE id = 1",
+                [],
+                |row| {
+                    Ok(ChainState {
+                        head_hash: row.get(0)?,
+                        head_seq: row.get::<_, i64>(1)? as u64,
+                        receipt_count: row.get::<_, i64>(2)? as u64,
+                    })
+                },
+            )
+            .optional()?;
 
         Ok(result.unwrap_or_else(chain::init_genesis))
     }
 
     /// Get a receipt by sequence number.
     pub fn get_receipt_by_seq(&self, seq: u64) -> Result<Option<Receipt>, EvidenceError> {
-        let result = self.db.query_row(
-            "SELECT core_json, context_json FROM receipts WHERE seq = ?1",
-            params![seq as i64],
-            |row| {
-                let core_json: String = row.get(0)?;
-                let context_json: String = row.get(1)?;
-                Ok((core_json, context_json))
-            },
-        ).optional()?;
+        let result = self
+            .db
+            .query_row(
+                "SELECT core_json, context_json FROM receipts WHERE seq = ?1",
+                params![seq as i64],
+                |row| {
+                    let core_json: String = row.get(0)?;
+                    let context_json: String = row.get(1)?;
+                    Ok((core_json, context_json))
+                },
+            )
+            .optional()?;
 
         match result {
             Some((core_json, context_json)) => {
@@ -165,7 +173,9 @@ impl EvidenceStore {
             .unwrap_or_default()
             .as_millis() as i64;
 
-        let tx = self.db.unchecked_transaction()
+        let tx = self
+            .db
+            .unchecked_transaction()
             .map_err(|e| EvidenceError::StoreError(format!("tx start failed: {e}")))?;
 
         // Store the rollup receipt as a regular receipt
@@ -216,11 +226,9 @@ impl EvidenceStore {
 
     /// Total receipt count.
     pub fn get_receipt_count(&self) -> Result<u64, EvidenceError> {
-        let count: i64 = self.db.query_row(
-            "SELECT COUNT(*) FROM receipts",
-            [],
-            |row| row.get(0),
-        )?;
+        let count: i64 = self
+            .db
+            .query_row("SELECT COUNT(*) FROM receipts", [], |row| row.get(0))?;
         Ok(count as u64)
     }
 
@@ -235,8 +243,9 @@ impl EvidenceStore {
         let mut prev_hash = aegis_schemas::GENESIS_PREV_HASH.to_string();
 
         for seq in 1..=count {
-            let receipt = self.get_receipt_by_seq(seq)?
-                .ok_or_else(|| EvidenceError::ChainError(format!("missing receipt at seq {seq}")))?;
+            let receipt = self.get_receipt_by_seq(seq)?.ok_or_else(|| {
+                EvidenceError::ChainError(format!("missing receipt at seq {seq}"))
+            })?;
 
             if receipt.core.prev_hash != prev_hash {
                 tracing::error!(
@@ -284,7 +293,7 @@ fn init_tables(db: &Connection) -> Result<(), EvidenceError> {
         );
 
         CREATE INDEX IF NOT EXISTS idx_receipts_seq ON receipts(seq);
-        CREATE INDEX IF NOT EXISTS idx_rollups_range ON rollups(seq_start, seq_end);"
+        CREATE INDEX IF NOT EXISTS idx_rollups_range ON rollups(seq_start, seq_end);",
     )?;
 
     Ok(())
@@ -293,16 +302,20 @@ fn init_tables(db: &Connection) -> Result<(), EvidenceError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::chain::{advance_chain_state, create_receipt, init_genesis};
     use aegis_crypto::ed25519::{self, generate_keypair};
     use aegis_schemas::{ReceiptType, receipt::generate_blinding_nonce};
-    use crate::chain::{create_receipt, init_genesis, advance_chain_state};
 
     fn make_context() -> ReceiptContext {
         ReceiptContext {
             blinding_nonce: generate_blinding_nonce(),
             enforcement_mode: None,
             action: Some("test".to_string()),
-            subject: None, trigger: None, outcome: None, detail: None, enterprise: None,
+            subject: None,
+            trigger: None,
+            outcome: None,
+            detail: None,
+            enterprise: None,
         }
     }
 
@@ -321,7 +334,8 @@ mod tests {
         let bot_id = ed25519::fingerprint_hex(&key.verifying_key());
         let state = init_genesis();
 
-        let receipt = create_receipt(&key, &bot_id, ReceiptType::ApiCall, make_context(), &state).unwrap();
+        let receipt =
+            create_receipt(&key, &bot_id, ReceiptType::ApiCall, make_context(), &state).unwrap();
         let new_state = advance_chain_state(&state, &receipt);
 
         store.append_receipt(&receipt, &new_state).unwrap();
@@ -340,7 +354,8 @@ mod tests {
         let mut state = init_genesis();
 
         for _ in 0..3 {
-            let r = create_receipt(&key, &bot_id, ReceiptType::ApiCall, make_context(), &state).unwrap();
+            let r = create_receipt(&key, &bot_id, ReceiptType::ApiCall, make_context(), &state)
+                .unwrap();
             state = advance_chain_state(&state, &r);
             store.append_receipt(&r, &state).unwrap();
         }
@@ -359,7 +374,8 @@ mod tests {
         let mut state = init_genesis();
 
         for _ in 0..5 {
-            let r = create_receipt(&key, &bot_id, ReceiptType::ApiCall, make_context(), &state).unwrap();
+            let r = create_receipt(&key, &bot_id, ReceiptType::ApiCall, make_context(), &state)
+                .unwrap();
             state = advance_chain_state(&state, &r);
             store.append_receipt(&r, &state).unwrap();
         }
@@ -378,7 +394,8 @@ mod tests {
         let mut state = init_genesis();
 
         for _ in 0..5 {
-            let r = create_receipt(&key, &bot_id, ReceiptType::ApiCall, make_context(), &state).unwrap();
+            let r = create_receipt(&key, &bot_id, ReceiptType::ApiCall, make_context(), &state)
+                .unwrap();
             state = advance_chain_state(&state, &r);
             store.append_receipt(&r, &state).unwrap();
         }
@@ -402,7 +419,8 @@ mod tests {
         let mut state = init_genesis();
 
         for _ in 0..3 {
-            let r = create_receipt(&key, &bot_id, ReceiptType::ApiCall, make_context(), &state).unwrap();
+            let r = create_receipt(&key, &bot_id, ReceiptType::ApiCall, make_context(), &state)
+                .unwrap();
             state = advance_chain_state(&state, &r);
             store.append_receipt(&r, &state).unwrap();
         }

@@ -1,6 +1,6 @@
 // SHA-256 hashing — evidence chain, Merkle rollups, fingerprints
 
-use sha2::{Sha256, Digest};
+use sha2::{Digest, Sha256};
 
 /// Hash arbitrary bytes with SHA-256
 pub fn hash(data: &[u8]) -> [u8; 32] {

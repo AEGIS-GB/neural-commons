@@ -147,7 +147,14 @@ pub fn mask_credential(raw: &str) -> String {
         return "****".to_string();
     }
     let first4: String = raw.chars().take(4).collect();
-    let last4: String = raw.chars().rev().take(4).collect::<Vec<_>>().into_iter().rev().collect();
+    let last4: String = raw
+        .chars()
+        .rev()
+        .take(4)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect();
     format!("{first4}****{last4}")
 }
 
@@ -254,7 +261,6 @@ pub fn scan_text_filtered(content: &str, allowlist: &[&str]) -> ScanResult {
     ScanResult { findings }
 }
 
-
 /// Scan a file on disk for plaintext credentials.
 pub fn scan_file(path: &Path) -> Result<ScanResult, VaultError> {
     let content = std::fs::read_to_string(path)
@@ -278,8 +284,9 @@ pub fn scan_directory(
 ) -> Result<Vec<(PathBuf, ScanResult)>, VaultError> {
     let mut results = Vec::new();
 
-    let entries = std::fs::read_dir(dir)
-        .map_err(|e| VaultError::ScannerError(format!("failed to read dir {}: {e}", dir.display())))?;
+    let entries = std::fs::read_dir(dir).map_err(|e| {
+        VaultError::ScannerError(format!("failed to read dir {}: {e}", dir.display()))
+    })?;
 
     for entry in entries {
         let entry = entry.map_err(|e| VaultError::ScannerError(e.to_string()))?;
@@ -332,7 +339,10 @@ mod tests {
         let content = "aws_access_key_id = AKIAIOSFODNN7EXAMPLE";
         let result = scan_text(content);
         assert!(
-            result.findings.iter().any(|f| f.credential_type == CredentialType::AwsKey),
+            result
+                .findings
+                .iter()
+                .any(|f| f.credential_type == CredentialType::AwsKey),
             "should detect AWS key"
         );
     }
@@ -342,7 +352,10 @@ mod tests {
         let content = r#"Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.test_payload"#;
         let result = scan_text(content);
         assert!(
-            result.findings.iter().any(|f| f.credential_type == CredentialType::BearerToken),
+            result
+                .findings
+                .iter()
+                .any(|f| f.credential_type == CredentialType::BearerToken),
             "should detect bearer token"
         );
     }
@@ -352,7 +365,10 @@ mod tests {
         let content = "-----BEGIN RSA PRIVATE KEY-----\nMIIEow...";
         let result = scan_text(content);
         assert!(
-            result.findings.iter().any(|f| f.credential_type == CredentialType::PrivateKey),
+            result
+                .findings
+                .iter()
+                .any(|f| f.credential_type == CredentialType::PrivateKey),
             "should detect private key"
         );
     }
@@ -362,7 +378,10 @@ mod tests {
         let content = r#"API_KEY = "sk_live_abcdefghijklmnopqrstuv""#;
         let result = scan_text(content);
         assert!(
-            result.findings.iter().any(|f| f.credential_type == CredentialType::ApiKey),
+            result
+                .findings
+                .iter()
+                .any(|f| f.credential_type == CredentialType::ApiKey),
             "should detect api key"
         );
     }
@@ -383,7 +402,10 @@ mod tests {
         let content = "postgres://admin:supersecretpassword@db.example.com/mydb";
         let result = scan_text(content);
         assert!(
-            result.findings.iter().any(|f| f.credential_type == CredentialType::Password),
+            result
+                .findings
+                .iter()
+                .any(|f| f.credential_type == CredentialType::Password),
             "should detect password in URL"
         );
     }
@@ -393,7 +415,10 @@ mod tests {
         let content = r#"token = "abcdef1234567890""#;
         let result = scan_text(content);
         assert!(
-            result.findings.iter().any(|f| f.credential_type == CredentialType::GenericSecret),
+            result
+                .findings
+                .iter()
+                .any(|f| f.credential_type == CredentialType::GenericSecret),
             "should detect generic secret"
         );
     }
@@ -411,7 +436,10 @@ mod tests {
     #[test]
     fn no_findings_in_clean_text() {
         let result = scan_text("This is perfectly clean text with no secrets at all.");
-        assert!(result.findings.is_empty(), "should find nothing in clean text");
+        assert!(
+            result.findings.is_empty(),
+            "should find nothing in clean text"
+        );
     }
 
     #[test]

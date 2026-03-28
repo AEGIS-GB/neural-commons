@@ -14,7 +14,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use rand::RngCore;
 use thiserror::Error;
 
-use crate::types::{WriteToken, WRITE_TOKEN_TTL_MS};
+use crate::types::{WRITE_TOKEN_TTL_MS, WriteToken};
 
 // ═══════════════════════════════════════════════════════════════════
 // Error types
@@ -85,12 +85,7 @@ impl WriteTokenManager {
         let mut token_id = [0u8; 16];
         rand::rngs::OsRng.fill_bytes(&mut token_id);
 
-        let session_hmac = Self::compute_hmac(
-            &self.session_key,
-            file_path,
-            &token_id,
-            now_ms,
-        );
+        let session_hmac = Self::compute_hmac(&self.session_key, file_path, &token_id, now_ms);
 
         let token = WriteToken {
             file_path: file_path.to_path_buf(),
@@ -100,7 +95,8 @@ impl WriteTokenManager {
             session_hmac,
         };
 
-        self.active_tokens.insert(file_path.to_path_buf(), token.clone());
+        self.active_tokens
+            .insert(file_path.to_path_buf(), token.clone());
         token
     }
 
@@ -209,8 +205,7 @@ impl WriteTokenManager {
         let path_bytes = file_path.as_os_str().as_encoded_bytes();
         let issued_at_bytes = issued_at.to_le_bytes();
 
-        let mut message =
-            Vec::with_capacity(32 + path_bytes.len() + 16 + 8);
+        let mut message = Vec::with_capacity(32 + path_bytes.len() + 16 + 8);
         message.extend_from_slice(session_key);
         message.extend_from_slice(path_bytes);
         message.extend_from_slice(token_id);
@@ -485,10 +480,7 @@ mod tests {
         // Consuming one does not affect the other.
         mgr.consume(&token_a.token_id).unwrap();
         assert!(mgr.validate(&path_b).is_ok());
-        assert_eq!(
-            mgr.validate(&path_a).unwrap_err(),
-            TokenError::NotFound
-        );
+        assert_eq!(mgr.validate(&path_a).unwrap_err(), TokenError::NotFound);
     }
 
     // ── Session key uniqueness ──────────────────────────────────────

@@ -23,12 +23,12 @@ use aegis_proxy::config::{ProxyConfig, ProxyMode};
 use aegis_proxy::middleware::MiddlewareHooks;
 use tracing::{info, warn};
 
+use crate::Mode;
 use crate::config::AdapterConfig;
 use crate::hooks::{BarrierHookImpl, EvidenceHookImpl, SlmHookImpl, VaultHookImpl};
 use crate::mode::ModeController;
 use crate::replay::{MonotonicCounter, NonceRegistry};
 use crate::state::AdapterState;
-use crate::Mode;
 
 /// Auto-detect the ProtectAI classifier model directory.
 /// Searches standard locations for model.onnx + tokenizer.json.
@@ -41,9 +41,7 @@ fn detect_prompt_guard_model() -> Option<String> {
     ];
     // Also check home-relative paths
     let home_candidates: Vec<PathBuf> = if let Ok(home) = std::env::var("HOME") {
-        vec![
-            PathBuf::from(&home).join(".aegis/models/protectai-v2"),
-        ]
+        vec![PathBuf::from(&home).join(".aegis/models/protectai-v2")]
     } else {
         vec![]
     };
@@ -65,7 +63,9 @@ fn detect_prompt_guard_model() -> Option<String> {
             return Some(path.to_string_lossy().to_string());
         }
     }
-    info!("ProtectAI classifier model not found — classifier layer disabled (use `aegis slm recommend` for setup guidance, or `aegis --no-slm` to silence)");
+    info!(
+        "ProtectAI classifier model not found — classifier layer disabled (use `aegis slm recommend` for setup guidance, or `aegis --no-slm` to silence)"
+    );
     None
 }
 
@@ -92,10 +92,7 @@ pub enum StartupError {
 ///
 /// This is the main entry point called by the CLI when no subcommand
 /// is provided. It composes all subsystems and starts the proxy.
-pub async fn start(
-    config: AdapterConfig,
-    mode_override: Option<Mode>,
-) -> Result<(), StartupError> {
+pub async fn start(config: AdapterConfig, mode_override: Option<Mode>) -> Result<(), StartupError> {
     let start_time = Instant::now();
 
     // 1. Determine operating mode
@@ -128,7 +125,8 @@ pub async fn start(
         .map_err(|e| StartupError::Evidence(format!("{e}")))?;
     let recorder = Arc::new(recorder);
 
-    let (alert_tx, _alert_rx) = tokio::sync::broadcast::channel::<aegis_dashboard::DashboardAlert>(32);
+    let (alert_tx, _alert_rx) =
+        tokio::sync::broadcast::channel::<aegis_dashboard::DashboardAlert>(32);
 
     let chain_head = recorder.chain_head();
     info!(
@@ -196,80 +194,102 @@ pub async fn start(
         let screener: Arc<dyn aegis_memory::screen::MemoryScreener> =
             Arc::new(aegis_memory::screen::HeuristicScreener);
         let workspace_root = std::env::current_dir().unwrap_or_default();
-        let monitor = aegis_memory::monitor::MemoryMonitor::new(
-            mem_config,
-            screener,
-            workspace_root,
-        );
+        let monitor =
+            aegis_memory::monitor::MemoryMonitor::new(mem_config, screener, workspace_root);
         let monitor_recorder = recorder.clone();
         let monitor_alert_tx = alert_tx.clone();
 
         tokio::spawn(async move {
-            monitor.run(move |events| {
-                for event in &events {
-                    match event {
-                        aegis_memory::monitor::MemoryEvent::FileChanged { path, screen_verdict, .. } => {
-                            let action = format!("memory_change {}", path.display());
-                            let outcome = format!("verdict={screen_verdict:?}");
-                            if let Err(e) = monitor_recorder.record_simple(
-                                aegis_schemas::ReceiptType::MemoryIntegrity,
-                                &action,
-                                &outcome,
-                            ) {
-                                tracing::warn!("failed to record memory event: {e}");
-                            }
+            monitor
+                .run(move |events| {
+                    for event in &events {
+                        match event {
+                            aegis_memory::monitor::MemoryEvent::FileChanged {
+                                path,
+                                screen_verdict,
+                                ..
+                            } => {
+                                let action = format!("memory_change {}", path.display());
+                                let outcome = format!("verdict={screen_verdict:?}");
+                                if let Err(e) = monitor_recorder.record_simple(
+                                    aegis_schemas::ReceiptType::MemoryIntegrity,
+                                    &action,
+                                    &outcome,
+                                ) {
+                                    tracing::warn!("failed to record memory event: {e}");
+                                }
 
-                            if matches!(screen_verdict, aegis_memory::screen::ScreenVerdict::Blocked) {
-                                let alert = aegis_dashboard::DashboardAlert {
-                                    ts_ms: std::time::SystemTime::now()
-                                        .duration_since(std::time::UNIX_EPOCH)
-                                        .unwrap_or_default()
-                                        .as_millis() as u64,
-                                    kind: "memory_injection".to_string(),
-                                    message: format!("Suspicious memory change: {}", path.display()),
-                                    receipt_seq: monitor_recorder.chain_head().head_seq,
-                                };
-                                let _ = monitor_alert_tx.send(alert);
+                                if matches!(
+                                    screen_verdict,
+                                    aegis_memory::screen::ScreenVerdict::Blocked
+                                ) {
+                                    let alert = aegis_dashboard::DashboardAlert {
+                                        ts_ms: std::time::SystemTime::now()
+                                            .duration_since(std::time::UNIX_EPOCH)
+                                            .unwrap_or_default()
+                                            .as_millis()
+                                            as u64,
+                                        kind: "memory_injection".to_string(),
+                                        message: format!(
+                                            "Suspicious memory change: {}",
+                                            path.display()
+                                        ),
+                                        receipt_seq: monitor_recorder.chain_head().head_seq,
+                                    };
+                                    let _ = monitor_alert_tx.send(alert);
+                                }
                             }
-                        }
-                        aegis_memory::monitor::MemoryEvent::FileDeleted { path, .. } => {
-                            let action = format!("memory_deleted {}", path.display());
-                            if let Err(e) = monitor_recorder.record_simple(
-                                aegis_schemas::ReceiptType::MemoryIntegrity,
-                                &action,
-                                "file deleted",
-                            ) {
-                                tracing::warn!("failed to record memory deletion: {e}");
+                            aegis_memory::monitor::MemoryEvent::FileDeleted { path, .. } => {
+                                let action = format!("memory_deleted {}", path.display());
+                                if let Err(e) = monitor_recorder.record_simple(
+                                    aegis_schemas::ReceiptType::MemoryIntegrity,
+                                    &action,
+                                    "file deleted",
+                                ) {
+                                    tracing::warn!("failed to record memory deletion: {e}");
+                                }
                             }
-                        }
-                        aegis_memory::monitor::MemoryEvent::FileAppeared { path, screen_verdict, .. } => {
-                            let action = format!("memory_appeared {}", path.display());
-                            let outcome = format!("verdict={screen_verdict:?}");
-                            if let Err(e) = monitor_recorder.record_simple(
-                                aegis_schemas::ReceiptType::MemoryIntegrity,
-                                &action,
-                                &outcome,
-                            ) {
-                                tracing::warn!("failed to record memory appeared: {e}");
+                            aegis_memory::monitor::MemoryEvent::FileAppeared {
+                                path,
+                                screen_verdict,
+                                ..
+                            } => {
+                                let action = format!("memory_appeared {}", path.display());
+                                let outcome = format!("verdict={screen_verdict:?}");
+                                if let Err(e) = monitor_recorder.record_simple(
+                                    aegis_schemas::ReceiptType::MemoryIntegrity,
+                                    &action,
+                                    &outcome,
+                                ) {
+                                    tracing::warn!("failed to record memory appeared: {e}");
+                                }
                             }
-                        }
-                        aegis_memory::monitor::MemoryEvent::FileTracked { path, content_hash, .. } => {
-                            let action = format!("memory_tracked {}", path.display());
-                            let outcome = format!("hash={}", &content_hash[..16.min(content_hash.len())]);
-                            if let Err(e) = monitor_recorder.record_simple(
-                                aegis_schemas::ReceiptType::MemoryIntegrity,
-                                &action,
-                                &outcome,
-                            ) {
-                                tracing::warn!("failed to record memory tracked: {e}");
+                            aegis_memory::monitor::MemoryEvent::FileTracked {
+                                path,
+                                content_hash,
+                                ..
+                            } => {
+                                let action = format!("memory_tracked {}", path.display());
+                                let outcome =
+                                    format!("hash={}", &content_hash[..16.min(content_hash.len())]);
+                                if let Err(e) = monitor_recorder.record_simple(
+                                    aegis_schemas::ReceiptType::MemoryIntegrity,
+                                    &action,
+                                    &outcome,
+                                ) {
+                                    tracing::warn!("failed to record memory tracked: {e}");
+                                }
                             }
+                            _ => {}
                         }
-                        _ => {}
                     }
-                }
-            }).await;
+                })
+                .await;
         });
-        info!("memory monitor started (interval={}s)", config.memory.hash_interval_secs);
+        info!(
+            "memory monitor started (interval={}s)",
+            config.memory.hash_interval_secs
+        );
     }
 
     // 6b. Start barrier filesystem watcher (Layer 1 detection + enforce revert)
@@ -287,27 +307,34 @@ pub async fn start(
         if let Some(prev_manifest) = aegis_barrier::manifest::FileManifest::load_from(&data_dir) {
             if prev_manifest.verify_signature(&verifying_key) {
                 let discrepancies = prev_manifest.compare_against_disk(&watcher_workspace);
-                let tamperings: Vec<_> = discrepancies.iter()
+                let tamperings: Vec<_> = discrepancies
+                    .iter()
                     .filter(|r| !matches!(r, aegis_barrier::manifest::ManifestCheckResult::Match))
                     .collect();
                 if tamperings.is_empty() {
-                    info!("manifest: all files match previous session — no between-session tampering");
+                    info!(
+                        "manifest: all files match previous session — no between-session tampering"
+                    );
                 } else {
                     for result in &tamperings {
                         let (msg, action) = match result {
-                            aegis_barrier::manifest::ManifestCheckResult::HashChanged { path, expected, actual } => {
-                                (
-                                    format!("BETWEEN-SESSION TAMPERING: {} (expected={} actual={})",
-                                        path.display(), &expected[..16.min(expected.len())], &actual[..16.min(actual.len())]),
-                                    format!("between_session_tamper {}", path.display()),
-                                )
-                            }
-                            aegis_barrier::manifest::ManifestCheckResult::Missing { path } => {
-                                (
-                                    format!("BETWEEN-SESSION DELETION: {}", path.display()),
-                                    format!("between_session_delete {}", path.display()),
-                                )
-                            }
+                            aegis_barrier::manifest::ManifestCheckResult::HashChanged {
+                                path,
+                                expected,
+                                actual,
+                            } => (
+                                format!(
+                                    "BETWEEN-SESSION TAMPERING: {} (expected={} actual={})",
+                                    path.display(),
+                                    &expected[..16.min(expected.len())],
+                                    &actual[..16.min(actual.len())]
+                                ),
+                                format!("between_session_tamper {}", path.display()),
+                            ),
+                            aegis_barrier::manifest::ManifestCheckResult::Missing { path } => (
+                                format!("BETWEEN-SESSION DELETION: {}", path.display()),
+                                format!("between_session_delete {}", path.display()),
+                            ),
                             _ => continue,
                         };
                         warn!("manifest: {msg}");
@@ -329,10 +356,15 @@ pub async fn start(
                         };
                         let _ = alert_tx.send(alert);
                     }
-                    warn!(count = tamperings.len(), "manifest: between-session tampering detected!");
+                    warn!(
+                        count = tamperings.len(),
+                        "manifest: between-session tampering detected!"
+                    );
                 }
             } else {
-                warn!("manifest: previous session manifest has INVALID SIGNATURE — possible manifest tampering");
+                warn!(
+                    "manifest: previous session manifest has INVALID SIGNATURE — possible manifest tampering"
+                );
                 if let Err(e) = barrier_recorder.record_simple(
                     aegis_schemas::ReceiptType::WriteBarrier,
                     "manifest_signature_invalid",
@@ -345,7 +377,8 @@ pub async fn start(
 
         // Snapshot critical files at startup for enforce-mode restore.
         // No git dependency — restores from in-memory copy.
-        let critical_paths: Vec<std::path::PathBuf> = barrier_protected.lock()
+        let critical_paths: Vec<std::path::PathBuf> = barrier_protected
+            .lock()
             .map(|mgr| {
                 mgr.list_all()
                     .iter()
@@ -355,14 +388,16 @@ pub async fn start(
                     .collect()
             })
             .unwrap_or_default();
-        let snapshot_store = Arc::new(
-            aegis_barrier::snapshot::SnapshotStore::load(&watcher_workspace, &critical_paths)
-        );
+        let snapshot_store = Arc::new(aegis_barrier::snapshot::SnapshotStore::load(
+            &watcher_workspace,
+            &critical_paths,
+        ));
 
         // Write signed manifest for between-session persistence.
         // On next startup, this manifest is compared against disk to detect offline tampering.
         let manifest = aegis_barrier::manifest::FileManifest::from_snapshot(
-            &snapshot_store, &manifest_signing_key,
+            &snapshot_store,
+            &manifest_signing_key,
         );
         if let Err(e) = manifest.write_to(&data_dir) {
             warn!("failed to write file manifest: {e}");
@@ -387,10 +422,19 @@ pub async fn start(
                 let mismatches = layer2_snapshot.verify_all(&layer2_workspace);
                 for (rel_path, mismatch) in &mismatches {
                     let mismatch_desc = match mismatch {
-                        aegis_barrier::snapshot::SnapshotMismatch::HashChanged { expected, actual } => {
-                            format!("hash_changed expected={} actual={}", &expected[..16.min(expected.len())], &actual[..16.min(actual.len())])
+                        aegis_barrier::snapshot::SnapshotMismatch::HashChanged {
+                            expected,
+                            actual,
+                        } => {
+                            format!(
+                                "hash_changed expected={} actual={}",
+                                &expected[..16.min(expected.len())],
+                                &actual[..16.min(actual.len())]
+                            )
                         }
-                        aegis_barrier::snapshot::SnapshotMismatch::Missing => "file_missing".to_string(),
+                        aegis_barrier::snapshot::SnapshotMismatch::Missing => {
+                            "file_missing".to_string()
+                        }
                     };
 
                     // In enforce mode, restore from snapshot
@@ -430,9 +474,17 @@ pub async fn start(
                     }
 
                     let msg = if reverted {
-                        format!("Layer 2: Critical file tampered and REVERTED: {} ({})", rel_path.display(), mismatch_desc)
+                        format!(
+                            "Layer 2: Critical file tampered and REVERTED: {} ({})",
+                            rel_path.display(),
+                            mismatch_desc
+                        )
                     } else {
-                        format!("Layer 2: Critical file tampered: {} ({})", rel_path.display(), mismatch_desc)
+                        format!(
+                            "Layer 2: Critical file tampered: {} ({})",
+                            rel_path.display(),
+                            mismatch_desc
+                        )
                     };
                     let alert = aegis_dashboard::DashboardAlert {
                         ts_ms: std::time::SystemTime::now()
@@ -446,7 +498,10 @@ pub async fn start(
                     let _ = layer2_alert_tx.send(alert);
                 }
                 if !mismatches.is_empty() {
-                    tracing::warn!(count = mismatches.len(), "Layer 2 periodic check found mismatches");
+                    tracing::warn!(
+                        count = mismatches.len(),
+                        "Layer 2 periodic check found mismatches"
+                    );
                 }
             }
         });
@@ -458,9 +513,9 @@ pub async fn start(
         let watcher_data_dir = barrier_data_dir.clone();
 
         tokio::spawn(async move {
-            use notify::{Watcher, RecursiveMode, Config};
-            use aegis_barrier::watcher::{FileWatcher, map_notify_event, is_excluded};
             use aegis_barrier::types::DebounceConfig;
+            use aegis_barrier::watcher::{FileWatcher, is_excluded, map_notify_event};
+            use notify::{Config, RecursiveMode, Watcher};
 
             let (tx, mut rx) = tokio::sync::mpsc::channel(256);
 
@@ -480,7 +535,10 @@ pub async fn start(
             };
 
             if let Err(e) = watcher.watch(&watcher_workspace, RecursiveMode::Recursive) {
-                tracing::error!("barrier watcher failed to watch {}: {e}", watcher_workspace.display());
+                tracing::error!(
+                    "barrier watcher failed to watch {}: {e}",
+                    watcher_workspace.display()
+                );
                 return;
             }
 
@@ -499,29 +557,35 @@ pub async fn start(
                     }
 
                     // Check if this is a protected file
-                    let relative = we.path.strip_prefix(&watcher_workspace)
-                        .unwrap_or(&we.path);
-                    let is_protected = barrier_protected.lock()
+                    let relative = we.path.strip_prefix(&watcher_workspace).unwrap_or(&we.path);
+                    let is_protected = barrier_protected
+                        .lock()
                         .map(|mgr| mgr.is_protected(relative))
                         .unwrap_or(false);
-                    let is_critical = barrier_protected.lock()
+                    let is_critical = barrier_protected
+                        .lock()
                         .map(|mgr| mgr.is_critical(relative))
                         .unwrap_or(false);
 
                     if is_protected {
-                        let action = format!("filesystem_change {} {:?}", relative.display(), we.kind);
+                        let action =
+                            format!("filesystem_change {} {:?}", relative.display(), we.kind);
 
                         // Trust-tier-aware decision: check active channel trust level.
                         // Trusted/Full → allow change, update manifest (warden or authorized agent)
                         // Public/Unknown/Restricted → potential prompt injection, block/alert
                         // No channel → no active session, treat as suspicious
-                        let channel_trust = aegis_proxy::cognitive_bridge::get_registered_channel_trust();
+                        let channel_trust =
+                            aegis_proxy::cognitive_bridge::get_registered_channel_trust();
                         let is_trusted_channel = channel_trust
                             .as_ref()
-                            .map(|ct| matches!(
-                                ct.trust_level,
-                                aegis_schemas::TrustLevel::Full | aegis_schemas::TrustLevel::Trusted
-                            ))
+                            .map(|ct| {
+                                matches!(
+                                    ct.trust_level,
+                                    aegis_schemas::TrustLevel::Full
+                                        | aegis_schemas::TrustLevel::Trusted
+                                )
+                            })
                             .unwrap_or(false);
 
                         let trust_label = channel_trust
@@ -530,9 +594,8 @@ pub async fn start(
                             .unwrap_or_else(|| "no_channel".to_string());
 
                         // Decision: revert only if untrusted channel AND enforce mode AND critical
-                        let should_revert = barrier_mode == Mode::Enforce
-                            && is_critical
-                            && !is_trusted_channel;
+                        let should_revert =
+                            barrier_mode == Mode::Enforce && is_critical && !is_trusted_channel;
 
                         let reverted = if should_revert {
                             match snapshot_store.restore(&watcher_workspace, relative) {
@@ -566,25 +629,27 @@ pub async fn start(
 
                         // If trusted channel and not reverted, update the manifest
                         // to accept the new file state as legitimate.
-                        if is_trusted_channel && !reverted
-                            && let Ok(content) = std::fs::read(watcher_workspace.join(relative)) {
-                                let new_hash = hex::encode(aegis_crypto::hash(&content));
-                                if let Ok(mut m) = watcher_manifest.lock() {
-                                    m.update_file(
-                                        &relative.to_string_lossy(),
-                                        &new_hash,
-                                        &watcher_signing_key,
-                                    );
-                                    if let Err(e) = m.write_to(&watcher_data_dir) {
-                                        tracing::warn!("failed to update manifest: {e}");
-                                    }
-                                }
-                                tracing::info!(
-                                    path = %relative.display(),
-                                    trust = %trust_label,
-                                    "barrier: accepted change from trusted channel, manifest updated"
+                        if is_trusted_channel
+                            && !reverted
+                            && let Ok(content) = std::fs::read(watcher_workspace.join(relative))
+                        {
+                            let new_hash = hex::encode(aegis_crypto::hash(&content));
+                            if let Ok(mut m) = watcher_manifest.lock() {
+                                m.update_file(
+                                    &relative.to_string_lossy(),
+                                    &new_hash,
+                                    &watcher_signing_key,
                                 );
+                                if let Err(e) = m.write_to(&watcher_data_dir) {
+                                    tracing::warn!("failed to update manifest: {e}");
+                                }
                             }
+                            tracing::info!(
+                                path = %relative.display(),
+                                trust = %trust_label,
+                                "barrier: accepted change from trusted channel, manifest updated"
+                            );
+                        }
 
                         let outcome = if reverted {
                             format!("critical_file_reverted trust={trust_label}")
@@ -606,9 +671,17 @@ pub async fn start(
 
                         if is_critical && !is_trusted_channel {
                             let msg = if reverted {
-                                format!("Critical file modified and REVERTED: {} (channel: {})", relative.display(), trust_label)
+                                format!(
+                                    "Critical file modified and REVERTED: {} (channel: {})",
+                                    relative.display(),
+                                    trust_label
+                                )
                             } else {
-                                format!("Critical file modified: {} (channel: {})", relative.display(), trust_label)
+                                format!(
+                                    "Critical file modified: {} (channel: {})",
+                                    relative.display(),
+                                    trust_label
+                                )
                             };
                             let alert = aegis_dashboard::DashboardAlert {
                                 ts_ms: we.timestamp_ms,
@@ -635,7 +708,10 @@ pub async fn start(
     }
 
     // 7. Create middleware hooks
-    let prompt_guard_dir = config.slm.prompt_guard_model_dir.clone()
+    let prompt_guard_dir = config
+        .slm
+        .prompt_guard_model_dir
+        .clone()
         .or_else(detect_prompt_guard_model);
     // P0: Cache the ProtectAI classifier at startup (~950ms once, ~5ms per-request)
     aegis_slm::loopback::init_prompt_guard(prompt_guard_dir.as_deref());
@@ -653,7 +729,15 @@ pub async fn start(
     // usage in tool call results from actual exfiltration. Until then, the scanner
     // flags everything and the warden interprets the results.
     let vault_allowlist: Vec<String> = Vec::new();
-    let hooks = create_middleware_hooks(recorder.clone(), mode, alert_tx.clone(), slm_config, slm_enabled, vault_allowlist, config.slm.slm_timeout_secs);
+    let hooks = create_middleware_hooks(
+        recorder.clone(),
+        mode,
+        alert_tx.clone(),
+        slm_config,
+        slm_enabled,
+        vault_allowlist,
+        config.slm.slm_timeout_secs,
+    );
 
     // 7. Build proxy config
     let proxy_config = ProxyConfig {
@@ -666,7 +750,10 @@ pub async fn start(
             Mode::ObserveOnly => ProxyMode::ObserveOnly,
             Mode::Enforce => ProxyMode::Enforce,
         },
-        provider: config.proxy.provider.as_deref()
+        provider: config
+            .proxy
+            .provider
+            .as_deref()
             .and_then(|p| serde_json::from_value(serde_json::Value::String(p.to_string())).ok())
             .unwrap_or_else(|| aegis_proxy::config::Provider::from_url(&config.proxy.upstream_url)),
         allow_any_provider: config.proxy.allow_any_provider,
@@ -677,7 +764,9 @@ pub async fn start(
 
     // 8. Warn if upstream is still the default (common misconfiguration)
     if config.proxy.upstream_url == "https://api.anthropic.com" {
-        info!("upstream_url is the default (https://api.anthropic.com) — set [proxy] upstream_url in config.toml if needed");
+        info!(
+            "upstream_url is the default (https://api.anthropic.com) — set [proxy] upstream_url in config.toml if needed"
+        );
     }
 
     // 9. Print startup banner
@@ -703,7 +792,10 @@ pub async fn start(
             if let Err(e) = aegis_trustmark::persist::record_snapshot(&tm_recorder, &score) {
                 tracing::warn!("failed to record initial TRUSTMARK snapshot: {e}");
             } else {
-                tracing::info!(score = format!("{:.3}", score.total), "TRUSTMARK snapshot recorded");
+                tracing::info!(
+                    score = format!("{:.3}", score.total),
+                    "TRUSTMARK snapshot recorded"
+                );
             }
 
             // Hourly snapshots
@@ -716,7 +808,10 @@ pub async fn start(
                 if let Err(e) = aegis_trustmark::persist::record_snapshot(&tm_recorder, &score) {
                     tracing::warn!("failed to record TRUSTMARK snapshot: {e}");
                 } else {
-                    tracing::info!(score = format!("{:.3}", score.total), "TRUSTMARK hourly snapshot");
+                    tracing::info!(
+                        score = format!("{:.3}", score.total),
+                        "TRUSTMARK hourly snapshot"
+                    );
                 }
             }
         });
@@ -733,31 +828,67 @@ pub async fn start(
 
     let traffic_recorder: Arc<aegis_proxy::proxy::TrafficRecorder> = {
         let ts = traffic_store.clone();
-        Arc::new(move |method: &str, path: &str, status: u16, req: &[u8], resp: &[u8], dur: u64, streaming: bool, slm_verdict: Option<&aegis_proxy::middleware::SlmVerdict>, channel: Option<&str>, trust_level: Option<&str>, model: Option<&str>| {
-            let (slm_dur, slm_action, slm_score) = match slm_verdict {
-                Some(v) => (Some(v.screening_ms), Some(v.action.as_str()), Some(v.threat_score)),
-                None => (None, None, None),
-            };
-            ts.record(method, path, status, req, resp, dur, streaming, slm_dur, slm_action, slm_score, channel, trust_level, model);
-            ts.last_id()
-        })
+        Arc::new(
+            move |method: &str,
+                  path: &str,
+                  status: u16,
+                  req: &[u8],
+                  resp: &[u8],
+                  dur: u64,
+                  streaming: bool,
+                  slm_verdict: Option<&aegis_proxy::middleware::SlmVerdict>,
+                  channel: Option<&str>,
+                  trust_level: Option<&str>,
+                  model: Option<&str>| {
+                let (slm_dur, slm_action, slm_score) = match slm_verdict {
+                    Some(v) => (
+                        Some(v.screening_ms),
+                        Some(v.action.as_str()),
+                        Some(v.threat_score),
+                    ),
+                    None => (None, None, None),
+                };
+                ts.record(
+                    method,
+                    path,
+                    status,
+                    req,
+                    resp,
+                    dur,
+                    streaming,
+                    slm_dur,
+                    slm_action,
+                    slm_score,
+                    channel,
+                    trust_level,
+                    model,
+                );
+                ts.last_id()
+            },
+        )
     };
 
     let traffic_slm_updater: Arc<aegis_proxy::proxy::TrafficSlmUpdater> = {
         let ts = traffic_store.clone();
-        Arc::new(move |entry_id: u64, duration_ms: u64, verdict: &str, threat_score: u32| {
-            ts.update_slm(entry_id, duration_ms, verdict, threat_score);
-        })
+        Arc::new(
+            move |entry_id: u64, duration_ms: u64, verdict: &str, threat_score: u32| {
+                ts.update_slm(entry_id, duration_ms, verdict, threat_score);
+            },
+        )
     };
 
     // Build trust config from adapter config
     let trust_config = {
         use aegis_proxy::channel_trust::{TrustConfig, parse_trust_level};
         let tc = &config.trust;
-        let channels: Vec<(String, aegis_schemas::TrustLevel)> = tc.channels.iter()
+        let channels: Vec<(String, aegis_schemas::TrustLevel)> = tc
+            .channels
+            .iter()
             .map(|cp| (cp.pattern.clone(), parse_trust_level(&cp.level)))
             .collect();
-        let signing_pubkey = tc.signing_pubkey.as_ref()
+        let signing_pubkey = tc
+            .signing_pubkey
+            .as_ref()
             .and_then(|hex_str| hex::decode(hex_str).ok());
         TrustConfig {
             default_level: parse_trust_level(&tc.default_level),
@@ -774,8 +905,8 @@ pub async fn start(
         Some(traffic_slm_updater),
         Some(trust_config),
     )
-        .await
-        .map_err(|e| StartupError::Proxy(format!("{e}")))?;
+    .await
+    .map_err(|e| StartupError::Proxy(format!("{e}")))?;
 
     // 12. Record shutdown receipt
     if let Err(e) = adapter_state.evidence.record_simple(
@@ -830,14 +961,19 @@ fn create_middleware_hooks(
                 None
             };
             MiddlewareHooks {
-                evidence: Some(Arc::new(EvidenceHookImpl { recorder: recorder.clone(), alert_tx: alert_tx.clone() })),
+                evidence: Some(Arc::new(EvidenceHookImpl {
+                    recorder: recorder.clone(),
+                    alert_tx: alert_tx.clone(),
+                })),
                 barrier: Some(Arc::new(BarrierHookImpl {
                     protected_files,
                     recorder,
                     alert_tx,
                 })),
                 slm: slm_hook,
-                vault: Some(Arc::new(VaultHookImpl { allowlist: vault_allowlist })),
+                vault: Some(Arc::new(VaultHookImpl {
+                    allowlist: vault_allowlist,
+                })),
             }
         }
     }
@@ -902,7 +1038,11 @@ fn print_banner(config: &AdapterConfig, mode: Mode, bot_id: &str, state: &Adapte
     eprintln!("  mode:       {}", mode_label);
     eprintln!("  listen:     {}", config.proxy.listen_addr);
     eprintln!("  upstream:   {}", config.proxy.upstream_url);
-    eprintln!("  bot id:     {}...{}", &bot_id[..8], &bot_id[bot_id.len()-8..]);
+    eprintln!(
+        "  bot id:     {}...{}",
+        &bot_id[..8],
+        &bot_id[bot_id.len() - 8..]
+    );
     eprintln!("  data dir:   {}", config.data_dir.display());
     eprintln!("  dashboard:  {}", state.dashboard_url());
     eprintln!("  chain seq:  {}", state.chain_head_seq());
@@ -944,7 +1084,15 @@ mod tests {
         let key = ed25519::generate_keypair();
         let recorder = Arc::new(EvidenceRecorder::new_in_memory(key).unwrap());
         let (alert_tx, _) = tokio::sync::broadcast::channel(32);
-        let hooks = create_middleware_hooks(recorder, Mode::ObserveOnly, alert_tx, test_slm_config(), true, vec![], 15);
+        let hooks = create_middleware_hooks(
+            recorder,
+            Mode::ObserveOnly,
+            alert_tx,
+            test_slm_config(),
+            true,
+            vec![],
+            15,
+        );
         assert!(hooks.evidence.is_some());
         assert!(hooks.barrier.is_some());
         assert!(hooks.slm.is_some());
@@ -956,7 +1104,15 @@ mod tests {
         let key = ed25519::generate_keypair();
         let recorder = Arc::new(EvidenceRecorder::new_in_memory(key).unwrap());
         let (alert_tx, _) = tokio::sync::broadcast::channel(32);
-        let hooks = create_middleware_hooks(recorder, Mode::ObserveOnly, alert_tx, test_slm_config(), false, vec![], 15);
+        let hooks = create_middleware_hooks(
+            recorder,
+            Mode::ObserveOnly,
+            alert_tx,
+            test_slm_config(),
+            false,
+            vec![],
+            15,
+        );
         assert!(hooks.evidence.is_some());
         assert!(hooks.barrier.is_some());
         assert!(hooks.slm.is_none());
@@ -968,7 +1124,15 @@ mod tests {
         let key = ed25519::generate_keypair();
         let recorder = Arc::new(EvidenceRecorder::new_in_memory(key).unwrap());
         let (alert_tx, _) = tokio::sync::broadcast::channel(32);
-        let hooks = create_middleware_hooks(recorder, Mode::PassThrough, alert_tx, test_slm_config(), true, vec![], 15);
+        let hooks = create_middleware_hooks(
+            recorder,
+            Mode::PassThrough,
+            alert_tx,
+            test_slm_config(),
+            true,
+            vec![],
+            15,
+        );
         assert!(hooks.evidence.is_none());
         assert!(hooks.barrier.is_none());
         assert!(hooks.slm.is_none());

@@ -20,10 +20,7 @@ pub enum FileCheckResult {
     /// Content hash and inode match the registered baseline.
     Match,
     /// Content hash differs from the registered baseline.
-    HashMismatch {
-        expected: String,
-        actual: String,
-    },
+    HashMismatch { expected: String, actual: String },
     /// The file path is not present in the registry.
     NotRegistered,
     /// The device/inode pair changed — possible symlink or hardlink swap.
@@ -83,7 +80,9 @@ impl HashRegistryManager {
             evolution_receipt: None,
             sensitivity_class: sensitivity,
         };
-        self.registry.entries.insert(path.to_path_buf(), entry.clone());
+        self.registry
+            .entries
+            .insert(path.to_path_buf(), entry.clone());
         entry
     }
 
@@ -421,7 +420,10 @@ mod tests {
         assert_eq!(removed.unwrap().hash, aegis_crypto::hash(content));
 
         assert_eq!(mgr.file_count(), 0);
-        assert_eq!(mgr.check_file(&path, content), FileCheckResult::NotRegistered);
+        assert_eq!(
+            mgr.check_file(&path, content),
+            FileCheckResult::NotRegistered
+        );
     }
 
     #[test]
@@ -438,22 +440,16 @@ mod tests {
         assert_eq!(mgr.file_count(), 0);
         assert!(mgr.list_files().is_empty());
 
-        mgr.register_file(
-            Path::new("/a"),
-            b"a",
-            (1, 1),
-            SensitivityClass::Standard,
-        );
-        mgr.register_file(
-            Path::new("/b"),
-            b"b",
-            (1, 2),
-            SensitivityClass::Standard,
-        );
+        mgr.register_file(Path::new("/a"), b"a", (1, 1), SensitivityClass::Standard);
+        mgr.register_file(Path::new("/b"), b"b", (1, 2), SensitivityClass::Standard);
 
         assert_eq!(mgr.file_count(), 2);
 
-        let mut paths: Vec<String> = mgr.list_files().iter().map(|p| p.display().to_string()).collect();
+        let mut paths: Vec<String> = mgr
+            .list_files()
+            .iter()
+            .map(|p| p.display().to_string())
+            .collect();
         paths.sort();
         assert_eq!(paths, vec!["/a", "/b"]);
     }
@@ -515,18 +511,8 @@ mod tests {
     #[test]
     fn registry_hash_is_deterministic() {
         let mut mgr = HashRegistryManager::new();
-        mgr.register_file(
-            Path::new("/z"),
-            b"z",
-            (1, 1),
-            SensitivityClass::Standard,
-        );
-        mgr.register_file(
-            Path::new("/a"),
-            b"a",
-            (1, 2),
-            SensitivityClass::Standard,
-        );
+        mgr.register_file(Path::new("/z"), b"z", (1, 1), SensitivityClass::Standard);
+        mgr.register_file(Path::new("/a"), b"a", (1, 2), SensitivityClass::Standard);
 
         let h1 = mgr.compute_registry_hash();
         let h2 = mgr.compute_registry_hash();

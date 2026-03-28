@@ -5,6 +5,6 @@
 //! - Schema client (query aegis-schemas types)
 //! - signed_bundle_verify: Ed25519 bundle verification (used by auto-updater, broadcast, policy)
 
-pub mod nats;
-pub mod db;
 pub mod bundle;
+pub mod db;
+pub mod nats;

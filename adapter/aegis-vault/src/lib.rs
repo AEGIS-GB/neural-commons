@@ -11,10 +11,10 @@
 //!   Receipt omits enforcement_mode field (always-enforce, not switchable).
 //!   Key derivation: HKDF-SHA256 with per-row `kdf_version` for future upgrades (D9).
 
+pub mod kdf;
+pub mod policy;
 pub mod scanner;
 pub mod storage;
-pub mod policy;
-pub mod kdf;
 
 use thiserror::Error;
 

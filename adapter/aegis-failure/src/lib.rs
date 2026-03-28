@@ -5,6 +5,6 @@
 //! §2.10.3 Anomaly Threshold Engine (7-day auto-calibration)
 //! §2.10.4 Rollback Suggestion Engine (guided investigation)
 
-pub mod heartbeat;
 pub mod anomaly;
+pub mod heartbeat;
 pub mod rollback;

@@ -22,9 +22,10 @@ pub fn gather_local_signals(data_dir: &Path) -> LocalSignals {
     // ── Evidence chain (SQLite) ──
     let db_path = data_dir.join("evidence.db");
     if db_path.exists()
-        && let Ok(store) = aegis_evidence::EvidenceStore::open(&db_path) {
-            gather_from_evidence(&store, &mut signals);
-        }
+        && let Ok(store) = aegis_evidence::EvidenceStore::open(&db_path)
+    {
+        gather_from_evidence(&store, &mut signals);
+    }
 
     // ── Filesystem: identity key, manifest, protected files ──
     gather_from_filesystem(data_dir, &mut signals);
@@ -138,17 +139,16 @@ fn gather_from_filesystem(data_dir: &Path, signals: &mut LocalSignals) {
 /// Get identity key age in hours.
 pub fn get_identity_age_hours(data_dir: &Path) -> f64 {
     // Single authoritative location — no candidate scanning
-    let candidates = [
-        data_dir.join("identity.key"),
-    ];
+    let candidates = [data_dir.join("identity.key")];
     for path in &candidates {
         if let Ok(meta) = std::fs::metadata(path)
-            && let Ok(created) = meta.created().or_else(|_| meta.modified()) {
-                let age = std::time::SystemTime::now()
-                    .duration_since(created)
-                    .unwrap_or_default();
-                return age.as_secs_f64() / 3600.0;
-            }
+            && let Ok(created) = meta.created().or_else(|_| meta.modified())
+        {
+            let age = std::time::SystemTime::now()
+                .duration_since(created)
+                .unwrap_or_default();
+            return age.as_secs_f64() / 3600.0;
+        }
     }
     0.0
 }
@@ -210,20 +210,24 @@ mod tests {
 
         // Add 5 normal receipts
         for i in 0..5 {
-            recorder.record_simple(
-                aegis_schemas::ReceiptType::ApiCall,
-                &format!("request_{i}"),
-                "200 OK",
-            ).unwrap();
+            recorder
+                .record_simple(
+                    aegis_schemas::ReceiptType::ApiCall,
+                    &format!("request_{i}"),
+                    "200 OK",
+                )
+                .unwrap();
         }
 
         // Add 2 vault detection receipts
         for _ in 0..2 {
-            recorder.record_simple(
-                aegis_schemas::ReceiptType::VaultDetection,
-                "vault_scan /v1/chat/completions",
-                "credentials detected",
-            ).unwrap();
+            recorder
+                .record_simple(
+                    aegis_schemas::ReceiptType::VaultDetection,
+                    "vault_scan /v1/chat/completions",
+                    "credentials detected",
+                )
+                .unwrap();
         }
 
         let signals = gather_local_signals(dir.path());
@@ -246,25 +250,27 @@ mod tests {
 
         // Add 100 normal + 17 vault detections
         for _ in 0..100 {
-            recorder.record_simple(
-                aegis_schemas::ReceiptType::ApiCall,
-                "forward",
-                "200",
-            ).unwrap();
+            recorder
+                .record_simple(aegis_schemas::ReceiptType::ApiCall, "forward", "200")
+                .unwrap();
         }
         for _ in 0..17 {
-            recorder.record_simple(
-                aegis_schemas::ReceiptType::VaultDetection,
-                "vault",
-                "leak",
-            ).unwrap();
+            recorder
+                .record_simple(aegis_schemas::ReceiptType::VaultDetection, "vault", "leak")
+                .unwrap();
         }
 
         let signals = gather_local_signals(dir.path());
 
         assert_eq!(signals.chain_receipt_count, 117);
-        assert_eq!(signals.vault_leaks_detected, 17, "must count ALL vault detections, not a window");
-        assert_eq!(signals.vault_scans_total, 100, "scans = ApiCall count, not all receipts");
+        assert_eq!(
+            signals.vault_leaks_detected, 17,
+            "must count ALL vault detections, not a window"
+        );
+        assert_eq!(
+            signals.vault_scans_total, 100,
+            "scans = ApiCall count, not all receipts"
+        );
     }
 
     #[test]
@@ -276,11 +282,9 @@ mod tests {
         let recorder = aegis_evidence::EvidenceRecorder::new(&db_path, key).unwrap();
 
         for _ in 0..10 {
-            recorder.record_simple(
-                aegis_schemas::ReceiptType::ApiCall,
-                "forward",
-                "200",
-            ).unwrap();
+            recorder
+                .record_simple(aegis_schemas::ReceiptType::ApiCall, "forward", "200")
+                .unwrap();
         }
 
         let signals = gather_local_signals(dir.path());
@@ -318,18 +322,14 @@ mod tests {
         let recorder = aegis_evidence::EvidenceRecorder::new(&db_path, key).unwrap();
 
         for _ in 0..50 {
-            recorder.record_simple(
-                aegis_schemas::ReceiptType::ApiCall,
-                "forward",
-                "200",
-            ).unwrap();
+            recorder
+                .record_simple(aegis_schemas::ReceiptType::ApiCall, "forward", "200")
+                .unwrap();
         }
         for _ in 0..5 {
-            recorder.record_simple(
-                aegis_schemas::ReceiptType::VaultDetection,
-                "vault",
-                "leak",
-            ).unwrap();
+            recorder
+                .record_simple(aegis_schemas::ReceiptType::VaultDetection, "vault", "leak")
+                .unwrap();
         }
         fs::write(dir.path().join("identity.key"), vec![0u8; 32]).unwrap();
         fs::write(dir.path().join("file_manifest.json"), b"{}").unwrap();
@@ -357,18 +357,14 @@ mod tests {
 
         // Simulate a realistic adapter: 200 requests, 3 vault leaks
         for _ in 0..200 {
-            recorder.record_simple(
-                aegis_schemas::ReceiptType::ApiCall,
-                "forward",
-                "200",
-            ).unwrap();
+            recorder
+                .record_simple(aegis_schemas::ReceiptType::ApiCall, "forward", "200")
+                .unwrap();
         }
         for _ in 0..3 {
-            recorder.record_simple(
-                aegis_schemas::ReceiptType::VaultDetection,
-                "vault",
-                "leak",
-            ).unwrap();
+            recorder
+                .record_simple(aegis_schemas::ReceiptType::VaultDetection, "vault", "leak")
+                .unwrap();
         }
 
         fs::write(dir.path().join("identity.key"), vec![0u8; 32]).unwrap();
@@ -378,13 +374,21 @@ mod tests {
         let score = crate::scoring::TrustmarkScore::compute(&signals);
 
         // Should be a reasonable score — not 0, not 100
-        assert!(score.total > 0.4, "realistic data should score > 0.4: {}", score.total);
+        assert!(
+            score.total > 0.4,
+            "realistic data should score > 0.4: {}",
+            score.total
+        );
         assert!(score.total < 1.0);
 
         // Vault should reflect 3/203 leak rate
         let vault = &score.dimensions[2];
         assert_eq!(vault.name, "vault_hygiene");
         // 3/203 = 1.5% leak rate, 0 redacted → (0.985 * 0.7) + (0.0 * 0.3) ≈ 0.69
-        assert!(vault.value > 0.6 && vault.value < 0.75, "3/203 with 0 redacted should be ~0.69: {}", vault.value);
+        assert!(
+            vault.value > 0.6 && vault.value < 0.75,
+            "3/203 with 0 redacted should be ~0.69: {}",
+            vault.value
+        );
     }
 }

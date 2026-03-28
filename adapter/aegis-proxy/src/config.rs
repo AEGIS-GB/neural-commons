@@ -6,8 +6,12 @@ use serde::{Deserialize, Serialize};
 ///
 /// Phase 1: Anthropic only. When OpenAI support is added in Phase 2,
 /// a new variant is added here — no string comparisons needed.
-fn default_slm_max_content_chars() -> usize { 24_000 }
-fn default_burst_size() -> u32 { 50 }
+fn default_slm_max_content_chars() -> usize {
+    24_000
+}
+fn default_burst_size() -> u32 {
+    50
+}
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]

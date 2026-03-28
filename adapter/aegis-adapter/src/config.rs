@@ -6,8 +6,8 @@
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
-use aegis_schemas::config::{EnforcementConfig, RateLimitConfig};
 use crate::Mode;
+use aegis_schemas::config::{EnforcementConfig, RateLimitConfig};
 
 /// Top-level adapter configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -87,7 +87,9 @@ impl Default for TrustSection {
     }
 }
 
-fn default_trust_level() -> String { "unknown".to_string() }
+fn default_trust_level() -> String {
+    "unknown".to_string()
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -98,7 +100,6 @@ pub enum AdapterMode {
     Enforce,
     PassThrough,
 }
-
 
 impl From<AdapterMode> for Mode {
     fn from(m: AdapterMode) -> Self {
@@ -141,7 +142,9 @@ pub struct DashboardSection {
 
 impl Default for DashboardSection {
     fn default() -> Self {
-        Self { path: default_dashboard_path() }
+        Self {
+            path: default_dashboard_path(),
+        }
     }
 }
 
@@ -178,8 +181,12 @@ pub struct SlmSection {
     pub slm_max_content_chars: usize,
 }
 
-fn default_slm_timeout() -> u64 { 15 }
-fn default_slm_max_chars() -> usize { 24_000 }
+fn default_slm_timeout() -> u64 {
+    15
+}
+fn default_slm_max_chars() -> usize {
+    24_000
+}
 
 impl Default for SlmSection {
     fn default() -> Self {
@@ -249,19 +256,45 @@ impl Default for MemorySection {
     }
 }
 
-fn default_data_dir() -> PathBuf { PathBuf::from(".aegis") }
-fn default_listen_addr() -> String { "127.0.0.1:3141".to_string() }
-fn default_upstream_url() -> String { "https://api.anthropic.com".to_string() }
-fn default_max_body_size() -> usize { 10 * 1024 * 1024 } // 10MB
-fn default_rate_limit() -> u32 { 1000 }
-fn default_burst_size() -> u32 { 50 }
-fn default_true() -> bool { true }
-fn default_hash_interval() -> u64 { 60 }
-fn default_enforcement() -> EnforcementConfig { EnforcementConfig::observe_default() }
-fn default_dashboard_path() -> String { "/dashboard".to_string() }
-fn default_slm_engine() -> String { "ollama".to_string() }
-fn default_server_url() -> String { "http://localhost:11434".to_string() }
-fn default_slm_model() -> String { "llama3.2:1b".to_string() }
+fn default_data_dir() -> PathBuf {
+    PathBuf::from(".aegis")
+}
+fn default_listen_addr() -> String {
+    "127.0.0.1:3141".to_string()
+}
+fn default_upstream_url() -> String {
+    "https://api.anthropic.com".to_string()
+}
+fn default_max_body_size() -> usize {
+    10 * 1024 * 1024
+} // 10MB
+fn default_rate_limit() -> u32 {
+    1000
+}
+fn default_burst_size() -> u32 {
+    50
+}
+fn default_true() -> bool {
+    true
+}
+fn default_hash_interval() -> u64 {
+    60
+}
+fn default_enforcement() -> EnforcementConfig {
+    EnforcementConfig::observe_default()
+}
+fn default_dashboard_path() -> String {
+    "/dashboard".to_string()
+}
+fn default_slm_engine() -> String {
+    "ollama".to_string()
+}
+fn default_server_url() -> String {
+    "http://localhost:11434".to_string()
+}
+fn default_slm_model() -> String {
+    "llama3.2:1b".to_string()
+}
 
 impl Default for AdapterConfig {
     fn default() -> Self {
@@ -285,20 +318,21 @@ impl AdapterConfig {
     pub fn from_file(path: &Path) -> Result<Self, String> {
         let content = std::fs::read_to_string(path)
             .map_err(|e| format!("failed to read config file {}: {e}", path.display()))?;
-        let mut config: Self = toml::from_str(&content)
-            .map_err(|e| format!("failed to parse config file: {e}"))?;
+        let mut config: Self =
+            toml::from_str(&content).map_err(|e| format!("failed to parse config file: {e}"))?;
 
         // Resolve relative data_dir against the config file's parent directory.
         // This ensures CLI and server use the same absolute path regardless of cwd.
         if config.data_dir.is_relative()
-            && let Some(config_dir) = path.parent() {
-                let resolved = config_dir.join(&config.data_dir);
-                if let Ok(abs) = resolved.canonicalize() {
-                    config.data_dir = abs;
-                } else if let Ok(abs) = std::env::current_dir().map(|cwd| cwd.join(&config.data_dir)) {
-                    config.data_dir = abs;
-                }
+            && let Some(config_dir) = path.parent()
+        {
+            let resolved = config_dir.join(&config.data_dir);
+            if let Ok(abs) = resolved.canonicalize() {
+                config.data_dir = abs;
+            } else if let Ok(abs) = std::env::current_dir().map(|cwd| cwd.join(&config.data_dir)) {
+                config.data_dir = abs;
             }
+        }
 
         Ok(config)
     }

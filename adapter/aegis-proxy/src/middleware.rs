@@ -237,7 +237,13 @@ pub trait SlmHook: Send + Sync {
     fn screen_fast<'a>(
         &'a self,
         content: &'a str,
-    ) -> Pin<Box<dyn Future<Output = (Option<(SlmDecision, Option<SlmVerdict>)>, Option<String>)> + Send + 'a>>;
+    ) -> Pin<
+        Box<
+            dyn Future<Output = (Option<(SlmDecision, Option<SlmVerdict>)>, Option<String>)>
+                + Send
+                + 'a,
+        >,
+    >;
 
     /// Deep SLM screening: runs the 30B model (~2-3s).
     /// `classifier_advisory` comes from screen_fast — threaded through, not global state.
@@ -294,15 +300,13 @@ pub trait VaultHook: Send + Sync {
 ///
 /// The proxy server holds an `Arc<MiddlewareHooks>`. Each hook is optional;
 /// when `None`, the corresponding middleware step is skipped.
-#[derive(Clone)]
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct MiddlewareHooks {
     pub evidence: Option<Arc<dyn EvidenceHook>>,
     pub barrier: Option<Arc<dyn BarrierHook>>,
     pub slm: Option<Arc<dyn SlmHook>>,
     pub vault: Option<Arc<dyn VaultHook>>,
 }
-
 
 impl std::fmt::Debug for MiddlewareHooks {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -367,7 +371,13 @@ impl SlmHook for NoopSlmHook {
     fn screen_fast<'a>(
         &'a self,
         _content: &'a str,
-    ) -> Pin<Box<dyn Future<Output = (Option<(SlmDecision, Option<SlmVerdict>)>, Option<String>)> + Send + 'a>> {
+    ) -> Pin<
+        Box<
+            dyn Future<Output = (Option<(SlmDecision, Option<SlmVerdict>)>, Option<String>)>
+                + Send
+                + 'a,
+        >,
+    > {
         Box::pin(async { (None, None) })
     }
     fn screen_deep<'a>(

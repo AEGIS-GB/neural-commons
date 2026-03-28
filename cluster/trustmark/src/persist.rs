@@ -13,8 +13,8 @@ pub fn record_snapshot(
     recorder: &aegis_evidence::EvidenceRecorder,
     score: &TrustmarkScore,
 ) -> Result<(), String> {
-    let score_json = serde_json::to_string(score)
-        .map_err(|e| format!("failed to serialize score: {e}"))?;
+    let score_json =
+        serde_json::to_string(score).map_err(|e| format!("failed to serialize score: {e}"))?;
 
     recorder
         .record_simple(
@@ -95,9 +95,10 @@ pub fn load_history(data_dir: &Path, limit: usize) -> Vec<TrustmarkScore> {
         for receipt in &receipts {
             if receipt.core.receipt_type == aegis_schemas::ReceiptType::TrustmarkUpdate
                 && let Some(outcome) = receipt.context.outcome.as_deref()
-                    && let Ok(score) = serde_json::from_str::<TrustmarkScore>(outcome) {
-                        scores.push(score);
-                    }
+                && let Ok(score) = serde_json::from_str::<TrustmarkScore>(outcome)
+            {
+                scores.push(score);
+            }
         }
 
         seq = end + 1;
@@ -167,8 +168,12 @@ mod tests {
         record_snapshot(&recorder, &s2).unwrap();
 
         let latest = load_latest_snapshot(dir.path()).unwrap();
-        assert!((latest.total - s2.total).abs() < f64::EPSILON,
-            "should return most recent: {} vs {}", latest.total, s2.total);
+        assert!(
+            (latest.total - s2.total).abs() < f64::EPSILON,
+            "should return most recent: {} vs {}",
+            latest.total,
+            s2.total
+        );
     }
 
     #[test]
@@ -190,8 +195,18 @@ mod tests {
         assert_eq!(history.len(), 5);
         // Chronological — contribution_volume should increase
         for w in history.windows(2) {
-            let vol0 = w[0].dimensions.iter().find(|d| d.name == "contribution_volume").unwrap().value;
-            let vol1 = w[1].dimensions.iter().find(|d| d.name == "contribution_volume").unwrap().value;
+            let vol0 = w[0]
+                .dimensions
+                .iter()
+                .find(|d| d.name == "contribution_volume")
+                .unwrap()
+                .value;
+            let vol1 = w[1]
+                .dimensions
+                .iter()
+                .find(|d| d.name == "contribution_volume")
+                .unwrap()
+                .value;
             assert!(vol1 >= vol0, "history should be chronological");
         }
     }
@@ -224,11 +239,9 @@ mod tests {
 
         // Add non-trustmark receipts
         for _ in 0..5 {
-            recorder.record_simple(
-                aegis_schemas::ReceiptType::ApiCall,
-                "forward",
-                "200",
-            ).unwrap();
+            recorder
+                .record_simple(aegis_schemas::ReceiptType::ApiCall, "forward", "200")
+                .unwrap();
         }
 
         assert!(load_latest_snapshot(dir.path()).is_none());

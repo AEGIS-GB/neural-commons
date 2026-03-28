@@ -18,15 +18,15 @@ use std::time::Instant;
 
 use aegis_evidence::EvidenceRecorder;
 use axum::{
+    Json, Router,
     extract::{Path, State},
     response::sse::{Event, KeepAlive, Sse},
     routing::get,
-    Json, Router,
 };
 use futures::Stream;
 use serde::Serialize;
 use tokio::sync::broadcast;
-use tokio_stream::{wrappers::BroadcastStream, StreamExt};
+use tokio_stream::{StreamExt, wrappers::BroadcastStream};
 
 use crate::traffic::TrafficStore;
 
@@ -258,9 +258,7 @@ async fn dashboard_html() -> axum::response::Html<&'static str> {
 }
 
 /// GET /dashboard/api/status — current adapter status.
-async fn api_status(
-    State(state): State<Arc<DashboardSharedState>>,
-) -> Json<DashboardStatus> {
+async fn api_status(State(state): State<Arc<DashboardSharedState>>) -> Json<DashboardStatus> {
     let chain_head = state.evidence.chain_head();
     Json(DashboardStatus {
         mode: (state.mode_fn)().to_string(),
@@ -275,9 +273,7 @@ async fn api_status(
 }
 
 /// GET /dashboard/api/evidence — recent evidence summary with individual receipts.
-async fn api_evidence(
-    State(state): State<Arc<DashboardSharedState>>,
-) -> Json<EvidenceSummary> {
+async fn api_evidence(State(state): State<Arc<DashboardSharedState>>) -> Json<EvidenceSummary> {
     let chain_head = state.evidence.chain_head();
 
     let mut last_receipt_ms = None;
@@ -315,11 +311,10 @@ async fn api_evidence(
 
 /// GET /dashboard/api/memory — memory health status.
 /// Queries MemoryIntegrity receipts from the evidence chain.
-async fn api_memory(
-    State(state): State<Arc<DashboardSharedState>>,
-) -> Json<MemoryHealth> {
+async fn api_memory(State(state): State<Arc<DashboardSharedState>>) -> Json<MemoryHealth> {
     let chain_head = state.evidence.chain_head();
-    let mut file_map: std::collections::HashMap<String, MemoryFileEntry> = std::collections::HashMap::new();
+    let mut file_map: std::collections::HashMap<String, MemoryFileEntry> =
+        std::collections::HashMap::new();
     let mut changes_detected: u64 = 0;
     let mut last_scan_ms: Option<i64> = None;
 
@@ -333,13 +328,25 @@ async fn api_memory(
             let outcome = receipt.context.outcome.as_deref().unwrap_or("");
 
             let (event_type, path) = if action.starts_with("memory_change ") {
-                ("changed", action.strip_prefix("memory_change ").unwrap_or(action))
+                (
+                    "changed",
+                    action.strip_prefix("memory_change ").unwrap_or(action),
+                )
             } else if action.starts_with("memory_deleted ") {
-                ("deleted", action.strip_prefix("memory_deleted ").unwrap_or(action))
+                (
+                    "deleted",
+                    action.strip_prefix("memory_deleted ").unwrap_or(action),
+                )
             } else if action.starts_with("memory_appeared ") {
-                ("appeared", action.strip_prefix("memory_appeared ").unwrap_or(action))
+                (
+                    "appeared",
+                    action.strip_prefix("memory_appeared ").unwrap_or(action),
+                )
             } else if action.starts_with("memory_tracked ") {
-                ("tracked", action.strip_prefix("memory_tracked ").unwrap_or(action))
+                (
+                    "tracked",
+                    action.strip_prefix("memory_tracked ").unwrap_or(action),
+                )
             } else {
                 ("unknown", action)
             };
@@ -356,12 +363,15 @@ async fn api_memory(
                 outcome
             };
 
-            file_map.insert(path.to_string(), MemoryFileEntry {
-                path: path.to_string(),
-                last_event: event_type.to_string(),
-                last_event_ms: receipt.core.ts_ms,
-                verdict: verdict.to_string(),
-            });
+            file_map.insert(
+                path.to_string(),
+                MemoryFileEntry {
+                    path: path.to_string(),
+                    last_event: event_type.to_string(),
+                    last_event_ms: receipt.core.ts_ms,
+                    verdict: verdict.to_string(),
+                },
+            );
 
             changes_detected += 1;
             last_scan_ms = Some(receipt.core.ts_ms);
@@ -385,9 +395,7 @@ async fn api_memory(
 /// Returns detected secrets (masked) from evidence chain receipts.
 /// Queries the evidence chain for ApiCall receipts whose outcome
 /// mentions vault credential detections.
-async fn api_vault(
-    State(state): State<Arc<DashboardSharedState>>,
-) -> Json<VaultSummary> {
+async fn api_vault(State(state): State<Arc<DashboardSharedState>>) -> Json<VaultSummary> {
     let _chain_head = state.evidence.chain_head();
     let mut by_type = std::collections::HashMap::new();
     let mut recent_findings = Vec::new();
@@ -439,9 +447,7 @@ async fn api_vault(
 /// GET /dashboard/api/access — recent API call log.
 ///
 /// Returns the last 50 API call entries from the evidence chain.
-async fn api_access(
-    State(state): State<Arc<DashboardSharedState>>,
-) -> Json<AccessLog> {
+async fn api_access(State(state): State<Arc<DashboardSharedState>>) -> Json<AccessLog> {
     let chain_head = state.evidence.chain_head();
     let mut entries = Vec::new();
 
@@ -463,12 +469,14 @@ async fn api_access(
 
             // Parse status and duration from outcome string
             // (e.g. "status=200 body=1024B duration=150ms")
-            let status = outcome.split_whitespace()
+            let status = outcome
+                .split_whitespace()
                 .find(|s| s.starts_with("status="))
                 .and_then(|s| s.strip_prefix("status="))
                 .and_then(|s| s.parse::<u16>().ok());
 
-            let duration_ms = outcome.split_whitespace()
+            let duration_ms = outcome
+                .split_whitespace()
                 .find(|s| s.starts_with("duration="))
                 .and_then(|s| s.strip_prefix("duration="))
                 .and_then(|s| s.strip_suffix("ms"))
@@ -503,9 +511,7 @@ async fn api_access(
 /// Returns the last batch of alerts as a JSON list. This is the 5s fallback
 /// poll used by the JS client to catch anything missed during SSE reconnect gaps.
 /// Queries the evidence chain for WriteBarrier, MemoryIntegrity, and SlmParseFailure receipts.
-async fn api_alerts(
-    State(state): State<Arc<DashboardSharedState>>,
-) -> Json<serde_json::Value> {
+async fn api_alerts(State(state): State<Arc<DashboardSharedState>>) -> Json<serde_json::Value> {
     let chain_head = state.evidence.chain_head();
     let mut alerts: Vec<DashboardAlert> = Vec::new();
 
@@ -517,7 +523,10 @@ async fn api_alerts(
                 aegis_schemas::ReceiptType::MemoryIntegrity => "memory_injection",
                 aegis_schemas::ReceiptType::SlmAnalysis => {
                     // Only include quarantine/reject as alerts
-                    let action = receipt.context.detail.as_ref()
+                    let action = receipt
+                        .context
+                        .detail
+                        .as_ref()
                         .and_then(|d| d.get("action"))
                         .and_then(|v| v.as_str())
                         .unwrap_or("admit");
@@ -558,13 +567,15 @@ async fn api_alerts(
 ///
 /// Returns screening statistics, verdict distribution, timing stats,
 /// and recent screening entries from the evidence chain.
-async fn api_slm(
-    State(state): State<Arc<DashboardSharedState>>,
-) -> Json<SlmOverview> {
+async fn api_slm(State(state): State<Arc<DashboardSharedState>>) -> Json<SlmOverview> {
     let chain_head = state.evidence.chain_head();
     let mut entries = Vec::new();
     let mut timing_values = Vec::new();
-    let mut counts = VerdictCounts { admit: 0, quarantine: 0, reject: 0 };
+    let mut counts = VerdictCounts {
+        admit: 0,
+        quarantine: 0,
+        reject: 0,
+    };
 
     let start_seq = chain_head.head_seq.saturating_sub(500).max(1);
     if let Ok(receipts) = state.evidence.export(Some(start_seq), None) {
@@ -625,17 +636,15 @@ async fn api_slm(
                     .and_then(|d| d.get("confidence"))
                     .and_then(|v| v.as_u64())
                     .map(|v| v as u32);
-                let dimensions = detail
-                    .and_then(|d| d.get("dimensions"))
-                    .and_then(|d| {
-                        Some(SlmDimensionsEntry {
-                            injection: d.get("injection")?.as_u64()? as u32,
-                            manipulation: d.get("manipulation")?.as_u64()? as u32,
-                            exfiltration: d.get("exfiltration")?.as_u64()? as u32,
-                            persistence: d.get("persistence")?.as_u64()? as u32,
-                            evasion: d.get("evasion")?.as_u64()? as u32,
-                        })
-                    });
+                let dimensions = detail.and_then(|d| d.get("dimensions")).and_then(|d| {
+                    Some(SlmDimensionsEntry {
+                        injection: d.get("injection")?.as_u64()? as u32,
+                        manipulation: d.get("manipulation")?.as_u64()? as u32,
+                        exfiltration: d.get("exfiltration")?.as_u64()? as u32,
+                        persistence: d.get("persistence")?.as_u64()? as u32,
+                        evasion: d.get("evasion")?.as_u64()? as u32,
+                    })
+                });
                 let screened_text = detail
                     .and_then(|d| d.get("screened_text"))
                     .and_then(|v| v.as_str())
@@ -726,14 +735,25 @@ async fn api_slm(
 
     // Compute timing stats
     let timing_stats = if timing_values.is_empty() {
-        TimingStats { avg_ms: 0, p95_ms: 0, max_ms: 0 }
+        TimingStats {
+            avg_ms: 0,
+            p95_ms: 0,
+            max_ms: 0,
+        }
     } else {
         timing_values.sort_unstable();
         let avg = timing_values.iter().sum::<u64>() / timing_values.len() as u64;
         let p95_idx = (timing_values.len() as f64 * 0.95) as usize;
-        let p95 = timing_values.get(p95_idx.min(timing_values.len() - 1)).copied().unwrap_or(0);
+        let p95 = timing_values
+            .get(p95_idx.min(timing_values.len() - 1))
+            .copied()
+            .unwrap_or(0);
         let max = timing_values.last().copied().unwrap_or(0);
-        TimingStats { avg_ms: avg, p95_ms: p95, max_ms: max }
+        TimingStats {
+            avg_ms: avg,
+            p95_ms: p95,
+            max_ms: max,
+        }
     };
 
     Json(SlmOverview {
@@ -745,29 +765,31 @@ async fn api_slm(
 }
 
 /// GET /dashboard/api/traffic — recent traffic entries (summary, no bodies).
-async fn api_traffic(
-    State(state): State<Arc<DashboardSharedState>>,
-) -> Json<serde_json::Value> {
+async fn api_traffic(State(state): State<Arc<DashboardSharedState>>) -> Json<serde_json::Value> {
     let entries = state.traffic.list();
-    let summary: Vec<serde_json::Value> = entries.iter().rev().map(|e| {
-        serde_json::json!({
-            "id": e.id,
-            "ts_ms": e.ts_ms,
-            "method": e.method,
-            "path": e.path,
-            "status": e.status,
-            "request_size": e.request_size,
-            "response_size": e.response_size,
-            "duration_ms": e.duration_ms,
-            "is_streaming": e.is_streaming,
-            "slm_duration_ms": e.slm_duration_ms,
-            "slm_verdict": e.slm_verdict,
-            "slm_threat_score": e.slm_threat_score,
-            "channel": e.channel,
-            "trust_level": e.trust_level,
-            "model": e.model,
+    let summary: Vec<serde_json::Value> = entries
+        .iter()
+        .rev()
+        .map(|e| {
+            serde_json::json!({
+                "id": e.id,
+                "ts_ms": e.ts_ms,
+                "method": e.method,
+                "path": e.path,
+                "status": e.status,
+                "request_size": e.request_size,
+                "response_size": e.response_size,
+                "duration_ms": e.duration_ms,
+                "is_streaming": e.is_streaming,
+                "slm_duration_ms": e.slm_duration_ms,
+                "slm_verdict": e.slm_verdict,
+                "slm_threat_score": e.slm_threat_score,
+                "channel": e.channel,
+                "trust_level": e.trust_level,
+                "model": e.model,
+            })
         })
-    }).collect();
+        .collect();
 
     Json(serde_json::json!({
         "total": entries.len(),
@@ -804,11 +826,16 @@ fn parse_chat_messages(req_body: &str, resp_body: &str) -> Vec<serde_json::Value
 
     // Parse request messages — try "messages" (chat completions) then "input" (responses API)
     if let Ok(req) = serde_json::from_str::<serde_json::Value>(req_body) {
-        let msgs = req.get("messages").and_then(|m| m.as_array())
+        let msgs = req
+            .get("messages")
+            .and_then(|m| m.as_array())
             .or_else(|| req.get("input").and_then(|m| m.as_array()));
         if let Some(msgs) = msgs {
             for msg in msgs {
-                let role = msg.get("role").and_then(|r| r.as_str()).unwrap_or("unknown");
+                let role = msg
+                    .get("role")
+                    .and_then(|r| r.as_str())
+                    .unwrap_or("unknown");
                 let content = extract_content(msg);
                 if !content.is_empty() {
                     messages.push(serde_json::json!({
@@ -828,7 +855,10 @@ fn parse_chat_messages(req_body: &str, resp_body: &str) -> Vec<serde_json::Value
         if let Some(choices) = resp.get("choices").and_then(|c| c.as_array()) {
             for choice in choices {
                 if let Some(msg) = choice.get("message") {
-                    let role = msg.get("role").and_then(|r| r.as_str()).unwrap_or("assistant");
+                    let role = msg
+                        .get("role")
+                        .and_then(|r| r.as_str())
+                        .unwrap_or("assistant");
                     let content = msg.get("content").and_then(|c| c.as_str()).unwrap_or("");
                     messages.push(serde_json::json!({
                         "role": role,
@@ -842,26 +872,28 @@ fn parse_chat_messages(req_body: &str, resp_body: &str) -> Vec<serde_json::Value
         // Responses API JSON format: output[].content[].text
         if !got_response
             && let Some(text) = extract_responses_api_text(&resp)
-                && !text.is_empty() {
-                    messages.push(serde_json::json!({
-                        "role": "assistant",
-                        "content": text,
-                        "source": "response",
-                    }));
-                    got_response = true;
-                }
+            && !text.is_empty()
+        {
+            messages.push(serde_json::json!({
+                "role": "assistant",
+                "content": text,
+                "source": "response",
+            }));
+            got_response = true;
+        }
     }
 
     // SSE format: parse event stream for response.completed or reassemble deltas
     if !got_response
         && let Some(text) = parse_sse_response_text(resp_body)
-            && !text.is_empty() {
-                messages.push(serde_json::json!({
-                    "role": "assistant",
-                    "content": text,
-                    "source": "response",
-                }));
-            }
+        && !text.is_empty()
+    {
+        messages.push(serde_json::json!({
+            "role": "assistant",
+            "content": text,
+            "source": "response",
+        }));
+    }
 
     messages
 }
@@ -873,13 +905,14 @@ fn extract_responses_api_text(resp: &serde_json::Value) -> Option<String> {
     let mut text = String::new();
     for item in output {
         if item.get("type").and_then(|t| t.as_str()) == Some("message")
-            && let Some(content) = item.get("content").and_then(|c| c.as_array()) {
-                for part in content {
-                    if let Some(t) = part.get("text").and_then(|t| t.as_str()) {
-                        text.push_str(t);
-                    }
+            && let Some(content) = item.get("content").and_then(|c| c.as_array())
+        {
+            for part in content {
+                if let Some(t) = part.get("text").and_then(|t| t.as_str()) {
+                    text.push_str(t);
                 }
             }
+        }
     }
     if text.is_empty() { None } else { Some(text) }
 }
@@ -891,7 +924,8 @@ fn extract_content(msg: &serde_json::Value) -> String {
         return s.to_string();
     }
     if let Some(arr) = msg.get("content").and_then(|c| c.as_array()) {
-        let parts: Vec<&str> = arr.iter()
+        let parts: Vec<&str> = arr
+            .iter()
             .filter_map(|item| {
                 if item.get("type").and_then(|t| t.as_str()) == Some("text") {
                     item.get("text").and_then(|t| t.as_str())
@@ -916,31 +950,38 @@ fn extract_content(msg: &serde_json::Value) -> String {
 fn parse_sse_response_text(sse_body: &str) -> Option<String> {
     // First pass: look for response.completed with full output
     for line in sse_body.lines() {
-        let data = match line.strip_prefix("data: ").or_else(|| line.strip_prefix("data:")) {
+        let data = match line
+            .strip_prefix("data: ")
+            .or_else(|| line.strip_prefix("data:"))
+        {
             Some(d) => d,
             None => continue,
         };
         if let Ok(evt) = serde_json::from_str::<serde_json::Value>(data)
             && evt.get("type").and_then(|t| t.as_str()) == Some("response.completed")
-                && let Some(text) = extract_responses_api_text(
-                    evt.get("response").unwrap_or(&serde_json::Value::Null)
-                ) {
-                    return Some(text);
-                }
+            && let Some(text) =
+                extract_responses_api_text(evt.get("response").unwrap_or(&serde_json::Value::Null))
+        {
+            return Some(text);
+        }
     }
 
     // Second pass: reassemble from delta events (if response.completed was truncated)
     let mut text = String::new();
     for line in sse_body.lines() {
-        let data = match line.strip_prefix("data: ").or_else(|| line.strip_prefix("data:")) {
+        let data = match line
+            .strip_prefix("data: ")
+            .or_else(|| line.strip_prefix("data:"))
+        {
             Some(d) => d,
             None => continue,
         };
         if let Ok(evt) = serde_json::from_str::<serde_json::Value>(data)
             && evt.get("type").and_then(|t| t.as_str()) == Some("response.output_text.delta")
-                && let Some(delta) = evt.get("delta").and_then(|d| d.as_str()) {
-                    text.push_str(delta);
-                }
+            && let Some(delta) = evt.get("delta").and_then(|d| d.as_str())
+        {
+            text.push_str(delta);
+        }
     }
 
     if text.is_empty() { None } else { Some(text) }
@@ -948,14 +989,13 @@ fn parse_sse_response_text(sse_body: &str) -> Option<String> {
 
 /// GET /dashboard/api/trustmark — TRUSTMARK score from local data.
 /// Uses the same gather function as the CLI — single source of truth.
-async fn api_trustmark(
-    State(state): State<Arc<DashboardSharedState>>,
-) -> Json<serde_json::Value> {
+async fn api_trustmark(State(state): State<Arc<DashboardSharedState>>) -> Json<serde_json::Value> {
     let signals = aegis_trustmark::gather::gather_local_signals(&state.data_dir);
     let score = aegis_trustmark::scoring::TrustmarkScore::compute(&signals);
     let identity_age = aegis_trustmark::gather::get_identity_age_hours(&state.data_dir);
     let tier = aegis_trustmark::tiers::resolve_tier(
-        score.total, identity_age,
+        score.total,
+        identity_age,
         signals.vault_scans_total > 0,
         signals.chain_verified.unwrap_or(false),
         0,
@@ -994,8 +1034,9 @@ async fn api_alerts_stream(
             .map(|json| Ok(Event::default().data(json))),
         Err(tokio_stream::wrappers::errors::BroadcastStreamRecvError::Lagged(n)) => {
             // Receiver fell behind — send a gap notice so the JS fallback poll catches up.
-            Some(Ok(Event::default()
-                .comment(format!("lagged: missed {n} alerts, fallback poll will catch up"))))
+            Some(Ok(Event::default().comment(format!(
+                "lagged: missed {n} alerts, fallback poll will catch up"
+            ))))
         }
     });
 
@@ -1008,9 +1049,7 @@ async fn api_alerts_stream(
 
 /// GET /dashboard/api/trust — channel trust overview.
 /// Channel context is fetched by the JS from /aegis/channel-context directly.
-async fn api_trust(
-    State(state): State<Arc<DashboardSharedState>>,
-) -> Json<serde_json::Value> {
+async fn api_trust(State(state): State<Arc<DashboardSharedState>>) -> Json<serde_json::Value> {
     // Count screenings by trust level from recent evidence
     let chain_head = state.evidence.chain_head();
     let mut trust_counts: std::collections::HashMap<String, u64> = std::collections::HashMap::new();
@@ -1023,7 +1062,10 @@ async fn api_trust(
                 continue;
             }
             total_screened += 1;
-            let trust_level = receipt.context.detail.as_ref()
+            let trust_level = receipt
+                .context
+                .detail
+                .as_ref()
                 .and_then(|d| d.get("channel_trust_level"))
                 .and_then(|v| v.as_str())
                 .unwrap_or("unknown");

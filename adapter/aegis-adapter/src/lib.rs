@@ -24,8 +24,7 @@ pub mod server;
 pub mod state;
 
 /// Adapter operating mode
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[derive(Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Mode {
     /// Full inspection + receipts, no blocking (default)
     #[default]
@@ -35,4 +34,3 @@ pub enum Mode {
     /// Zero inspection, transparent forwarding, metadata-only receipts
     PassThrough,
 }
-
