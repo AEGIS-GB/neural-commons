@@ -38,6 +38,7 @@ use clap::{Parser, Subcommand};
 
 use aegis_adapter::config::AdapterConfig;
 
+mod backup;
 mod trace;
 mod trustmark_cmd;
 use aegis_adapter::Mode;
@@ -191,6 +192,12 @@ enum Commands {
     /// Open the dashboard in a browser
     Dashboard,
 
+    /// Evidence backup (Tier 2 feature)
+    Backup {
+        #[command(subcommand)]
+        action: Option<BackupCommands>,
+    },
+
     /// Trace request flow end-to-end (channel → SLM → upstream → response)
     Trace {
         /// Traffic entry ID to show in detail (omit for table view)
@@ -312,6 +319,14 @@ enum MemoryCommands {
         path: String,
     },
     /// List tracked memory files
+    List,
+}
+
+#[derive(Subcommand)]
+enum BackupCommands {
+    /// Create an encrypted evidence backup
+    Create,
+    /// List existing backups
     List,
 }
 
@@ -1014,6 +1029,11 @@ fn main() {
             );
         }
 
+        Some(Commands::Backup { action }) => match action {
+            Some(BackupCommands::Create) | None => backup::run_backup(&config.data_dir),
+            Some(BackupCommands::List) => backup::run_list_backups(&config.data_dir),
+        },
+
         Some(Commands::Trustmark { action }) => match action {
             Some(TrustmarkCommands::Show { json }) => trustmark_cmd::run(&config.data_dir, json),
             Some(TrustmarkCommands::History { limit, json }) => {
@@ -1419,7 +1439,7 @@ fn check_for_update() {
             "release",
             "view",
             "--repo",
-            "LCatGA12/neural-commons",
+            "AEGIS-GB/neural-commons",
             "--json",
             "tagName",
             "--jq",
