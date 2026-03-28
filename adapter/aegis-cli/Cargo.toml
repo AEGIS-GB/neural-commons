@@ -17,6 +17,7 @@ aegis-slm = { path = "../aegis-slm" }
 aegis-vault = { path = "../aegis-vault" }
 aegis-memory = { path = "../aegis-memory" }
 aegis-trustmark = { path = "../../cluster/trustmark" }
+aegis-schemas = { path = "../../aegis-schemas" }
 clap.workspace = true
 tokio.workspace = true
 tracing.workspace = true

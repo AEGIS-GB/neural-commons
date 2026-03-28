@@ -8,6 +8,7 @@
 //! Tier gates: T1(>=0), T2(identity+72h+vault), T3(>=0.4+evaluator) (D14)
 
 pub mod decay;
+pub mod gate;
 pub mod gather;
 pub mod persist;
 pub mod scoring;
