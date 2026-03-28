@@ -273,12 +273,12 @@ async fn recording_middleware(
         if let Some(ref recorder) = state.traffic_recorder {
             // Extract model from request body
             let model = extract_model_from_body(&body_for_record);
-            // Get channel trust from cognitive bridge (best effort)
+            // Channel info for recording — informational only, NOT for security decisions.
+            // Use the global for channel name (best effort) but trust is always "unknown"
+            // for requests without a cert header (can't trust the global).
             let channel_trust = crate::cognitive_bridge::get_registered_channel_trust();
             let channel = channel_trust.as_ref().and_then(|ct| ct.channel.as_deref());
-            let trust = channel_trust
-                .as_ref()
-                .map(|ct| format!("{:?}", ct.trust_level).to_lowercase());
+            let trust: Option<String> = None; // determined by handler, not middleware
 
             // For non-streaming, we don't have the response body here (it's in the response).
             // Use an empty body — the handler's own recording covers 200 responses with bodies.
@@ -475,12 +475,10 @@ async fn forward_request(
                 aegis_schemas::ChannelTrust::default()
             }
         } else {
-            // No cert header — fall back to cognitive bridge registration.
-            // KNOWN LIMITATION: ACTIVE_CHANNEL is a global that can be overwritten
-            // by concurrent requests from different channels. Under concurrent
-            // multi-channel traffic, this may attribute the wrong trust level.
-            // The proper fix is per-request channel identification (issue #113).
-            crate::cognitive_bridge::get_registered_channel_trust().unwrap_or_default()
+            // No cert header = Unknown trust. Do NOT fall back to the global
+            // ACTIVE_CHANNEL — it leaks trust from other channels' registrations.
+            // An attacker could inherit a trusted channel's trust level.
+            aegis_schemas::ChannelTrust::default()
         }
     };
 
