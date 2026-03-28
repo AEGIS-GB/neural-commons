@@ -12,6 +12,7 @@ pub mod anthropic;
 pub mod heuristic;
 pub mod ollama;
 pub mod openai_compat;
+#[cfg(feature = "prompt-guard")]
 pub mod prompt_guard;
 
 /// Engine trait for SLM inference.

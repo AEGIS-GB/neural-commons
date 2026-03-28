@@ -574,11 +574,13 @@ pub fn screen_content_rich(config: &LoopbackConfig, content: &str) -> ScreeningR
 
 /// Cached ProtectAI classifier — loaded once, reused for every request.
 /// Loading the ONNX model from disk takes ~950ms; classifying takes ~5ms.
+#[cfg(feature = "prompt-guard")]
 static PROMPT_GUARD_ENGINE: std::sync::OnceLock<
     Option<crate::engine::prompt_guard::PromptGuardEngine>,
 > = std::sync::OnceLock::new();
 
 /// Initialize the cached classifier. Call once at startup.
+#[cfg(feature = "prompt-guard")]
 pub fn init_prompt_guard(model_dir: Option<&str>) {
     PROMPT_GUARD_ENGINE.get_or_init(|| {
         let dir = model_dir?;
@@ -596,8 +598,13 @@ pub fn init_prompt_guard(model_dir: Option<&str>) {
     });
 }
 
+/// No-op when prompt-guard feature is disabled.
+#[cfg(not(feature = "prompt-guard"))]
+pub fn init_prompt_guard(_model_dir: Option<&str>) {}
+
 /// Run Prompt Guard classifier using the cached model.
 /// Returns Some((is_malicious, probability)) or None if not available.
+#[cfg(feature = "prompt-guard")]
 fn run_prompt_guard(_config: &LoopbackConfig, content: &str) -> Option<(bool, f32)> {
     let engine = PROMPT_GUARD_ENGINE.get()?.as_ref()?;
 
@@ -615,6 +622,12 @@ fn run_prompt_guard(_config: &LoopbackConfig, content: &str) -> Option<(bool, f3
             None
         }
     }
+}
+
+/// No-op when prompt-guard feature is disabled.
+#[cfg(not(feature = "prompt-guard"))]
+fn run_prompt_guard(_config: &LoopbackConfig, _content: &str) -> Option<(bool, f32)> {
+    None
 }
 
 #[cfg(test)]
