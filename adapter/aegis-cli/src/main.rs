@@ -476,8 +476,11 @@ fn main() {
         config.proxy.listen_addr = listen.clone();
     }
 
-    // D30: --observe-only sets write_barrier + slm_reject to observe.
-    // Does NOT affect vault_block, memory_write, identity_check, failure_rollback.
+    // D30: --enforce sets ALL switchable checks to enforce (block on violations).
+    if cli.enforce {
+        config.enforcement = aegis_schemas::config::EnforcementConfig::enforce_default();
+    }
+    // D30: --observe-only sets write_barrier + slm_reject to observe (warn only).
     if cli.observe_only {
         config.enforcement.apply_observe_only_flag();
     }

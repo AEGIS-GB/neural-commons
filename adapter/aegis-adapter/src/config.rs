@@ -354,8 +354,13 @@ impl AdapterConfig {
         let mut config: Self =
             toml::from_str(&content).map_err(|e| format!("failed to parse config file: {e}"))?;
 
+        // If mode=enforce and no [enforcement] section in config, default all checks to enforce.
+        // The user expects "enforce" to mean "block everything", not "block some things".
+        if matches!(config.mode, AdapterMode::Enforce) && !content.contains("[enforcement]") {
+            config.enforcement = EnforcementConfig::enforce_default();
+        }
+
         // Resolve relative data_dir against the config file's parent directory.
-        // This ensures CLI and server use the same absolute path regardless of cwd.
         if config.data_dir.is_relative()
             && let Some(config_dir) = path.parent()
         {
