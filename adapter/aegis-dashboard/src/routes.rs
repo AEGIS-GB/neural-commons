@@ -21,7 +21,7 @@ use axum::{
     Json, Router,
     extract::{Path, State},
     response::sse::{Event, KeepAlive, Sse},
-    routing::get,
+    routing::{get, post},
 };
 use futures::Stream;
 use serde::Serialize;
@@ -94,6 +94,8 @@ pub fn routes(state: Arc<DashboardSharedState>) -> Router {
         .route("/api/traffic", get(api_traffic))
         .route("/api/traffic/{id}", get(api_traffic_detail))
         .route("/api/trust", get(api_trust))
+        .route("/api/trust/add", post(api_trust_add))
+        .route("/api/trust/remove", post(api_trust_remove))
         .route("/api/trustmark", get(api_trustmark))
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
@@ -1106,6 +1108,126 @@ async fn api_trustmark(State(state): State<Arc<DashboardSharedState>>) -> Json<s
         "tier": tier,
         "identity_age_hours": identity_age,
     }))
+}
+
+/// POST /dashboard/api/trust/add — add a trust pattern to config.toml.
+async fn api_trust_add(
+    State(state): State<Arc<DashboardSharedState>>,
+    Json(body): Json<serde_json::Value>,
+) -> Json<serde_json::Value> {
+    let pattern = body.get("pattern").and_then(|v| v.as_str()).unwrap_or("");
+    let level = body.get("level").and_then(|v| v.as_str()).unwrap_or("");
+
+    if pattern.is_empty() || level.is_empty() {
+        return Json(serde_json::json!({"error": "pattern and level required"}));
+    }
+
+    let valid = ["full", "trusted", "public", "restricted", "unknown"];
+    if !valid.contains(&level) {
+        return Json(
+            serde_json::json!({"error": format!("invalid level, use: {}", valid.join(", "))}),
+        );
+    }
+
+    let config_path = state.data_dir.join("config/config.toml");
+    let alt_path = state.data_dir.join("config.toml");
+    let path = if config_path.exists() {
+        config_path
+    } else if alt_path.exists() {
+        alt_path
+    } else {
+        return Json(serde_json::json!({"error": "config.toml not found"}));
+    };
+
+    let mut content = match std::fs::read_to_string(&path) {
+        Ok(c) => c,
+        Err(e) => return Json(serde_json::json!({"error": format!("read failed: {e}")})),
+    };
+
+    if content.contains(&format!("pattern = \"{pattern}\"")) {
+        return Json(serde_json::json!({"error": "pattern already exists"}));
+    }
+
+    content.push_str(&format!(
+        "\n[[trust.channels]]\npattern = \"{pattern}\"\nlevel = \"{level}\"\n"
+    ));
+
+    if let Err(e) = std::fs::write(&path, &content) {
+        return Json(serde_json::json!({"error": format!("write failed: {e}")}));
+    }
+
+    Json(
+        serde_json::json!({"ok": true, "pattern": pattern, "level": level, "hint": "Restart Aegis to apply"}),
+    )
+}
+
+/// POST /dashboard/api/trust/remove — remove a trust pattern from config.toml.
+async fn api_trust_remove(
+    State(state): State<Arc<DashboardSharedState>>,
+    Json(body): Json<serde_json::Value>,
+) -> Json<serde_json::Value> {
+    let pattern = body.get("pattern").and_then(|v| v.as_str()).unwrap_or("");
+    if pattern.is_empty() {
+        return Json(serde_json::json!({"error": "pattern required"}));
+    }
+
+    let config_path = state.data_dir.join("config/config.toml");
+    let alt_path = state.data_dir.join("config.toml");
+    let path = if config_path.exists() {
+        config_path
+    } else if alt_path.exists() {
+        alt_path
+    } else {
+        return Json(serde_json::json!({"error": "config.toml not found"}));
+    };
+
+    let content = match std::fs::read_to_string(&path) {
+        Ok(c) => c,
+        Err(e) => return Json(serde_json::json!({"error": format!("read failed: {e}")})),
+    };
+
+    let lines: Vec<&str> = content.lines().collect();
+    let mut new_lines: Vec<&str> = Vec::new();
+    let mut i = 0;
+    let mut found = false;
+
+    while i < lines.len() {
+        if lines[i].trim() == "[[trust.channels]]" {
+            let block_start = i;
+            let mut block_end = i + 1;
+            let mut has_pattern = false;
+            while block_end < lines.len()
+                && !lines[block_end].starts_with("[[")
+                && !lines[block_end].starts_with("[")
+            {
+                if lines[block_end].contains(&format!("pattern = \"{pattern}\"")) {
+                    has_pattern = true;
+                }
+                block_end += 1;
+            }
+            if has_pattern {
+                found = true;
+                i = block_end;
+                if i < lines.len() && lines[i].trim().is_empty() {
+                    i += 1;
+                }
+                continue;
+            }
+        }
+        new_lines.push(lines[i]);
+        i += 1;
+    }
+
+    if !found {
+        return Json(serde_json::json!({"error": "pattern not found"}));
+    }
+
+    let new_content = new_lines.join("\n") + "\n";
+    if let Err(e) = std::fs::write(&path, &new_content) {
+        return Json(serde_json::json!({"error": format!("write failed: {e}")}));
+    }
+
+    Json(serde_json::json!({"ok": true, "removed": pattern, "hint": "Restart Aegis to apply"}))
 }
 
 /// GET /dashboard/api/alerts/stream — SSE stream for critical alert push.
