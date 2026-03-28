@@ -262,14 +262,14 @@ fi
 echo ""
 echo "Step 8: Dashboard accessibility"
 
-DASHBOARD=$(curl -s -o /dev/null -w "%{http_code}" "http://127.0.0.1:3141/dashboard?token=$SMOKE_TOKEN" 2>&1) || true
+DASHBOARD=$(curl -sL -o /dev/null -w "%{http_code}" -c /tmp/aegis_smoke_cookies "http://127.0.0.1:3141/dashboard?token=$SMOKE_TOKEN" 2>&1) || true
 if [ "$DASHBOARD" = "200" ]; then
     pass "Dashboard returns 200 at /dashboard"
 else
     fail "Dashboard returned HTTP $DASHBOARD (expected 200)"
 fi
 
-STATUS_API=$(curl -s -H "Authorization: Bearer $SMOKE_TOKEN" http://127.0.0.1:3141/dashboard/api/status 2>&1) || true
+STATUS_API=$(curl -s -b /tmp/aegis_smoke_cookies http://127.0.0.1:3141/dashboard/api/status 2>&1) || true
 if echo "$STATUS_API" | grep -q "mode\|version\|uptime"; then
     pass "Dashboard /api/status returns data"
 else
