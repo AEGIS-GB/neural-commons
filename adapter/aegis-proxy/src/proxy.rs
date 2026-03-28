@@ -101,6 +101,8 @@ pub struct AppState {
     pub traffic_slm_updater: Option<Arc<TrafficSlmUpdater>>,
     /// Channel trust configuration for resolving X-Aegis-Channel-Cert.
     pub trust_config: Option<crate::channel_trust::TrustConfig>,
+    /// Semaphore limiting concurrent SLM screenings (prevents GPU exhaustion via DDoS).
+    pub slm_semaphore: Arc<tokio::sync::Semaphore>,
 }
 
 /// Build the axum router for the proxy server.
@@ -191,6 +193,7 @@ pub async fn start_with_traffic_full(
         traffic_recorder,
         traffic_slm_updater,
         trust_config,
+        slm_semaphore: Arc::new(tokio::sync::Semaphore::new(4)), // max 4 concurrent SLM screenings
     };
 
     let app = build_router(state, dashboard);
@@ -413,6 +416,20 @@ async fn forward_request(
         channel_trust,
     };
 
+    // --- Reject requests without Authorization header early ---
+    // Prevents DDoS via SLM: without this, every garbage request triggers
+    // expensive SLM screening before the upstream rejects it with 401.
+    if !headers.contains_key("authorization")
+        && !headers.contains_key("x-api-key")
+        && state.config.mode != ProxyMode::PassThrough
+    {
+        return Ok((
+            StatusCode::UNAUTHORIZED,
+            "Missing Authorization header — request rejected before screening",
+        )
+            .into_response());
+    }
+
     // --- Parse Anthropic request for SLM screening (BUG 5 fix) ---
     // The SLM needs actual message content, not the raw API payload
     // (which includes model name, max_tokens, etc. that waste SLM tokens).
@@ -504,6 +521,14 @@ async fn forward_request(
                 };
 
                 // Phase 1: Fast layers (heuristic + classifier) — blocking, <10ms
+                // Acquire SLM semaphore — limits concurrent screenings to prevent GPU exhaustion.
+                let _slm_permit = match state.slm_semaphore.try_acquire() {
+                    Ok(permit) => Some(permit),
+                    Err(_) => {
+                        warn!(path = %path, "SLM semaphore full — too many concurrent screenings, skipping");
+                        None
+                    }
+                };
                 let (fast_result, classifier_advisory) = slm.screen_fast(&screen_content).await;
                 if let Some((decision, verdict)) = fast_result {
                     slm_verdict = verdict;
@@ -1093,6 +1118,7 @@ mod tests {
             traffic_recorder: None,
             traffic_slm_updater: None,
             trust_config: None,
+            slm_semaphore: Arc::new(tokio::sync::Semaphore::new(4)),
         };
         let _router = build_router(state, None);
         // If it doesn't panic, it works
@@ -1109,6 +1135,7 @@ mod tests {
             traffic_recorder: None,
             traffic_slm_updater: None,
             trust_config: None,
+            slm_semaphore: Arc::new(tokio::sync::Semaphore::new(4)),
         };
         assert_eq!(state.identity_fingerprint.as_deref(), Some("abc123def456"));
     }

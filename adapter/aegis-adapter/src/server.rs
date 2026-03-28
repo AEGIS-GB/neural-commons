@@ -180,6 +180,7 @@ pub async fn start(config: AdapterConfig, mode_override: Option<Mode>) -> Result
         }),
         start_time,
         data_dir: data_dir.clone(),
+        auth_token: generate_dashboard_token(&config),
     });
     let dashboard_router = aegis_dashboard::routes::routes(dashboard_state);
     let dashboard_path = config.dashboard.path.clone();
@@ -1023,6 +1024,28 @@ fn load_or_generate_key(data_dir: &PathBuf) -> Result<SigningKey, StartupError> 
 }
 
 /// Print a startup banner to stderr.
+/// Generate or retrieve the dashboard auth token.
+/// If configured in config.toml, use that. Otherwise generate and log it.
+fn generate_dashboard_token(config: &AdapterConfig) -> Option<String> {
+    if let Some(ref token) = config.dashboard.auth_token {
+        if !token.is_empty() {
+            info!("dashboard auth: token configured");
+            return Some(token.clone());
+        }
+    }
+
+    // Auto-generate a token
+    use rand::RngCore;
+    let mut bytes = [0u8; 16];
+    rand::thread_rng().fill_bytes(&mut bytes);
+    let token = format!("aegis_dk_{}", hex::encode(bytes));
+    info!(
+        token = %token,
+        "dashboard auth: token auto-generated (add to [dashboard] auth_token in config.toml to persist)"
+    );
+    Some(token)
+}
+
 fn print_banner(config: &AdapterConfig, mode: Mode, bot_id: &str, state: &AdapterState) {
     let mode_label = match mode {
         Mode::ObserveOnly => "OBSERVE-ONLY (warn, don't block)",

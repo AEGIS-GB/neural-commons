@@ -71,6 +71,9 @@ pub struct DashboardSharedState {
     pub traffic: Arc<TrafficStore>,
     /// Aegis data directory path (for TRUSTMARK signal gathering).
     pub data_dir: std::path::PathBuf,
+    /// Dashboard auth token. If set, all dashboard/API requests require
+    /// `Authorization: Bearer <token>` or `?token=<token>` query param.
+    pub auth_token: Option<String>,
 }
 
 // ── Router ───────────────────────────────────────────────────────────────────
@@ -92,7 +95,54 @@ pub fn routes(state: Arc<DashboardSharedState>) -> Router {
         .route("/api/traffic/{id}", get(api_traffic_detail))
         .route("/api/trust", get(api_trust))
         .route("/api/trustmark", get(api_trustmark))
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            dashboard_auth_middleware,
+        ))
         .with_state(state)
+}
+
+/// Auth middleware — checks Bearer token or ?token= query param.
+/// Allows access if no auth_token is configured (backward compatible).
+async fn dashboard_auth_middleware(
+    State(state): State<Arc<DashboardSharedState>>,
+    req: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    let token = match &state.auth_token {
+        Some(t) => t,
+        None => return next.run(req).await, // no token configured = open access
+    };
+
+    // Check Authorization: Bearer <token>
+    if let Some(auth) = req.headers().get("authorization") {
+        if let Ok(auth_str) = auth.to_str() {
+            if let Some(bearer) = auth_str.strip_prefix("Bearer ") {
+                if bearer.trim() == token {
+                    return next.run(req).await;
+                }
+            }
+        }
+    }
+
+    // Check ?token=<token> query param (for browser access)
+    if let Some(query) = req.uri().query() {
+        for pair in query.split('&') {
+            if let Some(val) = pair.strip_prefix("token=") {
+                if val == token {
+                    return next.run(req).await;
+                }
+            }
+        }
+    }
+
+    axum::response::Response::builder()
+        .status(401)
+        .header("content-type", "application/json")
+        .body(axum::body::Body::from(
+            r#"{"error":"unauthorized","hint":"Include Authorization: Bearer <token> header or ?token=<token> query param. Get your token from aegis dashboard."}"#,
+        ))
+        .unwrap_or_default()
 }
 
 // ── Response types ────────────────────────────────────────────────────────────

@@ -138,12 +138,16 @@ pub struct DashboardSection {
     /// Path prefix where the dashboard is served (default: "/dashboard")
     #[serde(default = "default_dashboard_path")]
     pub path: String,
+    /// Auth token for dashboard access. Auto-generated on first run if not set.
+    #[serde(default)]
+    pub auth_token: Option<String>,
 }
 
 impl Default for DashboardSection {
     fn default() -> Self {
         Self {
             path: default_dashboard_path(),
+            auth_token: None,
         }
     }
 }
