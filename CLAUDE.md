@@ -214,13 +214,21 @@ path = "/dashboard"
 default_level = "unknown"
 signing_pubkey = "<hex Ed25519 pubkey>"  # from 'aegis trust pubkey'
 
-[[trust.channels]]                     # channel pattern → trust level
-pattern = "telegram:dm:owner"
-level = "full"                         # full/trusted/public/restricted/unknown
+# Channels (access control) — trust by source IP/hostname
+[[trust.channels]]
+identity = "localhost"                 # matches 127.0.0.1 and ::1
+level = "trusted"                      # full/trusted/public/restricted/unknown
 
 [[trust.channels]]
-pattern = "openclaw:web:*"
+identity = "192.168.*"                 # LAN subnet
 level = "trusted"
+
+# Contexts (OpenClaw observability — shown in dashboard/trace, not access control)
+[[trust.contexts]]
+pattern = "telegram:dm:*"
+
+[[trust.contexts]]
+pattern = "openclaw:web:*"
 ```
 
 ## CLI Quick Reference

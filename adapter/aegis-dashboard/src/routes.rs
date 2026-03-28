@@ -887,6 +887,7 @@ async fn api_traffic(State(state): State<Arc<DashboardSharedState>>) -> Json<ser
                 "channel": e.channel,
                 "trust_level": e.trust_level,
                 "model": e.model,
+                "context": e.context,
             })
         })
         .collect();
@@ -1144,12 +1145,12 @@ async fn api_trust_add(
         Err(e) => return Json(serde_json::json!({"error": format!("read failed: {e}")})),
     };
 
-    if content.contains(&format!("pattern = \"{pattern}\"")) {
-        return Json(serde_json::json!({"error": "pattern already exists"}));
+    if content.contains(&format!("identity = \"{pattern}\"")) {
+        return Json(serde_json::json!({"error": "channel already exists"}));
     }
 
     content.push_str(&format!(
-        "\n[[trust.channels]]\npattern = \"{pattern}\"\nlevel = \"{level}\"\n"
+        "\n[[trust.channels]]\nidentity = \"{pattern}\"\nlevel = \"{level}\"\n"
     ));
 
     if let Err(e) = std::fs::write(&path, &content) {
@@ -1200,7 +1201,7 @@ async fn api_trust_remove(
                 && !lines[block_end].starts_with("[[")
                 && !lines[block_end].starts_with("[")
             {
-                if lines[block_end].contains(&format!("pattern = \"{pattern}\"")) {
+                if lines[block_end].contains(&format!("identity = \"{pattern}\"")) {
                     has_pattern = true;
                 }
                 block_end += 1;

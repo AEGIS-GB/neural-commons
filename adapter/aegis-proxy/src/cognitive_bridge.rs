@@ -191,8 +191,11 @@ pub fn get_channel_registry() -> Vec<ChannelRecord> {
 ///
 /// The agent calls this at the start of each conversation to tell Aegis
 /// which channel (Telegram group, DM, Discord, etc.) the request came from.
-/// Aegis resolves the trust level from its [trust] config — the agent cannot
-/// claim a trust level, only report which channel it's on.
+/// This is **observability metadata** — it tells the dashboard/trace which
+/// channel sent this request. It does NOT determine trust level.
+///
+/// Trust is resolved from the request SOURCE (IP address), not the channel.
+/// See [[trust.sources]] in config.toml.
 async fn register_channel_handler(
     State(state): State<crate::proxy::AppState>,
     Json(req): Json<RegisterChannelRequest>,

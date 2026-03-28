@@ -147,7 +147,7 @@ table.dtable .screening-row:hover{background:#1c2128}
 <div class="tab" data-tab="access">Access</div>
 <div class="tab" data-tab="memory">Memory</div>
 <div class="tab" data-tab="slm">SLM Screening</div>
-<div class="tab" data-tab="trust">Channel Trust</div>
+<div class="tab" data-tab="trust">Trust</div>
 <div class="tab" data-tab="traffic">Traffic</div>
 <div class="tab" data-tab="alerts">Alerts</div>
 </div>
@@ -160,7 +160,7 @@ table.dtable .screening-row:hover{background:#1c2128}
 </div>
 </div>
 <div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap;align-items:center">
-<select id="trace-filter-channel" style="background:#161b22;border:1px solid #30363d;color:#e1e4e8;padding:4px 8px;border-radius:4px;font-size:12px"><option value="">All channels</option></select>
+<select id="trace-filter-channel" style="background:#161b22;border:1px solid #30363d;color:#e1e4e8;padding:4px 8px;border-radius:4px;font-size:12px"><option value="">All contexts</option></select>
 <select id="trace-filter-trust" style="background:#161b22;border:1px solid #30363d;color:#e1e4e8;padding:4px 8px;border-radius:4px;font-size:12px"><option value="">All trust</option><option value="full">full</option><option value="trusted">trusted</option><option value="unknown">unknown</option><option value="public">public</option></select>
 <select id="trace-filter-slm" style="background:#161b22;border:1px solid #30363d;color:#e1e4e8;padding:4px 8px;border-radius:4px;font-size:12px"><option value="">All SLM</option><option value="admit">admit</option><option value="quarantine">quarantine</option><option value="reject">reject</option></select>
 <input id="trace-search" type="text" placeholder="Search..." style="background:#161b22;border:1px solid #30363d;color:#e1e4e8;padding:4px 8px;border-radius:4px;font-size:12px;width:160px">
@@ -394,17 +394,16 @@ function renderTrust(tr){
   const config=document.getElementById('trust-config');
   const breakdown=document.getElementById('trust-breakdown');
   const detail=document.getElementById('trust-detail');
-  if(detail.style.display!=='none')return; // don't overwrite detail view
-  const channels=tr.channel_registry||[];
+  if(detail.style.display!=='none')return;
+  const contexts=tr.channel_registry||[];
   const counts=tr.screening_by_trust||{};
   const total=tr.total_screened||0;
   const colors={full:'#3fb950',trusted:'#58a6ff',public:'#d29922',restricted:'#f85149',unknown:'#8b949e'};
   // ── Stats cards ──
   let sc='';
-  sc+='<div class="card"><div class="stat">'+channels.length+'</div><div class="stat-label">Channels Seen</div></div>';
+  sc+='<div class="card"><div class="stat">'+contexts.length+'</div><div class="stat-label">Contexts Registered</div></div>';
   sc+='<div class="card"><div class="stat">'+total+'</div><div class="stat-label">Total Screenings</div></div>';
-  sc+='<div class="card"><div class="stat">'+(tr.trust_registered?'<span class="status-ok">Active</span>':'<span class="status-warn">None</span>')+'</div><div class="stat-label">Registration</div></div>';
-  // Screening distribution bar
+  sc+='<div class="card"><div class="stat">'+(tr.trust_registered?'<span class="status-ok">Active</span>':'<span class="status-warn">None</span>')+'</div><div class="stat-label">Context Registration</div></div>';
   if(total>0&&Object.keys(counts).length>0){
     sc+='<div class="card"><div style="font-size:11px;color:#8b949e;margin-bottom:6px">SCREENINGS BY TRUST</div>';
     sc+='<div style="display:flex;height:20px;border-radius:4px;overflow:hidden;background:#21262d;margin-bottom:6px">';
@@ -418,21 +417,19 @@ function renderTrust(tr){
     sc+='</div></div>';
   }
   stats.innerHTML=sc;
-  // ── Channel registry table (full history) ──
-  if(channels.length===0){
-    config.innerHTML='<p class="empty-state">No channels registered yet. Install the <strong>aegis-channel-trust</strong> OpenClaw plugin or call <code>POST /aegis/register-channel</code>.</p>';
+  // ── Context registry table (OpenClaw contexts) ──
+  if(contexts.length===0){
+    config.innerHTML='<p class="empty-state">No contexts registered yet. Install the <strong>aegis-channel-trust</strong> OpenClaw plugin or call <code>POST /aegis/register-channel</code>.<br><br><span style="font-size:11px;color:#8b949e">Note: Trust is now resolved from the source IP (channel), not OpenClaw contexts. Configure channels in <code>[[trust.channels]]</code>.</span></p>';
   }else{
-    const activeChannel=tr.active_channel?tr.active_channel.channel:null;
-    let ch='<table class="dtable"><tr><th>Channel</th><th>User</th><th>Trust</th><th>SSRF</th><th>Requests</th><th>Last Seen</th><th></th></tr>';
-    for(const c of channels){
-      const isActive=c.channel===activeChannel;
+    const activeCtx=tr.active_channel?tr.active_channel.channel:null;
+    let ch='<table class="dtable"><tr><th>Context (OpenClaw)</th><th>User</th><th>Requests</th><th>Last Seen</th><th></th></tr>';
+    for(const c of contexts){
+      const isActive=c.channel===activeCtx;
       ch+='<tr class="screening-row" style="cursor:pointer;'+(isActive?'background:#1c2128;border-left:3px solid #58a6ff':'')+'" onclick="showChannelDetail(\''+c.channel.replace(/'/g,"\\'")+'\')">';
       ch+='<td><span class="badge badge-gray" style="font-size:12px">'+c.channel+'</span>';
       if(isActive)ch+=' <span style="font-size:9px;color:#58a6ff;font-weight:600">ACTIVE</span>';
       ch+='</td>';
       ch+='<td style="font-size:12px;color:#8b949e">'+c.user+'</td>';
-      ch+='<td><span class="trust-badge trust-'+c.trust_level+'">'+c.trust_level+'</span></td>';
-      ch+='<td style="color:'+(c.ssrf_allowed?'#3fb950':'#f85149')+';font-size:12px">'+(c.ssrf_allowed?'allowed':'blocked')+'</td>';
       ch+='<td style="font-weight:600">'+c.request_count+'</td>';
       ch+='<td style="font-size:11px;color:#8b949e">'+fmtTimeShort(c.last_seen_ms)+'</td>';
       ch+='<td style="font-size:11px;color:#58a6ff">detail →</td>';
@@ -441,38 +438,36 @@ function renderTrust(tr){
     ch+='</table>';
     config.innerHTML=ch;
   }
-  // ── Trust level reference (compact) ──
-  let ref='<div style="margin-top:8px;font-size:11px;color:#8b949e">Trust levels: ';
+  // ── Trust info ──
+  let ref='<div style="margin-top:8px;font-size:11px;color:#8b949e">Channel trust (by source IP): ';
   ref+='<span class="trust-badge trust-full">full</span> Permissive, SSRF allowed · ';
   ref+='<span class="trust-badge trust-trusted">trusted</span> Balanced · ';
   ref+='<span class="trust-badge trust-public">public</span> Aggressive · ';
   ref+='<span class="trust-badge trust-restricted">restricted</span> Aggressive · ';
   ref+='<span class="trust-badge trust-unknown">unknown</span> Balanced (default)';
+  ref+='<br>Configure in <code>[[trust.channels]]</code> with source IP/hostname patterns.';
   ref+='</div>';
   breakdown.innerHTML=ref;
 }
 function showChannelDetail(channelId){
   if(!trustData)return;
-  const channels=trustData.channel_registry||[];
-  const ch=channels.find(c=>c.channel===channelId);
+  const contexts=trustData.channel_registry||[];
+  const ch=contexts.find(c=>c.channel===channelId);
   if(!ch)return;
   const detail=document.getElementById('trust-detail');
   const listCard=document.getElementById('trust-list-card');
   listCard.style.display='none';
   detail.style.display='block';
   let h='<div class="slm-detail-card">';
-  h+='<span class="detail-back" onclick="closeChannelDetail()">← Back to channel registry</span>';
-  h+='<h2 style="font-size:16px;margin:12px 0 16px"><span class="badge badge-gray" style="font-size:14px">'+channelId+'</span> '+trustBadge(ch.trust_level)+'</h2>';
-  // Channel metadata
+  h+='<span class="detail-back" onclick="closeChannelDetail()">← Back to context registry</span>';
+  h+='<h2 style="font-size:16px;margin:12px 0 16px"><span class="badge badge-gray" style="font-size:14px">'+channelId+'</span></h2>';
   h+='<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px;margin-bottom:20px">';
+  h+='<div style="padding:10px;background:#0d1117;border:1px solid #30363d;border-radius:6px"><div style="font-size:11px;color:#8b949e">TYPE</div><div style="font-size:13px;color:#e1e4e8;margin-top:4px">OpenClaw Context</div></div>';
   h+='<div style="padding:10px;background:#0d1117;border:1px solid #30363d;border-radius:6px"><div style="font-size:11px;color:#8b949e">USER</div><div style="font-size:13px;color:#e1e4e8;margin-top:4px">'+ch.user+'</div></div>';
-  h+='<div style="padding:10px;background:#0d1117;border:1px solid #30363d;border-radius:6px"><div style="font-size:11px;color:#8b949e">TRUST LEVEL</div><div style="margin-top:4px">'+trustBadge(ch.trust_level)+'</div></div>';
-  h+='<div style="padding:10px;background:#0d1117;border:1px solid #30363d;border-radius:6px"><div style="font-size:11px;color:#8b949e">SSRF POLICY</div><div style="font-size:13px;font-weight:600;color:'+(ch.ssrf_allowed?'#3fb950':'#f85149')+';margin-top:4px">'+(ch.ssrf_allowed?'Internal URLs allowed':'Internal URLs blocked')+'</div></div>';
   h+='<div style="padding:10px;background:#0d1117;border:1px solid #30363d;border-radius:6px"><div style="font-size:11px;color:#8b949e">REQUESTS</div><div style="font-size:20px;font-weight:600;color:#e1e4e8;margin-top:4px">'+ch.request_count+'</div></div>';
   h+='<div style="padding:10px;background:#0d1117;border:1px solid #30363d;border-radius:6px"><div style="font-size:11px;color:#8b949e">FIRST SEEN</div><div style="font-size:12px;color:#e1e4e8;margin-top:4px">'+fmtTime(ch.first_seen_ms)+'</div></div>';
   h+='<div style="padding:10px;background:#0d1117;border:1px solid #30363d;border-radius:6px"><div style="font-size:11px;color:#8b949e">LAST SEEN</div><div style="font-size:12px;color:#e1e4e8;margin-top:4px">'+fmtTime(ch.last_seen_ms)+'</div></div>';
   h+='</div>';
-  // Screening history for this channel
   const slm=trustData.slm_screenings;
   if(slm&&slm.recent_screenings){
     const filtered=slm.recent_screenings.filter(e=>e.channel===channelId);
@@ -496,7 +491,7 @@ function showChannelDetail(channelId){
       }
       h+='</table>';
     }else{
-      h+='<p class="empty-state">No screenings recorded for this channel yet.</p>';
+      h+='<p class="empty-state">No screenings recorded for this context yet.</p>';
     }
   }
   h+='</div>';
@@ -641,11 +636,9 @@ function renderSlm(sl,channelCtx){
   let sc='';
   if(channelCtx&&channelCtx.registered){
     sc+='<div class="card" style="grid-column:1/-1"><div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap">';
-    sc+='<div><div style="font-size:11px;color:#8b949e;margin-bottom:4px">ACTIVE CHANNEL</div>';
-    sc+='<span class="badge badge-gray" style="font-size:13px">'+(channelCtx.channel||'unknown')+'</span></div>';
+    sc+='<div><div style="font-size:11px;color:#8b949e;margin-bottom:4px">ACTIVE CONTEXT</div>';
+    sc+='<span class="badge badge-gray" style="font-size:13px">'+(channelCtx.channel||'none')+'</span></div>';
     if(channelCtx.user){sc+='<div><div style="font-size:11px;color:#8b949e;margin-bottom:4px">USER</div><span style="font-size:13px;color:#e1e4e8">'+channelCtx.user+'</span></div>';}
-    sc+='<div><div style="font-size:11px;color:#8b949e;margin-bottom:4px">TRUST LEVEL</div>'+trustBadge(channelCtx.trust_level)+'</div>';
-    sc+='<div><div style="font-size:11px;color:#8b949e;margin-bottom:4px">SSRF</div><span style="font-size:13px;color:'+(channelCtx.ssrf_allowed?'#3fb950':'#f85149')+'">'+(channelCtx.ssrf_allowed?'allowed':'blocked')+'</span></div>';
     sc+='</div></div>';
   }
   // Stats cards
@@ -715,13 +708,12 @@ function buildScreeningHtml(e){
   const passB_ran=e.pass_b_ms!=null&&e.pass_b_ms>0;
   const passB_caught=anns.some(a=>['ExfiltrationAttempt','CredentialProbe','ToolAbuse','LinkInjection','SsrfAttempt'].includes(a.pattern));
   let h='';
-  // Channel trust
+  // Trust context: Channel (source IP) + Context (OpenClaw metadata)
   if(e.channel||e.channel_trust_level){
     h+='<div style="margin-bottom:12px;padding:10px 14px;background:#0d1117;border:1px solid #30363d;border-radius:6px;display:flex;gap:16px;align-items:center;flex-wrap:wrap">';
-    h+='<span style="font-size:11px;color:#8b949e">CHANNEL</span>';
-    if(e.channel)h+='<span class="badge badge-gray" style="font-size:12px">'+escHtml(e.channel)+'</span>';
-    if(e.channel_user)h+='<span style="font-size:11px;color:#8b949e">'+escHtml(e.channel_user)+'</span>';
     if(e.channel_trust_level)h+='<span class="trust-badge trust-'+e.channel_trust_level+'">'+e.channel_trust_level+'</span>';
+    if(e.channel)h+='<span style="font-size:11px;color:#8b949e">Context:</span><span class="badge badge-gray" style="font-size:12px">'+escHtml(e.channel)+'</span>';
+    if(e.channel_user)h+='<span style="font-size:11px;color:#8b949e">'+escHtml(e.channel_user)+'</span>';
     h+='</div>';
   }
   // Trust admission explanation — when layers flagged but final decision is admit
@@ -731,7 +723,7 @@ function buildScreeningHtml(e){
     h+='<div style="margin-bottom:12px;padding:10px 14px;background:rgba(56,139,253,0.08);border:1px solid #1f6feb;border-radius:6px">';
     h+='<div style="font-size:11px;font-weight:600;color:#58a6ff;margin-bottom:4px">ADMITTED — TRUST TIER OVERRIDE</div>';
     h+='<div style="font-size:12px;color:#c9d1d9">';
-    if(hasAdvisory)h+='The ProtectAI classifier flagged this content as suspicious, but the channel trust level <b>'+escHtml(e.channel_trust_level)+'</b> sets the classifier to <b>advisory mode</b> (log only, don\'t block). ';
+    if(hasAdvisory)h+='The ProtectAI classifier flagged this content as suspicious, but the trust level <b>'+escHtml(e.channel_trust_level)+'</b> sets the classifier to <b>advisory mode</b> (log only, don\'t block). ';
     if(hasFindings&&!hasAdvisory)h+='Screening detected '+anns.length+' pattern(s) with threat score '+e.threat_score+', but ';
     if(hasFindings)h+='The holster profile <b>'+(e.holster_profile||'default')+'</b> admitted this request'+(e.threshold_exceeded===false?' (below threshold).':'.');
     else h+='No patterns reached the blocking threshold for this trust level.';
@@ -1143,36 +1135,35 @@ function renderTrace(data,status){
     h+='<span style="color:#8b949e">v'+status.version+'</span>';
     hb.innerHTML=h;
   }
-  // Populate channel filter
+  // Populate context filter (OpenClaw contexts)
   const cf=document.getElementById('trace-filter-channel');
   if(cf&&cf.options.length<=1&&data.entries){
-    const chans=new Set();
-    data.entries.forEach(e=>{if(e.channel)chans.add(e.channel);});
-    chans.forEach(c=>{const o=document.createElement('option');o.value=c;o.textContent=c;cf.appendChild(o);});
+    const ctxs=new Set();
+    data.entries.forEach(e=>{if(e.context)ctxs.add(e.context);});
+    ctxs.forEach(c=>{const o=document.createElement('option');o.value=c;o.textContent=fmtContext(c);cf.appendChild(o);});
   }
   if(traceDetailId)return;
   const el=document.getElementById('trace-list');
   if(!el)return;
   let entries=data.entries||[];
   // Apply filters
-  const fChan=document.getElementById('trace-filter-channel')?.value||'';
+  const fCtx=document.getElementById('trace-filter-channel')?.value||'';
   const fTrust=document.getElementById('trace-filter-trust')?.value||'';
   const fSlm=document.getElementById('trace-filter-slm')?.value||'';
   const fSearch=document.getElementById('trace-search')?.value?.toLowerCase()||'';
-  if(fChan)entries=entries.filter(e=>(e.channel||'').includes(fChan));
+  if(fCtx)entries=entries.filter(e=>(e.context||'').includes(fCtx));
   if(fTrust)entries=entries.filter(e=>e.trust_level===fTrust);
   if(fSlm)entries=entries.filter(e=>e.slm_verdict===fSlm);
   if(fSearch)entries=entries.filter(e=>JSON.stringify(e).toLowerCase().includes(fSearch));
-  let h='<table class="dtable"><tr><th>#</th><th>Time</th><th>Channel</th><th>Trust</th><th>Model</th><th>Status</th><th>Tokens</th><th>SLM</th><th>Duration</th></tr>';
+  let h='<table class="dtable"><tr><th>#</th><th>Time</th><th>Channel</th><th>Trust</th><th>Context</th><th>Model</th><th>Status</th><th>SLM</th><th>Duration</th></tr>';
   if(entries.length===0){h+='<tr><td colspan="9" style="text-align:center;color:#8b949e;padding:20px">No matching entries</td></tr>';}
   for(const e of entries){
     const t=new Date(e.ts_ms).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit',second:'2-digit'});
-    const ch=fmtChannel(e.channel);
+    const ch=e.channel||'—';
+    const ctx=fmtContext(e.context);
     const trust=e.trust_level||'—';
     const trustCls=trust==='full'?'b-full':trust==='trusted'?'b-trusted':trust==='unknown'?'b-unknown':'';
     const model=e.model||'—';
-    const tok=Math.round((e.request_size+e.response_size)/4);
-    const tokStr=tok>1000?(tok/1000).toFixed(1)+'K':tok;
     const slm=e.slm_verdict||'—';
     const slmCls=slm==='admit'?'b-admit':slm==='reject'?'b-reject':slm==='quarantine'?'b-quarantine':'';
     const dur=e.duration_ms>1000?(e.duration_ms/1000).toFixed(1)+'s':e.duration_ms+'ms';
@@ -1182,20 +1173,22 @@ function renderTrace(data,status){
     h+='<td>'+e.id+'</td><td>'+t+'</td>';
     h+='<td><span class="ch">'+ch+'</span></td>';
     h+='<td>'+(trustCls?'<span class="'+trustCls+'">'+trust+'</span>':trust)+'</td>';
+    h+='<td><span class="ch">'+ctx+'</span></td>';
     h+='<td>'+model+'</td>';
     h+='<td><span class="'+sCls+'">'+e.status+'</span></td>';
-    h+='<td>'+tokStr+'</td>';
     h+='<td>'+(slmCls?'<span class="'+slmCls+'">'+slm+'</span>':slm)+'</td>';
     h+='<td>'+dur+'</td></tr>';
   }
   h+='</table>';
   el.innerHTML=h;
 }
-function fmtChannel(ch){
-  if(!ch)return'—';
-  if(ch.startsWith('telegram:direct:'))return'tg:'+ch.slice(16,22);
-  if(ch.startsWith('openclaw:web:'))return'web:'+ch.slice(13);
-  return ch.length>20?ch.slice(0,20)+'…':ch;
+function fmtContext(ctx){
+  if(!ctx)return'—';
+  if(ctx.startsWith('telegram:direct:'))return'tg:'+ctx.slice(16,22);
+  if(ctx.startsWith('telegram:dm:'))return'tg:dm:'+ctx.slice(12,18);
+  if(ctx.startsWith('openclaw:web:'))return'web:'+ctx.slice(13);
+  if(ctx.startsWith('cli:local:'))return'cli:'+ctx.slice(10);
+  return ctx.length>20?ctx.slice(0,20)+'…':ctx;
 }
 async function showTraceDetail(id){
   traceDetailId=id;
@@ -1218,29 +1211,107 @@ async function showTraceDetail(id){
     let h='<div class="card" style="overflow:hidden">';
     // Header
     h+='<div style="display:flex;justify-content:space-between;align-items:center;padding-bottom:12px;border-bottom:1px solid #30363d;margin-bottom:12px">';
-    h+='<h2 style="margin:0;color:#58a6ff;font-size:14px">Request #'+e.id+' — '+fmtChannel(channel)+' → '+model+' → '+e.status+'</h2>';
+    const ctx=fmtContext(e.context);
+    h+='<h2 style="margin:0;color:#58a6ff;font-size:14px">Request #'+e.id+' — '+channel+' → '+model+' → '+e.status+'</h2>';
     h+='<span style="cursor:pointer;color:#8b949e;font-size:16px;padding:4px 8px" onclick="closeTraceDetail()">✕</span>';
     h+='</div>';
     // Flow timeline
     h+='<div style="padding:0 4px">';
+    const blocked=e.status===403;
     // Step 1: Request
     h+=flowStep('fd-info','1','Request Received','POST '+e.path+' · '+(e.request_size/1024).toFixed(1)+'KB','+0ms');
     // Step 2: Trust
     const trustCol=trust==='full'||trust==='trusted'?'fd-ok':'fd-warn';
-    h+=flowStep(trustCol,'2','Channel Trust: '+trust,channel==='—'?'No channel cert':'Channel: '+channel,'+0ms');
-    // Step 3: SLM
-    const slmCol=slm==='admit'?'fd-ok':slm==='reject'?'fd-err':'fd-warn';
-    let slmBody='<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:4px">';
-    slmBody+='<span class="slm-stage"><b style="color:#8b949e;font-size:10px">DEEP SLM</b><br><span style="color:'+(slm==='admit'?'#3fb950':'#d29922')+'">'+slm+'</span> · '+threat+'/10000<br><span style="color:#484f58">'+slmMs+'ms</span></span>';
+    h+=flowStep(trustCol,'2','Channel: '+channel+' ('+trust+')',ctx!=='—'?'Context: '+ctx:'No OpenClaw context','+0ms');
+    // Step 3: SLM Screening Pipeline
+    // The pipeline short-circuits: classifier → heuristic → deep SLM.
+    // Only the catching layer runs; subsequent layers are skipped.
+    const slmCol=slm==='admit'?'fd-ok':slm==='reject'||slm==='quarantine'?'fd-err':'fd-warn';
+    let slmBody='<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:4px">';
+    // Determine which layer caught it (fast = heuristic/classifier <100ms, deep = SLM >100ms)
+    const isFastCatch=blocked&&slmMs<100;
+    const isDeepCatch=blocked&&slmMs>=100;
+    const isClean=slm==='admit';
+    // Layer 1: Classifier
+    if(isFastCatch&&slmMs<50){
+      slmBody+='<span class="slm-stage" style="min-width:100px"><b style="color:#8b949e;font-size:10px">CLASSIFIER</b><br><span style="color:#f85149;font-weight:600">CAUGHT</span><br><span style="color:#484f58">'+slmMs+'ms</span></span>';
+      slmBody+='<span class="slm-stage" style="min-width:90px"><b style="color:#8b949e;font-size:10px">HEURISTIC</b><br><span style="color:#484f58">skipped</span></span>';
+      slmBody+='<span class="slm-stage" style="min-width:90px"><b style="color:#8b949e;font-size:10px">DEEP SLM</b><br><span style="color:#484f58">skipped</span></span>';
+    }else if(isFastCatch){
+      slmBody+='<span class="slm-stage" style="min-width:100px"><b style="color:#8b949e;font-size:10px">CLASSIFIER</b><br><span style="color:#3fb950">pass</span></span>';
+      slmBody+='<span class="slm-stage" style="min-width:100px"><b style="color:#8b949e;font-size:10px">HEURISTIC</b><br><span style="color:#f85149;font-weight:600">CAUGHT</span><br><span style="color:#484f58">'+slmMs+'ms</span></span>';
+      slmBody+='<span class="slm-stage" style="min-width:90px"><b style="color:#8b949e;font-size:10px">DEEP SLM</b><br><span style="color:#484f58">skipped</span></span>';
+    }else if(isDeepCatch){
+      slmBody+='<span class="slm-stage" style="min-width:100px"><b style="color:#8b949e;font-size:10px">CLASSIFIER</b><br><span style="color:#3fb950">pass</span></span>';
+      slmBody+='<span class="slm-stage" style="min-width:100px"><b style="color:#8b949e;font-size:10px">HEURISTIC</b><br><span style="color:#3fb950">pass</span></span>';
+      const deepVerdict=slm==='reject'?'REJECT':'QUARANTINE';
+      slmBody+='<span class="slm-stage" style="min-width:130px"><b style="color:#8b949e;font-size:10px">DEEP SLM (Qwen3)</b><br><span style="color:'+(slm==='reject'?'#f85149':'#d29922')+';font-weight:600">'+deepVerdict+'</span> · '+threat+'/10000<br><span style="color:#484f58">'+slmMs+'ms</span></span>';
+    }else if(isClean){
+      // All layers passed
+      slmBody+='<span class="slm-stage" style="min-width:100px"><b style="color:#8b949e;font-size:10px">CLASSIFIER</b><br><span style="color:#3fb950">pass</span></span>';
+      slmBody+='<span class="slm-stage" style="min-width:100px"><b style="color:#8b949e;font-size:10px">HEURISTIC</b><br><span style="color:#3fb950">pass</span></span>';
+      if(slmMs>0){
+        slmBody+='<span class="slm-stage" style="min-width:130px"><b style="color:#8b949e;font-size:10px">DEEP SLM (Qwen3)</b><br><span style="color:#3fb950">pass</span> · '+threat+'/10000<br><span style="color:#484f58">'+slmMs+'ms</span></span>';
+      }else{
+        slmBody+='<span class="slm-stage" style="min-width:90px"><b style="color:#8b949e;font-size:10px">DEEP SLM</b><br><span style="color:#484f58">deferred</span></span>';
+      }
+    }else{
+      slmBody+='<span style="color:#484f58;font-size:12px">not screened</span>';
+    }
     slmBody+='</div>';
-    h+=flowStepRich(slmCol,'3','SLM Screening — '+slm,slmBody,'+'+slmMs+'ms');
-    // Step 4: Upstream
-    h+=flowStep('fd-ok','4','Upstream Response',model+' · '+(e.is_streaming?'streaming':'buffered')+' · '+reqTok+' prompt + '+rspTok+' completion = '+(reqTok+rspTok)+' tokens','+'+(dur-100)+'ms');
-    // Step 5: Vault
-    h+=flowStep('fd-ok','5','Vault scan: clean','No credentials detected in response','+'+dur+'ms');
-    // Step 6: Evidence
-    h+=flowStepLast('fd-info','✓','Evidence receipt recorded','Chain intact','+'+dur+'ms');
+    const slmTitle=blocked?'SLM Screening — BLOCKED ('+slm+')':'SLM Screening — '+slm;
+    h+=flowStepRich(slmCol,'3',slmTitle,slmBody,'+'+slmMs+'ms');
+    if(blocked){
+      h+=flowStep('fd-err','✕','Request Blocked','Returned HTTP 403 to client — never forwarded to upstream','+'+dur+'ms');
+    }else{
+      // Step 4: Upstream
+      h+=flowStep('fd-ok','4','Upstream Response',model+' · '+(e.is_streaming?'streaming':'buffered')+' · '+reqTok+' prompt + '+rspTok+' completion = '+(reqTok+rspTok)+' tokens','+'+(dur>100?dur-100:0)+'ms');
+      // Step 5: Vault
+      h+=flowStep('fd-ok','5','Vault scan: clean','No credentials detected in response','+'+dur+'ms');
+      // Step 6: Evidence
+      h+=flowStepLast('fd-info','✓','Evidence receipt recorded','Chain intact','+'+dur+'ms');
+    }
     h+='</div>';
+    // SLM detail: annotations, explanation, reason (from slm_detail field)
+    const sd=e.slm_detail;
+    if(sd){
+      let sdh='';
+      // Explanation
+      if(sd.explanation){
+        sdh+='<div style="margin-bottom:10px"><span style="font-size:11px;color:#8b949e">EXPLANATION</span><div style="font-size:13px;color:#e1e4e8;margin-top:4px">'+escHtml(sd.explanation)+'</div></div>';
+      }
+      // Intent + reason
+      if(sd.intent||sd.reason){
+        sdh+='<div style="display:flex;gap:16px;margin-bottom:10px;flex-wrap:wrap">';
+        if(sd.intent)sdh+='<div><span style="font-size:11px;color:#8b949e">INTENT</span><div style="font-size:13px;color:'+(sd.intent==='benign'?'#3fb950':'#f85149')+';margin-top:4px;font-weight:600">'+escHtml(sd.intent)+'</div></div>';
+        if(sd.reason)sdh+='<div><span style="font-size:11px;color:#8b949e">REASON</span><div style="font-size:13px;color:#e1e4e8;margin-top:4px">'+escHtml(sd.reason)+'</div></div>';
+        sdh+='</div>';
+      }
+      // Detected patterns (annotations)
+      const anns=sd.annotations||[];
+      if(anns.length>0){
+        sdh+='<div style="margin-bottom:10px"><span style="font-size:11px;color:#8b949e">DETECTED PATTERNS ('+anns.length+')</span>';
+        sdh+='<table class="dtable" style="margin-top:6px"><tr><th>Pattern</th><th>Severity</th><th>Excerpt</th></tr>';
+        for(const a of anns){
+          const sevPct=Math.round((a.severity||0)/100);
+          const sevCol=sevPct>=70?'#f85149':sevPct>=40?'#d29922':'#3fb950';
+          sdh+='<tr><td style="font-weight:600;color:#e1e4e8">'+escHtml(a.pattern)+'</td>';
+          sdh+='<td><span style="color:'+sevCol+';font-weight:600">'+sevPct+'%</span></td>';
+          sdh+='<td style="font-size:12px;color:#8b949e;font-family:monospace">'+escHtml((a.excerpt||'').slice(0,120))+'</td></tr>';
+        }
+        sdh+='</table></div>';
+      }
+      // Screened text with highlighted excerpts
+      if(sd.screened_text){
+        let stxt=escHtml(sd.screened_text.slice(0,500));
+        for(const a of anns){
+          const ex=escHtml((a.excerpt||'').slice(0,120));
+          if(ex&&stxt.includes(ex)){stxt=stxt.replace(ex,'<mark style="background:#5c2d0e;color:#f0883e;padding:1px 3px;border-radius:2px">'+ex+'</mark>');}
+        }
+        sdh+='<div><span style="font-size:11px;color:#8b949e">SCREENED TEXT</span><div class="body-pre" style="max-height:120px;margin-top:4px;font-size:12px">'+stxt+'</div></div>';
+      }
+      if(sdh)h+=dsec('SLM Analysis'+(sd.action&&sd.action!=='admit'?' — '+sd.action.toUpperCase():''),sd.action!=='admit',sdh);
+    }
     // Collapsible: Last user message
     const lastUser=chat.filter(m=>m.role==='user').pop();
     if(lastUser){

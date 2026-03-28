@@ -1475,17 +1475,17 @@ fn trust_add_pattern(config_path: &std::path::Path, pattern: &str, level: &str) 
         std::process::exit(1);
     });
 
-    // Check if pattern already exists
-    if content.contains(&format!("pattern = \"{pattern}\"")) {
+    // Check if identity already exists
+    if content.contains(&format!("identity = \"{pattern}\"")) {
         eprintln!(
-            "  Pattern '{pattern}' already exists. Use 'aegis trust remove' first to change it."
+            "  Channel '{pattern}' already exists. Use 'aegis trust remove' first to change it."
         );
         return;
     }
 
     // Append new trust channel entry
     content.push_str(&format!(
-        "\n[[trust.channels]]\npattern = \"{pattern}\"\nlevel = \"{level}\"\n"
+        "\n[[trust.channels]]\nidentity = \"{pattern}\"\nlevel = \"{level}\"\n"
     ));
 
     std::fs::write(config_path, &content).unwrap_or_else(|e| {
@@ -1493,7 +1493,7 @@ fn trust_add_pattern(config_path: &std::path::Path, pattern: &str, level: &str) 
         std::process::exit(1);
     });
 
-    eprintln!("  \x1b[32m✓\x1b[0m Added: {pattern} → {level}");
+    eprintln!("  \x1b[32m✓\x1b[0m Added channel: {pattern} → {level}");
     eprintln!("  Restart Aegis to apply: aegis restart");
 }
 
@@ -1504,13 +1504,12 @@ fn trust_remove_pattern(config_path: &std::path::Path, pattern: &str) {
         std::process::exit(1);
     });
 
-    // Find and remove the [[trust.channels]] block with this pattern
+    // Find and remove the [[trust.channels]] block with this identity
     let mut lines: Vec<&str> = content.lines().collect();
     let mut i = 0;
     let mut found = false;
     while i < lines.len() {
         if lines[i].trim() == "[[trust.channels]]" {
-            // Check if next lines contain our pattern
             let block_start = i;
             let mut block_end = i + 1;
             let mut has_pattern = false;
@@ -1518,13 +1517,12 @@ fn trust_remove_pattern(config_path: &std::path::Path, pattern: &str) {
                 && !lines[block_end].starts_with("[[")
                 && !lines[block_end].starts_with("[")
             {
-                if lines[block_end].contains(&format!("pattern = \"{pattern}\"")) {
+                if lines[block_end].contains(&format!("identity = \"{pattern}\"")) {
                     has_pattern = true;
                 }
                 block_end += 1;
             }
             if has_pattern {
-                // Remove this block (including trailing empty line)
                 lines.drain(block_start..block_end);
                 if block_start < lines.len() && lines[block_start].trim().is_empty() {
                     lines.remove(block_start);
@@ -1537,7 +1535,7 @@ fn trust_remove_pattern(config_path: &std::path::Path, pattern: &str) {
     }
 
     if !found {
-        eprintln!("  Pattern '{pattern}' not found in config.");
+        eprintln!("  Channel '{pattern}' not found in config.");
         return;
     }
 
@@ -1547,32 +1545,48 @@ fn trust_remove_pattern(config_path: &std::path::Path, pattern: &str) {
         std::process::exit(1);
     });
 
-    eprintln!("  \x1b[32m✓\x1b[0m Removed: {pattern}");
+    eprintln!("  \x1b[32m✓\x1b[0m Removed channel: {pattern}");
     eprintln!("  Restart Aegis to apply: aegis restart");
 }
 
 /// List all configured channel trust patterns.
 fn trust_list_patterns(config: &AdapterConfig) {
     let channels = &config.trust.channels;
-    if channels.is_empty() {
-        eprintln!("  No trust patterns configured.");
-        eprintln!("  Add one: aegis trust add \"telegram:dm:*\" trusted");
+    let contexts = &config.trust.contexts;
+
+    if channels.is_empty() && contexts.is_empty() {
+        eprintln!("  No trust channels configured.");
+        eprintln!("  Add one: aegis trust add localhost trusted");
         return;
     }
 
-    let header = format!("  {:<40} {}", "Pattern", "Trust Level");
-    eprintln!("{header}");
-    let sep = format!("  {}", "─".repeat(55));
-    eprintln!("{sep}");
-    for ch in channels {
-        let color = match ch.level.as_str() {
-            "full" => "\x1b[32m",
-            "trusted" => "\x1b[36m",
-            "public" => "\x1b[33m",
-            "restricted" => "\x1b[31m",
-            _ => "\x1b[90m",
-        };
-        eprintln!("  {:<40} {color}{}\x1b[0m", ch.pattern, ch.level);
+    if !channels.is_empty() {
+        eprintln!("\n  \x1b[1mChannels (access control)\x1b[0m");
+        let header = format!("  {:<40} {}", "Identity", "Trust Level");
+        eprintln!("{header}");
+        let sep = format!("  {}", "─".repeat(55));
+        eprintln!("{sep}");
+        for ch in channels {
+            let color = match ch.level.as_str() {
+                "full" => "\x1b[32m",
+                "trusted" => "\x1b[36m",
+                "public" => "\x1b[33m",
+                "restricted" => "\x1b[31m",
+                _ => "\x1b[90m",
+            };
+            eprintln!("  {:<40} {color}{}\x1b[0m", ch.identity, ch.level);
+        }
+    }
+
+    if !contexts.is_empty() {
+        eprintln!("\n  \x1b[1mContexts (OpenClaw observability)\x1b[0m");
+        let header = format!("  {:<40} {}", "Pattern", "Label");
+        eprintln!("{header}");
+        let sep = format!("  {}", "─".repeat(55));
+        eprintln!("{sep}");
+        for ctx in contexts {
+            eprintln!("  {:<40} {}", ctx.pattern, ctx.label.as_deref().unwrap_or("—"));
+        }
     }
 }
 
