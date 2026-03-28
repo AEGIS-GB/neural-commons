@@ -358,7 +358,11 @@ async fn forward_request(
                 aegis_schemas::ChannelTrust::default()
             }
         } else {
-            // No header — check if channel context was registered via cognitive bridge
+            // No cert header — fall back to cognitive bridge registration.
+            // KNOWN LIMITATION: ACTIVE_CHANNEL is a global that can be overwritten
+            // by concurrent requests from different channels. Under concurrent
+            // multi-channel traffic, this may attribute the wrong trust level.
+            // The proper fix is per-request channel identification (issue #113).
             crate::cognitive_bridge::get_registered_channel_trust()
                 .unwrap_or_default()
         }
