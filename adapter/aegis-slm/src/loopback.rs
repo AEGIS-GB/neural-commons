@@ -14,6 +14,15 @@
 
 use tracing::{debug, info, warn};
 
+/// Build the SLM engine from config. Single source — used by all screening paths.
+fn build_engine(config: &LoopbackConfig) -> Box<dyn SlmEngine> {
+    match config.engine.as_str() {
+        "openai" => Box::new(OpenAiCompatEngine::new(&config.server_url, &config.model)),
+        "anthropic" => Box::new(AnthropicEngine::new(&config.server_url, &config.model, None)),
+        _ => Box::new(OllamaEngine::new(&config.server_url, &config.model)),
+    }
+}
+
 /// ProtectAI classifier quarantine threshold. Same value must be used in ALL code paths.
 /// A probability above this threshold triggers fast-path quarantine.
 const CLASSIFIER_QUARANTINE_THRESHOLD: f32 = 0.5;
@@ -216,11 +225,7 @@ pub fn screen_deep_slm(config: &LoopbackConfig, content: &str, holster_profile: 
 
     let prompt = screening_prompt_combined(content);
 
-    let engine: Box<dyn SlmEngine> = match config.engine.as_str() {
-        "openai" => Box::new(OpenAiCompatEngine::new(&config.server_url, &config.model)),
-        "anthropic" => Box::new(AnthropicEngine::new(&config.server_url, &config.model, None)),
-        _ => Box::new(OllamaEngine::new(&config.server_url, &config.model)),
-    };
+    let engine = build_engine(config);
 
     let pass_a_start = Instant::now();
     let result = engine.generate(&prompt);
@@ -411,11 +416,7 @@ pub fn screen_content_rich(config: &LoopbackConfig, content: &str) -> ScreeningR
     //    Only reached if heuristic + classifier found nothing.
     let prompt = screening_prompt_combined(content);
 
-    let engine: Box<dyn SlmEngine> = match config.engine.as_str() {
-        "openai" => Box::new(OpenAiCompatEngine::new(&config.server_url, &config.model)),
-        "anthropic" => Box::new(AnthropicEngine::new(&config.server_url, &config.model, None)),
-        _ => Box::new(OllamaEngine::new(&config.server_url, &config.model)),
-    };
+    let engine = build_engine(config);
 
     let pass_a_start = Instant::now();
     let result = engine.generate(&prompt);
