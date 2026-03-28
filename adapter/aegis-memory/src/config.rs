@@ -88,8 +88,8 @@ impl MemoryConfig {
 
         // Also check memory/ subdirectory
         let memory_dir = base_dir.join("memory");
-        if memory_dir.is_dir() {
-            if let Ok(entries) = std::fs::read_dir(&memory_dir) {
+        if memory_dir.is_dir()
+            && let Ok(entries) = std::fs::read_dir(&memory_dir) {
                 for entry in entries.flatten() {
                     let path = entry.path();
                     if path.is_file() && self.is_memory_file(&path) {
@@ -97,7 +97,6 @@ impl MemoryConfig {
                     }
                 }
             }
-        }
 
         results.sort();
         results

@@ -249,13 +249,11 @@ pub fn map_notify_event(event: &notify::Event) -> Vec<WatchEvent> {
 /// regardless of OS path separators.
 pub fn is_excluded(path: &Path) -> bool {
     for component in path.components() {
-        if let std::path::Component::Normal(os_str) = component {
-            if let Some(s) = os_str.to_str() {
-                if EXCLUDED_DIRS.contains(&s) {
+        if let std::path::Component::Normal(os_str) = component
+            && let Some(s) = os_str.to_str()
+                && EXCLUDED_DIRS.contains(&s) {
                     return true;
                 }
-            }
-        }
     }
     false
 }

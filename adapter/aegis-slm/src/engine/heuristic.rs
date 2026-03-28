@@ -145,6 +145,7 @@ pub struct HeuristicEngine {
 /// Compiled regex patterns — cached for the lifetime of the process.
 static HEURISTIC_REGEX_SET: std::sync::OnceLock<RegexSet> = std::sync::OnceLock::new();
 
+#[allow(clippy::new_without_default)]
 impl HeuristicEngine {
     /// Create a heuristic engine using the cached compiled regex patterns.
     pub fn new() -> Self {
@@ -166,7 +167,7 @@ impl SlmEngine for HeuristicEngine {
         let normalized_matches = self.regex_set.matches(&normalized);
         let matches: Vec<usize> = original_matches
             .into_iter()
-            .chain(normalized_matches.into_iter())
+            .chain(normalized_matches)
             .collect::<std::collections::BTreeSet<usize>>()
             .into_iter()
             .collect();

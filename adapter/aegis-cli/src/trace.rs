@@ -335,8 +335,8 @@ fn show_detail(base: &str, id: u64, show_body: bool) {
     }
 
     // Last user message
-    if let Some(ref body) = e.request_body {
-        if let Some(msg) = extract_last_user_message(body) {
+    if let Some(ref body) = e.request_body
+        && let Some(msg) = extract_last_user_message(body) {
             println!();
             println!("  ── Last User Message ──────────────────────────────────────────────");
             // Word-wrap at ~70 chars with indent
@@ -344,7 +344,6 @@ fn show_detail(base: &str, id: u64, show_body: bool) {
                 println!("  {}", line);
             }
         }
-    }
 
     // Evidence
     println!();
@@ -387,8 +386,8 @@ fn show_slm_health(aegis_url: &str) {
         println!("  Mode       {}", mode);
     }
 
-    if let Some(slm_data) = fetch_json::<SlmList>(&slm_url) {
-        if let Some(entries) = slm_data.entries {
+    if let Some(slm_data) = fetch_json::<SlmList>(&slm_url)
+        && let Some(entries) = slm_data.entries {
             if let Some(last) = entries.last() {
                 println!("  Last       verdict={} threat={} in {}ms",
                     last.action.as_deref().unwrap_or("?"),
@@ -402,7 +401,6 @@ fn show_slm_health(aegis_url: &str) {
                 println!("  Avg time   {}ms ({} screenings)", avg, times.len());
             }
         }
-    }
     println!();
 }
 

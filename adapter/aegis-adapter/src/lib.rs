@@ -25,8 +25,10 @@ pub mod state;
 
 /// Adapter operating mode
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Default)]
 pub enum Mode {
     /// Full inspection + receipts, no blocking (default)
+    #[default]
     ObserveOnly,
     /// Full inspection + receipts + blocking
     Enforce,
@@ -34,8 +36,3 @@ pub enum Mode {
     PassThrough,
 }
 
-impl Default for Mode {
-    fn default() -> Self {
-        Mode::ObserveOnly
-    }
-}

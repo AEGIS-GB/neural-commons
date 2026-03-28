@@ -200,9 +200,7 @@ pub async fn start_with_traffic_full(
 /// Extract user-authored content from any JSON request format for SLM screening.
 /// Handles: OpenAI messages format, Responses API input format, plain strings.
 /// Only includes user messages and tool results — skips assistant responses.
-// max_chars is now configurable via config.toml [slm] slm_max_content_chars.
-// The proxy reads it from ProxyConfig at runtime instead of a hardcoded constant.
-
+/// `max_chars` is configurable via config.toml [slm] slm_max_content_chars.
 fn extract_user_content_from_json(body: &str, max_chars: usize) -> String {
     if let Ok(json) = serde_json::from_str::<serde_json::Value>(body) {
         let mut parts = Vec::new();
@@ -395,11 +393,10 @@ async fn forward_request(
     // Run pre-request middleware (skip in pass-through mode)
     if state.config.mode != ProxyMode::PassThrough {
         // Evidence hook: on_request
-        if let Some(ref evidence) = state.hooks.evidence {
-            if let Err(e) = evidence.on_request(&req_info).await {
+        if let Some(ref evidence) = state.hooks.evidence
+            && let Err(e) = evidence.on_request(&req_info).await {
                 warn!("evidence hook error on request: {e}");
             }
-        }
 
         // Barrier hook: check writes
         if let Some(ref barrier) = state.hooks.barrier {
@@ -421,19 +418,17 @@ async fn forward_request(
         }
 
         // Vault hook: scan request body for credentials
-        if let Some(ref vault) = state.hooks.vault {
-            if let Ok(body_str) = std::str::from_utf8(&body_bytes) {
+        if let Some(ref vault) = state.hooks.vault
+            && let Ok(body_str) = std::str::from_utf8(&body_bytes) {
                 let vault_decision = vault.scan(body_str).await;
                 if let middleware::VaultDecision::Detected(ref secrets) = vault_decision {
                     info!(count = secrets.len(), "vault detected credentials in request");
-                    if let Some(ref evidence) = state.hooks.evidence {
-                        if let Err(e) = evidence.on_vault_detection(&path, "request", secrets).await {
+                    if let Some(ref evidence) = state.hooks.evidence
+                        && let Err(e) = evidence.on_vault_detection(&path, "request", secrets).await {
                             warn!("evidence hook error on vault detection: {e}");
                         }
-                    }
                 }
             }
-        }
 
         // SLM hook: fast layers block (heuristic + classifier, <10ms),
         // deep SLM runs async in parallel with LLM forwarding.
@@ -544,7 +539,7 @@ async fn forward_request(
                 use crate::config::Provider;
                 let provider = if state.config.allow_any_provider {
                     // Auto-detect: check headers and model name
-                    if headers.get("anthropic-version").is_some()
+                    if headers.contains_key("anthropic-version")
                         || json.get("model").and_then(|m| m.as_str()).map(|m| m.starts_with("claude")).unwrap_or(false)
                     {
                         Provider::Anthropic
@@ -722,14 +717,13 @@ async fn forward_request(
                             for line in chunk_str.lines() {
                                 if let Some(json_str) = line.strip_prefix("data: ") {
                                     // Extract text from content_block_delta events
-                                    if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(json_str) {
-                                        if let Some(text) = parsed
+                                    if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(json_str)
+                                        && let Some(text) = parsed
                                             .pointer("/delta/text")
                                             .and_then(|t| t.as_str())
                                         {
                                             text_buffer.push_str(text);
                                         }
-                                    }
                                 }
                             }
 
@@ -740,18 +734,17 @@ async fn forward_request(
                                 if let middleware::VaultDecision::Detected(ref secrets) = decision {
                                     vault_detected = true;
                                     warn!(count = secrets.len(), "vault detected credentials in streaming response");
-                                    if let Some(ref evidence) = stream_evidence {
-                                        if let Err(e) = evidence.on_vault_detection(&stream_path_for_vault, "response", secrets).await {
+                                    if let Some(ref evidence) = stream_evidence
+                                        && let Err(e) = evidence.on_vault_detection(&stream_path_for_vault, "response", secrets).await {
                                             warn!("evidence hook error on streaming vault detection: {e}");
                                         }
-                                    }
                                 }
                             }
 
                             // If vault detected credentials, redact text in SSE chunks
-                            if vault_detected {
-                                if let Ok(chunk_str) = std::str::from_utf8(&chunk) {
-                                    if let Some(redacted) = vault.redact(chunk_str).await {
+                            if vault_detected
+                                && let Ok(chunk_str) = std::str::from_utf8(&chunk)
+                                    && let Some(redacted) = vault.redact(chunk_str).await {
                                         let redacted_bytes = bytes::Bytes::from(redacted.into_bytes());
                                         hasher.update(&redacted_bytes);
                                         if accumulated.len() < capture_limit {
@@ -763,8 +756,6 @@ async fn forward_request(
                                         }
                                         continue;
                                     }
-                                }
-                            }
                         }
 
                         // Default path: forward chunk as-is
@@ -778,8 +769,7 @@ async fn forward_request(
                         }
                     }
                     Err(e) => {
-                        let _ = chunk_tx.send(Err(std::io::Error::new(
-                            std::io::ErrorKind::Other,
+                        let _ = chunk_tx.send(Err(std::io::Error::other(
                             e.to_string(),
                         ))).await;
                         break;
@@ -788,19 +778,17 @@ async fn forward_request(
             }
 
             // Final vault scan on remaining buffered text
-            if !vault_detected && !text_buffer.is_empty() {
-                if let Some(ref vault) = stream_vault {
+            if !vault_detected && !text_buffer.is_empty()
+                && let Some(ref vault) = stream_vault {
                     let decision = vault.scan(&text_buffer).await;
                     if let middleware::VaultDecision::Detected(ref secrets) = decision {
                         warn!(count = secrets.len(), "vault detected credentials in streaming response (final scan)");
-                        if let Some(ref evidence) = stream_evidence {
-                            if let Err(e) = evidence.on_vault_detection(&stream_path_for_vault, "response", secrets).await {
+                        if let Some(ref evidence) = stream_evidence
+                            && let Err(e) = evidence.on_vault_detection(&stream_path_for_vault, "response", secrets).await {
                                 warn!("evidence hook error on streaming vault final detection: {e}");
                             }
-                        }
                     }
                 }
-            }
 
             let hash_hex = hex::encode(hasher.finalize());
             let _ = evidence_tx.send((hash_hex, total));
@@ -828,18 +816,17 @@ async fn forward_request(
                         duration_ms,
                     };
 
-                    if let Some(ref evidence) = evidence_hooks.evidence {
-                        if let Err(e) = evidence.on_response(&req_info_clone, &resp_info).await {
+                    if let Some(ref evidence) = evidence_hooks.evidence
+                        && let Err(e) = evidence.on_response(&req_info_clone, &resp_info).await {
                             warn!("evidence hook error on SSE response: {e}");
                         }
-                    }
                 }
             });
         }
 
         // Fire-and-forget deep SLM for trusted channels (after response stream starts)
-        if let Some(content) = slm_deferred_content {
-            if let Some(ref slm) = state.hooks.slm {
+        if let Some(content) = slm_deferred_content
+            && let Some(ref slm) = state.hooks.slm {
                 let slm_clone: Arc<dyn middleware::SlmHook> = Arc::clone(slm);
                 let trust_channel = req_info.channel_trust.channel.clone();
                 let trust_level = req_info.channel_trust.trust_level;
@@ -852,7 +839,6 @@ async fn forward_request(
                     );
                 });
             }
-        }
 
         return response.body(body)
             .map_err(|e| ProxyError::Internal(format!("streaming response build error: {e}")));
@@ -878,25 +864,23 @@ async fn forward_request(
         };
 
         // Evidence hook: on_response
-        if let Some(ref evidence) = state.hooks.evidence {
-            if let Err(e) = evidence.on_response(&req_info, &resp_info).await {
+        if let Some(ref evidence) = state.hooks.evidence
+            && let Err(e) = evidence.on_response(&req_info, &resp_info).await {
                 warn!("evidence hook error on response: {e}");
             }
-        }
 
         // Vault hook: scan and redact response
-        if let Some(ref vault) = state.hooks.vault {
-            if let Ok(body_str) = std::str::from_utf8(&resp_body) {
+        if let Some(ref vault) = state.hooks.vault
+            && let Ok(body_str) = std::str::from_utf8(&resp_body) {
                 let vault_decision = vault.scan(body_str).await;
                 if let middleware::VaultDecision::Detected(ref secrets) = vault_decision {
                     info!(count = secrets.len(), "vault detected credentials in response");
 
                     // Record vault detection in evidence chain
-                    if let Some(ref evidence) = state.hooks.evidence {
-                        if let Err(e) = evidence.on_vault_detection(&path, "response", secrets).await {
+                    if let Some(ref evidence) = state.hooks.evidence
+                        && let Err(e) = evidence.on_vault_detection(&path, "response", secrets).await {
                             warn!("evidence hook error on vault detection: {e}");
                         }
-                    }
 
                     // Redact credentials from the response body
                     if let Some(redacted) = vault.redact(body_str).await {
@@ -905,12 +889,11 @@ async fn forward_request(
                     }
                 }
             }
-        }
     }
 
     // Record traffic for dashboard inspector (with redacted body)
     let traffic_entry_id = if let Some(ref recorder) = state.traffic_recorder {
-        recorder(&method.to_string(), &path, resp_status, &body_bytes, &final_body, duration_ms, false, slm_verdict.as_ref(),
+        recorder(method.as_ref(), &path, resp_status, &body_bytes, &final_body, duration_ms, false, slm_verdict.as_ref(),
             req_info.channel_trust.channel.as_deref(),
             Some(&format!("{:?}", req_info.channel_trust.trust_level).to_lowercase()),
             extract_model_from_body(&body_bytes).as_deref())
@@ -919,8 +902,8 @@ async fn forward_request(
     };
 
     // Fire-and-forget deep SLM for trusted channels (after response ready)
-    if let Some(content) = slm_deferred_content {
-        if let Some(ref slm) = state.hooks.slm {
+    if let Some(content) = slm_deferred_content
+        && let Some(ref slm) = state.hooks.slm {
             let slm_clone: Arc<dyn middleware::SlmHook> = Arc::clone(slm);
             let trust_channel = req_info.channel_trust.channel.clone();
             let trust_level = req_info.channel_trust.trust_level;
@@ -938,7 +921,6 @@ async fn forward_request(
                 }
             });
         }
-    }
 
     // Build response
     let status = StatusCode::from_u16(resp_status)

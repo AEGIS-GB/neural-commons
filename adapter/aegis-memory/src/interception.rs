@@ -76,7 +76,7 @@ impl MemoryTracker {
     /// Initialize tracking for a file (first scan).
     pub fn track_file(&mut self, path: &Path) -> Result<MemoryFileState, crate::MemoryError> {
         let content = std::fs::read(path)
-            .map_err(|e| crate::MemoryError::IoError(e))?;
+            .map_err(crate::MemoryError::IoError)?;
         let hash = compute_content_hash(&content);
         let now_ms = current_epoch_ms();
 
@@ -108,7 +108,7 @@ impl MemoryTracker {
         }
 
         let content = std::fs::read(path)
-            .map_err(|e| crate::MemoryError::IoError(e))?;
+            .map_err(crate::MemoryError::IoError)?;
         let new_hash = compute_content_hash(&content);
 
         match known_state {

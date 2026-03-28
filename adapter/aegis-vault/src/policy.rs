@@ -40,20 +40,17 @@ pub struct AccessRule {
 /// Policy decision.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum PolicyAction {
     /// Allow access to the secret.
     Allow,
     /// Deny access to the secret.
+    #[default]
     Deny,
     /// Allow but log the access (audit trail).
     AllowWithAudit,
 }
 
-impl Default for PolicyAction {
-    fn default() -> Self {
-        PolicyAction::Deny
-    }
-}
 
 /// Result of a policy evaluation.
 #[derive(Debug, Clone)]

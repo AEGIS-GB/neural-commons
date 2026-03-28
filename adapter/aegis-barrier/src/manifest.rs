@@ -90,7 +90,7 @@ impl FileManifest {
     pub fn write_to(&self, data_dir: &Path) -> Result<(), std::io::Error> {
         let manifest_path = data_dir.join(MANIFEST_FILENAME);
         let json = serde_json::to_string_pretty(self)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+            .map_err(std::io::Error::other)?;
 
         // Atomic write: tmp then rename
         let tmp_path = manifest_path.with_extension("tmp");

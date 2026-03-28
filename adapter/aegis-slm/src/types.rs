@@ -104,6 +104,7 @@ pub struct EnrichedAnnotation {
 
 /// 5 threat dimensions (D4)
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Default)]
 pub struct ThreatDimensions {
     pub injection: u32,
     pub manipulation: u32,
@@ -112,17 +113,6 @@ pub struct ThreatDimensions {
     pub evasion: u32,
 }
 
-impl Default for ThreatDimensions {
-    fn default() -> Self {
-        Self {
-            injection: 0,
-            manipulation: 0,
-            exfiltration: 0,
-            persistence: 0,
-            evasion: 0,
-        }
-    }
-}
 
 // ═══════════════════════════════════════════════════════════════════
 // Holster Decision (private, never leaves device)
@@ -222,10 +212,12 @@ pub enum Intent {
 /// Holster preset profiles (D8)
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum HolsterProfile {
     /// Reject > 6000bp
     Aggressive,
     /// Reject > 8000bp (default)
+    #[default]
     Balanced,
     /// Reject > 9000bp
     Permissive,
@@ -233,11 +225,6 @@ pub enum HolsterProfile {
     Custom,
 }
 
-impl Default for HolsterProfile {
-    fn default() -> Self {
-        Self::Balanced
-    }
-}
 
 /// Holster action
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

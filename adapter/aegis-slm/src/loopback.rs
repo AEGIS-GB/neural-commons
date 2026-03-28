@@ -142,8 +142,8 @@ pub fn screen_fast_layers(config: &LoopbackConfig, content: &str, holster_profil
 
     let mut classifier_advisory: Option<String> = None;
 
-    if let Some((true, prob)) = classifier_signal {
-        if prob > CLASSIFIER_QUARANTINE_THRESHOLD {
+    if let Some((true, prob)) = classifier_signal
+        && prob > CLASSIFIER_QUARANTINE_THRESHOLD {
             if classifier_blocking {
                 info!(prob, "ProtectAI classifier: MALICIOUS, fast-path quarantine");
                 return (Some(ScreeningResult {
@@ -166,7 +166,6 @@ pub fn screen_fast_layers(config: &LoopbackConfig, content: &str, holster_profil
                 classifier_advisory = Some(format!("prompt_guard: MALICIOUS (prob={prob:.4}) — advisory, trusted channel"));
             }
         }
-    }
 
     // Heuristic pre-filter
     if config.fallback_to_heuristics {
@@ -174,8 +173,8 @@ pub fn screen_fast_layers(config: &LoopbackConfig, content: &str, holster_profil
         let heuristic_start = Instant::now();
         if let Ok(output) = heuristic.generate(content) {
             let heuristic_ms = heuristic_start.elapsed().as_millis() as u64;
-            if let Ok(slm_output) = parse_slm_output(&output, &EngineProfile::Loopback) {
-                if !slm_output.annotations.is_empty() {
+            if let Ok(slm_output) = parse_slm_output(&output, &EngineProfile::Loopback)
+                && !slm_output.annotations.is_empty() {
                     info!(
                         patterns = slm_output.annotations.len(),
                         "heuristic pre-filter: threat detected"
@@ -210,7 +209,6 @@ pub fn screen_fast_layers(config: &LoopbackConfig, content: &str, holster_profil
                         },
                     }), classifier_advisory);
                 }
-            }
         }
     }
 
@@ -339,8 +337,8 @@ pub fn screen_content_rich(config: &LoopbackConfig, content: &str) -> ScreeningR
 
     // If classifier says MALICIOUS, fast-path quarantine.
     // Threshold must match screen_fast_layers (0.5) — same classifier, same threshold.
-    if let Some((true, prob)) = classifier_signal {
-        if prob > CLASSIFIER_QUARANTINE_THRESHOLD {
+    if let Some((true, prob)) = classifier_signal
+        && prob > CLASSIFIER_QUARANTINE_THRESHOLD {
             info!(
                 prob,
                 "Prompt Guard classifier: high-confidence MALICIOUS, fast-path quarantine"
@@ -359,7 +357,6 @@ pub fn screen_content_rich(config: &LoopbackConfig, content: &str) -> ScreeningR
                 },
             };
         }
-    }
 
     // 1. HEURISTIC PRE-FILTER — instant regex scan (<1ms).
     //    If the heuristic catches something, return immediately without

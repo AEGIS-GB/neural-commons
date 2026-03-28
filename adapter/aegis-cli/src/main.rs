@@ -1193,8 +1193,8 @@ fn try_systemd(action: &str) -> bool {
         .args(["--user", action, "aegis"])
         .output();
 
-    if let Ok(o) = user_output {
-        if o.status.success() {
+    if let Ok(o) = user_output
+        && o.status.success() {
             eprintln!("aegis service {action}ed (systemd)");
             if action != "stop" {
                 std::thread::sleep(std::time::Duration::from_secs(2));
@@ -1204,18 +1204,16 @@ fn try_systemd(action: &str) -> bool {
             }
             return true;
         }
-    }
 
     let sys_output = std::process::Command::new("systemctl")
         .args([action, "aegis"])
         .output();
 
-    if let Ok(o) = sys_output {
-        if o.status.success() {
+    if let Ok(o) = sys_output
+        && o.status.success() {
             eprintln!("aegis service {action}ed (systemd)");
             return true;
         }
-    }
 
     false
 }
@@ -1263,11 +1261,10 @@ fn find_running_aegis() -> Option<u32> {
     let stdout = String::from_utf8_lossy(&output.stdout);
     let my_pid = std::process::id();
     for line in stdout.lines() {
-        if let Ok(pid) = line.trim().parse::<u32>() {
-            if pid != my_pid {
+        if let Ok(pid) = line.trim().parse::<u32>()
+            && pid != my_pid {
                 return Some(pid);
             }
-        }
     }
     None
 }
@@ -1355,8 +1352,8 @@ fn check_for_update() {
         .args(["release", "view", "--repo", "LCatGA12/neural-commons", "--json", "tagName", "--jq", ".tagName"])
         .output();
 
-    if let Ok(o) = output {
-        if o.status.success() {
+    if let Ok(o) = output
+        && o.status.success() {
             let latest_tag = String::from_utf8_lossy(&o.stdout).trim().to_string();
             let latest_ver = latest_tag.trim_start_matches('v');
 
@@ -1368,7 +1365,6 @@ fn check_for_update() {
                 eprintln!();
             }
         }
-    }
 }
 
 /// Open the vault storage, deriving the vault key from the identity key.

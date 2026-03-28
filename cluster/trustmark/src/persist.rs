@@ -93,13 +93,11 @@ pub fn load_history(data_dir: &Path, limit: usize) -> Vec<TrustmarkScore> {
         };
 
         for receipt in &receipts {
-            if receipt.core.receipt_type == aegis_schemas::ReceiptType::TrustmarkUpdate {
-                if let Some(outcome) = receipt.context.outcome.as_deref() {
-                    if let Ok(score) = serde_json::from_str::<TrustmarkScore>(outcome) {
+            if receipt.core.receipt_type == aegis_schemas::ReceiptType::TrustmarkUpdate
+                && let Some(outcome) = receipt.context.outcome.as_deref()
+                    && let Ok(score) = serde_json::from_str::<TrustmarkScore>(outcome) {
                         scores.push(score);
                     }
-                }
-            }
         }
 
         seq = end + 1;

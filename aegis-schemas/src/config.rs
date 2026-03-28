@@ -98,17 +98,12 @@ pub const BODY_SIZE_CAP_MB: usize = 10;
 
 /// SLM warn-mode receipt detail level (D30).
 /// Phase 1: summary only. Phase 2: full per-pattern breakdown.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SlmReceiptDetail {
     /// Aggregate score + action only. No per-pattern breakdown.
+    #[default]
     Summary,
     /// Full per-pattern basis-point scores + action. Phase 2 only.
     Full,
-}
-
-impl Default for SlmReceiptDetail {
-    fn default() -> Self {
-        SlmReceiptDetail::Summary
-    }
 }

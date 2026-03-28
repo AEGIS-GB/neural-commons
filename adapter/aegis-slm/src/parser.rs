@@ -49,11 +49,10 @@ fn extract_json(raw: &str) -> &str {
 
     // Find the first '{' and last '}' to extract the JSON object
     let trimmed = text.trim();
-    if let Some(start) = trimmed.find('{') {
-        if let Some(end) = trimmed.rfind('}') {
+    if let Some(start) = trimmed.find('{')
+        && let Some(end) = trimmed.rfind('}') {
             return &trimmed[start..=end];
         }
-    }
     trimmed
 }
 

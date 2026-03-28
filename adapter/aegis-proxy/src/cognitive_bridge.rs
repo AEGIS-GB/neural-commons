@@ -14,7 +14,6 @@
 
 use axum::{extract::State, routing::{get, post}, Json, Router};
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
 
 /// Build the cognitive bridge sub-router.
 /// Mounted at `/aegis` by the main proxy router.
@@ -323,13 +322,11 @@ async fn unregister_channel_handler(
     }
 
     // Clear active channel if it matches
-    if let Ok(mut active) = ACTIVE_CHANNEL.write() {
-        if let Some(ref trust) = *active {
-            if trust.channel.as_deref() == Some(&channel) {
+    if let Ok(mut active) = ACTIVE_CHANNEL.write()
+        && let Some(ref trust) = *active
+            && trust.channel.as_deref() == Some(&channel) {
                 *active = None;
             }
-        }
-    }
 
     if removed {
         tracing::info!(channel = %channel, "channel unregistered");

@@ -295,6 +295,7 @@ pub trait VaultHook: Send + Sync {
 /// The proxy server holds an `Arc<MiddlewareHooks>`. Each hook is optional;
 /// when `None`, the corresponding middleware step is skipped.
 #[derive(Clone)]
+#[derive(Default)]
 pub struct MiddlewareHooks {
     pub evidence: Option<Arc<dyn EvidenceHook>>,
     pub barrier: Option<Arc<dyn BarrierHook>>,
@@ -302,16 +303,6 @@ pub struct MiddlewareHooks {
     pub vault: Option<Arc<dyn VaultHook>>,
 }
 
-impl Default for MiddlewareHooks {
-    fn default() -> Self {
-        Self {
-            evidence: None,
-            barrier: None,
-            slm: None,
-            vault: None,
-        }
-    }
-}
 
 impl std::fmt::Debug for MiddlewareHooks {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

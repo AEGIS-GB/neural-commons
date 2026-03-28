@@ -388,7 +388,7 @@ async fn api_memory(
 async fn api_vault(
     State(state): State<Arc<DashboardSharedState>>,
 ) -> Json<VaultSummary> {
-    let chain_head = state.evidence.chain_head();
+    let _chain_head = state.evidence.chain_head();
     let mut by_type = std::collections::HashMap::new();
     let mut recent_findings = Vec::new();
 
@@ -840,9 +840,9 @@ fn parse_chat_messages(req_body: &str, resp_body: &str) -> Vec<serde_json::Value
             }
         }
         // Responses API JSON format: output[].content[].text
-        if !got_response {
-            if let Some(text) = extract_responses_api_text(&resp) {
-                if !text.is_empty() {
+        if !got_response
+            && let Some(text) = extract_responses_api_text(&resp)
+                && !text.is_empty() {
                     messages.push(serde_json::json!({
                         "role": "assistant",
                         "content": text,
@@ -850,22 +850,18 @@ fn parse_chat_messages(req_body: &str, resp_body: &str) -> Vec<serde_json::Value
                     }));
                     got_response = true;
                 }
-            }
-        }
     }
 
     // SSE format: parse event stream for response.completed or reassemble deltas
-    if !got_response {
-        if let Some(text) = parse_sse_response_text(resp_body) {
-            if !text.is_empty() {
+    if !got_response
+        && let Some(text) = parse_sse_response_text(resp_body)
+            && !text.is_empty() {
                 messages.push(serde_json::json!({
                     "role": "assistant",
                     "content": text,
                     "source": "response",
                 }));
             }
-        }
-    }
 
     messages
 }
@@ -876,15 +872,14 @@ fn extract_responses_api_text(resp: &serde_json::Value) -> Option<String> {
     let output = resp.get("output")?.as_array()?;
     let mut text = String::new();
     for item in output {
-        if item.get("type").and_then(|t| t.as_str()) == Some("message") {
-            if let Some(content) = item.get("content").and_then(|c| c.as_array()) {
+        if item.get("type").and_then(|t| t.as_str()) == Some("message")
+            && let Some(content) = item.get("content").and_then(|c| c.as_array()) {
                 for part in content {
                     if let Some(t) = part.get("text").and_then(|t| t.as_str()) {
                         text.push_str(t);
                     }
                 }
             }
-        }
     }
     if text.is_empty() { None } else { Some(text) }
 }
@@ -925,15 +920,13 @@ fn parse_sse_response_text(sse_body: &str) -> Option<String> {
             Some(d) => d,
             None => continue,
         };
-        if let Ok(evt) = serde_json::from_str::<serde_json::Value>(data) {
-            if evt.get("type").and_then(|t| t.as_str()) == Some("response.completed") {
-                if let Some(text) = extract_responses_api_text(
+        if let Ok(evt) = serde_json::from_str::<serde_json::Value>(data)
+            && evt.get("type").and_then(|t| t.as_str()) == Some("response.completed")
+                && let Some(text) = extract_responses_api_text(
                     evt.get("response").unwrap_or(&serde_json::Value::Null)
                 ) {
                     return Some(text);
                 }
-            }
-        }
     }
 
     // Second pass: reassemble from delta events (if response.completed was truncated)
@@ -943,13 +936,11 @@ fn parse_sse_response_text(sse_body: &str) -> Option<String> {
             Some(d) => d,
             None => continue,
         };
-        if let Ok(evt) = serde_json::from_str::<serde_json::Value>(data) {
-            if evt.get("type").and_then(|t| t.as_str()) == Some("response.output_text.delta") {
-                if let Some(delta) = evt.get("delta").and_then(|d| d.as_str()) {
+        if let Ok(evt) = serde_json::from_str::<serde_json::Value>(data)
+            && evt.get("type").and_then(|t| t.as_str()) == Some("response.output_text.delta")
+                && let Some(delta) = evt.get("delta").and_then(|d| d.as_str()) {
                     text.push_str(delta);
                 }
-            }
-        }
     }
 
     if text.is_empty() { None } else { Some(text) }

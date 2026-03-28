@@ -239,13 +239,12 @@ impl BarrierHook for BarrierHookImpl {
             // Layer 3a: Check if the HTTP request path matches a protected file
             let path = std::path::Path::new(&req_info.path);
 
-            if let Ok(mgr) = self.protected_files.lock() {
-                if mgr.is_critical(path) {
+            if let Ok(mgr) = self.protected_files.lock()
+                && mgr.is_critical(path) {
                     let reason = format!("request targets critical protected path: {}", req_info.path);
                     self.record_and_alert(&req_info.method, &req_info.path, &reason, req_info.timestamp_ms);
                     return BarrierDecision::Block(reason);
                 }
-            }
 
             // Layer 3b: Scan request body for references to protected filenames.
             // Catches prompts like "write to SOUL.md" or "modify AGENTS.md".

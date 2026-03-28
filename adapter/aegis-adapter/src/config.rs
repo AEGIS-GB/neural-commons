@@ -91,17 +91,14 @@ fn default_trust_level() -> String { "unknown".to_string() }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum AdapterMode {
+    #[default]
     ObserveOnly,
     Enforce,
     PassThrough,
 }
 
-impl Default for AdapterMode {
-    fn default() -> Self {
-        AdapterMode::ObserveOnly
-    }
-}
 
 impl From<AdapterMode> for Mode {
     fn from(m: AdapterMode) -> Self {
@@ -293,8 +290,8 @@ impl AdapterConfig {
 
         // Resolve relative data_dir against the config file's parent directory.
         // This ensures CLI and server use the same absolute path regardless of cwd.
-        if config.data_dir.is_relative() {
-            if let Some(config_dir) = path.parent() {
+        if config.data_dir.is_relative()
+            && let Some(config_dir) = path.parent() {
                 let resolved = config_dir.join(&config.data_dir);
                 if let Ok(abs) = resolved.canonicalize() {
                     config.data_dir = abs;
@@ -302,7 +299,6 @@ impl AdapterConfig {
                     config.data_dir = abs;
                 }
             }
-        }
 
         Ok(config)
     }

@@ -299,7 +299,7 @@ mod claim_tests {
         assert!(json.get("confabulation_score_bp").is_none());
         assert!(json.get("temporal_coherence_flag").is_none());
         assert!(json.get("distinct_warden_count").is_none());
-        assert!(json.get("end_ms").is_none() || true); // end_ms is inside temporal_scope
+        // end_ms is inside temporal_scope, not at top level // end_ms is inside temporal_scope
         let scope = json.get("temporal_scope").unwrap();
         assert!(scope.get("end_ms").is_none(), "None end_ms should be omitted");
     }

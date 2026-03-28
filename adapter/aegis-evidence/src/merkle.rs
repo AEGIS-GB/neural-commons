@@ -132,7 +132,7 @@ mod tests {
     #[test]
     fn test_merkle_single_hash() {
         let hash = hex::encode(aegis_crypto::sha256::hash(b"hello"));
-        let root = compute_merkle_root(&[hash.clone()]);
+        let root = compute_merkle_root(std::slice::from_ref(&hash));
         assert_eq!(root, hash);
     }
 

@@ -241,14 +241,12 @@ fn derive_intent(dims: &ThreatDimensions, annotations: &[EnrichedAnnotation]) ->
     let mut best_dim = candidates[0]; // fallback to priority order
     let mut best_sev = 0u32;
     for ann in annotations {
-        if ann.severity >= best_sev {
-            if let Some(dim) = pattern_dimension(&ann.pattern) {
-                if candidates.contains(&dim) && ann.severity > best_sev {
+        if ann.severity >= best_sev
+            && let Some(dim) = pattern_dimension(&ann.pattern)
+                && candidates.contains(&dim) && ann.severity > best_sev {
                     best_dim = dim;
                     best_sev = ann.severity;
                 }
-            }
-        }
     }
 
     dimension_to_intent(best_dim)

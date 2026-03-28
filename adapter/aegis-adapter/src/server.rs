@@ -566,8 +566,8 @@ pub async fn start(
 
                         // If trusted channel and not reverted, update the manifest
                         // to accept the new file state as legitimate.
-                        if is_trusted_channel && !reverted {
-                            if let Ok(content) = std::fs::read(watcher_workspace.join(relative)) {
+                        if is_trusted_channel && !reverted
+                            && let Ok(content) = std::fs::read(watcher_workspace.join(relative)) {
                                 let new_hash = hex::encode(aegis_crypto::hash(&content));
                                 if let Ok(mut m) = watcher_manifest.lock() {
                                     m.update_file(
@@ -585,7 +585,6 @@ pub async fn start(
                                     "barrier: accepted change from trusted channel, manifest updated"
                                 );
                             }
-                        }
 
                         let outcome = if reverted {
                             format!("critical_file_reverted trust={trust_label}")

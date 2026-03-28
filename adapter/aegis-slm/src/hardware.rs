@@ -217,12 +217,11 @@ fn detect_gpus(warnings: &mut Vec<String>) -> Vec<GpuInfo> {
                         gpu.vram_detected = true;
                     }
                 }
-            } else if gpu.vendor == "amd" {
-                if let Some(enriched) = detect_amd() {
+            } else if gpu.vendor == "amd"
+                && let Some(enriched) = detect_amd() {
                     gpu.name = enriched.name;
                     // sysfs vram is authoritative for AMD, don't override
                 }
-            }
         }
 
         // Warn if GPU found but VRAM unknown (driver not loaded)
@@ -242,18 +241,16 @@ fn detect_gpus(warnings: &mut Vec<String>) -> Vec<GpuInfo> {
     }
 
     // macOS: use system_profiler
-    if std::env::consts::OS == "macos" {
-        if let Some(gpu) = detect_apple_gpu() {
+    if std::env::consts::OS == "macos"
+        && let Some(gpu) = detect_apple_gpu() {
             gpus.push(gpu);
         }
-    }
 
     // Windows: WMIC / PowerShell
-    if std::env::consts::OS == "windows" {
-        if let Some(gpu) = detect_gpu_windows(warnings) {
+    if std::env::consts::OS == "windows"
+        && let Some(gpu) = detect_gpu_windows(warnings) {
             gpus.push(gpu);
         }
-    }
 
     gpus
 }
@@ -388,10 +385,10 @@ fn detect_amd() -> Option<GpuInfo> {
     let mut sku = String::new();
     for line in name_text.lines() {
         if line.contains("Card vendor:") {
-            vendor_str = line.split(':').last().unwrap_or("").trim().to_string();
+            vendor_str = line.split(':').next_back().unwrap_or("").trim().to_string();
         }
         if line.contains("Card SKU:") {
-            sku = line.split(':').last().unwrap_or("").trim().to_string();
+            sku = line.split(':').next_back().unwrap_or("").trim().to_string();
         }
     }
     let name = if !sku.is_empty() && !vendor_str.is_empty() {
@@ -474,8 +471,8 @@ fn detect_gpu_windows(warnings: &mut Vec<String>) -> Option<GpuInfo> {
         .output()
         .ok();
 
-    if let Some(ref o) = output {
-        if o.status.success() {
+    if let Some(ref o) = output
+        && o.status.success() {
             let text = String::from_utf8_lossy(&o.stdout);
             for line in text.lines().skip(1) {
                 let parts: Vec<&str> = line.split(',').collect();
@@ -497,7 +494,6 @@ fn detect_gpu_windows(warnings: &mut Vec<String>) -> Option<GpuInfo> {
                 }
             }
         }
-    }
 
     // Fallback: PowerShell
     let ps_output = Command::new("powershell")
@@ -505,12 +501,12 @@ fn detect_gpu_windows(warnings: &mut Vec<String>) -> Option<GpuInfo> {
         .output()
         .ok();
 
-    if let Some(ref o) = ps_output {
-        if o.status.success() {
+    if let Some(ref o) = ps_output
+        && o.status.success() {
             let text = String::from_utf8_lossy(&o.stdout);
             if let Ok(json) = serde_json::from_str::<serde_json::Value>(&text) {
                 let entries = if json.is_array() { json.as_array().cloned().unwrap_or_default() } else { vec![json] };
-                for entry in entries {
+                if let Some(entry) = entries.into_iter().next() {
                     let name = entry.get("Name").and_then(|v| v.as_str()).unwrap_or("GPU").to_string();
                     let vram_bytes = entry.get("AdapterRAM").and_then(|v| v.as_u64()).unwrap_or(0);
                     let vram_mb = vram_bytes / (1024 * 1024);
@@ -526,7 +522,6 @@ fn detect_gpu_windows(warnings: &mut Vec<String>) -> Option<GpuInfo> {
                 }
             }
         }
-    }
 
     warnings.push("Could not detect GPU on Windows (WMIC and PowerShell both failed).".to_string());
     None

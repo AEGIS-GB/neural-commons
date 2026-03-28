@@ -181,7 +181,6 @@ fn channel_matches(channel: &str, pattern: &str) -> bool {
 
 fn base64_decode(input: &str) -> Result<String, ()> {
     // Simple base64 decode (standard alphabet)
-    use std::io::Read;
     let decoded = base64_decode_bytes(input)?;
     String::from_utf8(decoded).map_err(|_| ())
 }

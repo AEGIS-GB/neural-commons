@@ -42,6 +42,7 @@ pub struct HashRegistryManager {
     pub registry: HashRegistry,
 }
 
+#[allow(clippy::new_without_default)]
 impl HashRegistryManager {
     // ───────────────────────────────────────────────────────────────
     // Construction

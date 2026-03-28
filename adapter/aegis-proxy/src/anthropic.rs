@@ -188,11 +188,10 @@ pub fn detect_provider(headers: &HashMap<String, String>) -> DetectedProvider {
         return DetectedProvider::Anthropic;
     }
 
-    if let Some(auth) = headers.get("authorization") {
-        if auth.starts_with("Bearer sk-") {
+    if let Some(auth) = headers.get("authorization")
+        && auth.starts_with("Bearer sk-") {
             return DetectedProvider::OpenAI;
         }
-    }
 
     DetectedProvider::Unknown
 }

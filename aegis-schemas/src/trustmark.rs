@@ -59,7 +59,7 @@ pub enum Tier {
 
 /// Trust level for a channel/user sending requests through the proxy.
 /// Determines holster profile and SSRF policy.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum TrustLevel {
     /// Bot owner / admin — full access, SSRF allowed, permissive holster
@@ -71,13 +71,8 @@ pub enum TrustLevel {
     /// Explicitly restricted
     Restricted,
     /// No channel cert or unverified — backward compatible default
+    #[default]
     Unknown,
-}
-
-impl Default for TrustLevel {
-    fn default() -> Self {
-        TrustLevel::Unknown
-    }
 }
 
 /// Channel certificate — signed claim from the agent framework (e.g. OpenClaw)

@@ -110,7 +110,6 @@ impl OllamaEngine {
         let model_found = tags.models.iter().any(|m| {
             m.name == self.model
                 || m.name.starts_with(&format!("{}:", self.model))
-                || self.model.contains(':') && m.name == self.model
         });
 
         if model_found {

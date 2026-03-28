@@ -233,7 +233,7 @@ pub fn scan_text_filtered(content: &str, allowlist: &[&str]) -> ScanResult {
 
             // Skip only explicitly allowlisted tokens (warden-configured).
             // No pattern guessing — that's a bypass vector.
-            if allowlist.iter().any(|safe| secret_text == *safe) {
+            if allowlist.contains(&secret_text) {
                 continue;
             }
 
@@ -298,7 +298,7 @@ pub fn scan_directory(
                 let ext_matches = path
                     .extension()
                     .and_then(|e| e.to_str())
-                    .is_some_and(|ext| extensions.iter().any(|&wanted| wanted == ext));
+                    .is_some_and(|ext| extensions.contains(&ext));
                 if !ext_matches {
                     continue;
                 }

@@ -21,11 +21,10 @@ pub fn gather_local_signals(data_dir: &Path) -> LocalSignals {
 
     // ── Evidence chain (SQLite) ──
     let db_path = data_dir.join("evidence.db");
-    if db_path.exists() {
-        if let Ok(store) = aegis_evidence::EvidenceStore::open(&db_path) {
+    if db_path.exists()
+        && let Ok(store) = aegis_evidence::EvidenceStore::open(&db_path) {
             gather_from_evidence(&store, &mut signals);
         }
-    }
 
     // ── Filesystem: identity key, manifest, protected files ──
     gather_from_filesystem(data_dir, &mut signals);
@@ -143,14 +142,13 @@ pub fn get_identity_age_hours(data_dir: &Path) -> f64 {
         data_dir.join("identity.key"),
     ];
     for path in &candidates {
-        if let Ok(meta) = std::fs::metadata(path) {
-            if let Ok(created) = meta.created().or_else(|_| meta.modified()) {
+        if let Ok(meta) = std::fs::metadata(path)
+            && let Ok(created) = meta.created().or_else(|_| meta.modified()) {
                 let age = std::time::SystemTime::now()
                     .duration_since(created)
                     .unwrap_or_default();
                 return age.as_secs_f64() / 3600.0;
             }
-        }
     }
     0.0
 }
