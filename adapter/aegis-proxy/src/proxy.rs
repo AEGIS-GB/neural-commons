@@ -342,16 +342,22 @@ fn extract_user_content_from_json(body: &str, max_chars: usize) -> String {
     if let Ok(json) = serde_json::from_str::<serde_json::Value>(body) {
         let mut parts = Vec::new();
 
-        // Try "messages" array (OpenAI chat completions format)
+        // Try "messages" array (OpenAI/Anthropic chat format)
         if let Some(messages) = json.get("messages").and_then(|m| m.as_array()) {
             for msg in messages {
                 let role = msg.get("role").and_then(|r| r.as_str()).unwrap_or("");
-                // Skip assistant (self-generated) and system (agent config, not attack surface)
                 if role == "assistant" || role == "system" {
                     continue;
                 }
+                // Content can be a plain string or array of content blocks
                 if let Some(content) = msg.get("content").and_then(|c| c.as_str()) {
                     parts.push(format!("[{role}] {content}"));
+                } else if let Some(blocks) = msg.get("content").and_then(|c| c.as_array()) {
+                    for block in blocks {
+                        if let Some(text) = block.get("text").and_then(|t| t.as_str()) {
+                            parts.push(format!("[{role}] {text}"));
+                        }
+                    }
                 }
             }
         }
