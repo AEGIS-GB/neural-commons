@@ -1,41 +1,20 @@
 //! `aegis trustmark` — compute and display TRUSTMARK score from local data.
 //!
-//! Reads directly from evidence.db and filesystem. Does NOT require Aegis to be running.
+//! Uses config.data_dir as the single source of truth for the data directory.
+//! Does NOT require Aegis to be running.
+
+use std::path::Path;
 
 use aegis_trustmark::gather;
 use aegis_trustmark::scoring::TrustmarkScore;
 use aegis_trustmark::tiers::resolve_tier;
 
-/// Resolve the Aegis data directory.
-/// Prefers the largest evidence.db (most likely the active one).
-fn resolve_data_dir() -> std::path::PathBuf {
-    let candidates = [
-        std::path::PathBuf::from(".aegis"),
-        dirs::home_dir().map(|h| h.join(".aegis")).unwrap_or_default(),
-        dirs::home_dir().map(|h| h.join("aegis/neural-commons/.aegis")).unwrap_or_default(),
-    ];
-
-    // Pick the candidate with the largest evidence.db (most receipts = active instance)
-    let mut best: Option<(std::path::PathBuf, u64)> = None;
-    for c in &candidates {
-        let db = c.join("evidence.db");
-        if let Ok(meta) = std::fs::metadata(&db) {
-            let size = meta.len();
-            if best.as_ref().map_or(true, |(_, s)| size > *s) {
-                best = Some((c.clone(), size));
-            }
-        }
-    }
-
-    best.map(|(p, _)| p).unwrap_or_else(|| candidates[0].clone())
-}
-
 /// Run the trustmark command (current score).
-pub fn run(json_output: bool) {
-    let data_dir = resolve_data_dir();
-    let signals = gather::gather_local_signals(&data_dir);
+/// `data_dir` comes from config.toml — the same path the server uses.
+pub fn run(data_dir: &Path, json_output: bool) {
+    let signals = gather::gather_local_signals(data_dir);
     let score = TrustmarkScore::compute(&signals);
-    let identity_age = gather::get_identity_age_hours(&data_dir);
+    let identity_age = gather::get_identity_age_hours(data_dir);
     let vault_active = signals.vault_scans_total > 0;
     let chain_intact = signals.chain_verified.unwrap_or(false);
     let tier = resolve_tier(score.total, identity_age, vault_active, chain_intact, 0);
@@ -45,6 +24,7 @@ pub fn run(json_output: bool) {
             "score": score,
             "tier": tier,
             "identity_age_hours": identity_age,
+            "data_dir": data_dir.display().to_string(),
         });
         println!("{}", serde_json::to_string_pretty(&output).unwrap());
         return;
@@ -93,19 +73,19 @@ pub fn run(json_output: bool) {
     if !tier.next_tier_requirements.is_empty() {
         println!("  Next tier: {}", tier.next_tier_requirements.join(" | "));
     }
-    println!("  Source: {} (read-only, no server required)", data_dir.display());
+    println!("  Data dir: {}", data_dir.display());
     println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
     println!();
 }
 
 /// Run the trustmark history command.
-pub fn run_history(limit: usize, json_output: bool) {
-    let data_dir = resolve_data_dir();
-    let history = aegis_trustmark::persist::load_history(&data_dir, limit);
+pub fn run_history(data_dir: &Path, limit: usize, json_output: bool) {
+    let history = aegis_trustmark::persist::load_history(data_dir, limit);
 
     if history.is_empty() {
         eprintln!("No TRUSTMARK snapshots recorded yet.");
         eprintln!("Start Aegis to begin recording (snapshots every hour).");
+        eprintln!("Data dir: {}", data_dir.display());
         return;
     }
 
@@ -127,7 +107,6 @@ pub fn run_history(limit: usize, json_output: bool) {
             let total = secs % 86400;
             let h = (total / 3600) % 24;
             let m = (total % 3600) / 60;
-            // Days ago
             let now_ms = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap_or_default()
@@ -158,5 +137,7 @@ pub fn run_history(limit: usize, json_output: bool) {
             time, score.total, p, c, v, t, r, vol);
     }
 
+    println!();
+    println!("  Data dir: {}", data_dir.display());
     println!();
 }

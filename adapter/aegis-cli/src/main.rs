@@ -498,10 +498,10 @@ fn main() {
                 eprintln!("  chain: not initialized (no evidence.db)");
             }
 
-            // TRUSTMARK score (from local data — no server needed)
+            // TRUSTMARK score (from config.data_dir — same path the server uses)
             let signals = aegis_trustmark::gather::gather_local_signals(&config.data_dir);
             let score = aegis_trustmark::scoring::TrustmarkScore::compute(&signals);
-            eprintln!("  trustmark: {:.1}%", score.total * 100.0);
+            eprintln!("  trustmark: {:.3}", score.total);
         }
 
         Some(Commands::Scan { path }) => {
@@ -974,9 +974,9 @@ fn main() {
 
         Some(Commands::Trustmark { action }) => {
             match action {
-                Some(TrustmarkCommands::Show { json }) => trustmark_cmd::run(json),
-                Some(TrustmarkCommands::History { limit, json }) => trustmark_cmd::run_history(limit, json),
-                None => trustmark_cmd::run(false),
+                Some(TrustmarkCommands::Show { json }) => trustmark_cmd::run(&config.data_dir, json),
+                Some(TrustmarkCommands::History { limit, json }) => trustmark_cmd::run_history(&config.data_dir, limit, json),
+                None => trustmark_cmd::run(&config.data_dir, false),
             }
         }
 

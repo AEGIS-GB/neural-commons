@@ -271,8 +271,23 @@ impl AdapterConfig {
     pub fn from_file(path: &Path) -> Result<Self, String> {
         let content = std::fs::read_to_string(path)
             .map_err(|e| format!("failed to read config file {}: {e}", path.display()))?;
-        toml::from_str(&content)
-            .map_err(|e| format!("failed to parse config file: {e}"))
+        let mut config: Self = toml::from_str(&content)
+            .map_err(|e| format!("failed to parse config file: {e}"))?;
+
+        // Resolve relative data_dir against the config file's parent directory.
+        // This ensures CLI and server use the same absolute path regardless of cwd.
+        if config.data_dir.is_relative() {
+            if let Some(config_dir) = path.parent() {
+                let resolved = config_dir.join(&config.data_dir);
+                if let Ok(abs) = resolved.canonicalize() {
+                    config.data_dir = abs;
+                } else if let Ok(abs) = std::env::current_dir().map(|cwd| cwd.join(&config.data_dir)) {
+                    config.data_dir = abs;
+                }
+            }
+        }
+
+        Ok(config)
     }
 
     /// Load from default location (.aegis/config.toml) or return defaults.
