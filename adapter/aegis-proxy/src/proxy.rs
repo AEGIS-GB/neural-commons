@@ -458,7 +458,8 @@ async fn forward_request(
                 };
 
                 // Phase 1: Fast layers (heuristic + classifier) — blocking, <10ms
-                if let Some((decision, verdict)) = slm.screen_fast(&screen_content).await {
+                let (fast_result, classifier_advisory) = slm.screen_fast(&screen_content).await;
+                if let Some((decision, verdict)) = fast_result {
                     slm_verdict = verdict;
                     stamp_trust(&mut slm_verdict);
                     match decision {
@@ -500,7 +501,7 @@ async fn forward_request(
                     } else {
                         // Untrusted: run deep SLM sequentially BEFORE forwarding
                         info!(path = %path, "SLM deep analysis running sequentially (untrusted channel)");
-                        let (decision, verdict) = slm.screen_deep(&screen_content).await;
+                        let (decision, verdict) = slm.screen_deep(&screen_content, classifier_advisory.clone()).await;
                         slm_verdict = verdict;
                         stamp_trust(&mut slm_verdict);
                         match decision {
@@ -841,7 +842,7 @@ async fn forward_request(
                 let trust_channel = req_info.channel_trust.channel.clone();
                 let trust_level = req_info.channel_trust.trust_level;
                 tokio::spawn(async move {
-                    let (_decision, _verdict) = slm_clone.screen_deep(&content).await;
+                    let (_decision, _verdict) = slm_clone.screen_deep(&content, None).await;
                     info!(
                         channel = ?trust_channel,
                         trust = ?trust_level,
@@ -923,7 +924,7 @@ async fn forward_request(
             let trust_level = req_info.channel_trust.trust_level;
             let updater = state.traffic_slm_updater.clone();
             tokio::spawn(async move {
-                let (_decision, verdict) = slm_clone.screen_deep(&content).await;
+                let (_decision, verdict) = slm_clone.screen_deep(&content, None).await;
                 info!(
                     channel = ?trust_channel,
                     trust = ?trust_level,

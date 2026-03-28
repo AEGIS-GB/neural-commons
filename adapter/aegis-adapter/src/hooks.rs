@@ -23,8 +23,8 @@ use aegis_schemas::ReceiptType;
 use aegis_vault::scanner;
 use tracing::{debug, info};
 
-/// Global classifier advisory — set by screen_fast when advisory, consumed by build_verdict.
-static CLASSIFIER_ADVISORY: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+// Classifier advisory is threaded through function parameters, not globals.
+// The old global Mutex caused cross-request contamination under concurrent load.
 
 // ---------------------------------------------------------------------------
 // Alert threshold
@@ -313,6 +313,7 @@ impl SlmHookImpl {
     fn build_verdict(
         result: &aegis_slm::loopback::ScreeningResult,
         screened_text: &str,
+        classifier_advisory: Option<String>,
     ) -> SlmVerdict {
         // Truncate screened text for storage (max 500 chars)
         let truncated_text = if screened_text.len() > 500 {
@@ -415,10 +416,8 @@ impl SlmHookImpl {
             v.channel_trust_level = Some(format!("{:?}", trust.trust_level).to_lowercase());
         }
 
-        // Pick up classifier advisory if one was set during fast screening
-        if let Ok(mut advisory) = CLASSIFIER_ADVISORY.lock() {
-            v.classifier_advisory = advisory.take();
-        }
+        // Classifier advisory passed through function parameter (not a global)
+        v.classifier_advisory = classifier_advisory;
 
         v
     }
@@ -427,7 +426,11 @@ impl SlmHookImpl {
 impl SlmHookImpl {
     /// Record a screening result as an evidence receipt and push alerts.
     fn record_and_alert(&self, screening_result: &aegis_slm::loopback::ScreeningResult, content: &str) -> (SlmDecision, Option<SlmVerdict>) {
-        let verdict = Self::build_verdict(screening_result, content);
+        self.record_and_alert_with_advisory(screening_result, content, None)
+    }
+
+    fn record_and_alert_with_advisory(&self, screening_result: &aegis_slm::loopback::ScreeningResult, content: &str, classifier_advisory: Option<String>) -> (SlmDecision, Option<SlmVerdict>) {
+        let verdict = Self::build_verdict(screening_result, content, classifier_advisory);
 
         // Record SlmAnalysis receipt
         let detail = serde_json::to_value(&verdict).ok();
@@ -491,19 +494,16 @@ impl SlmHook for SlmHookImpl {
     fn screen_fast<'a>(
         &'a self,
         content: &'a str,
-    ) -> Pin<Box<dyn Future<Output = Option<(SlmDecision, Option<SlmVerdict>)>> + Send + 'a>> {
+    ) -> Pin<Box<dyn Future<Output = (Option<(SlmDecision, Option<SlmVerdict>)>, Option<String>)> + Send + 'a>> {
         Box::pin(async move {
             let config_clone = self.config.clone();
             let content_owned = content.to_string();
-            // Determine if classifier should block based on channel trust.
-            // Trusted/Full channels: classifier is advisory (don't block on false positives).
-            // Public/Unknown channels: classifier blocks (strict screening).
             let classifier_blocking = {
                 let trust = aegis_proxy::cognitive_bridge::get_registered_channel_trust();
                 match trust.as_ref().map(|t| &t.trust_level) {
                     Some(aegis_schemas::TrustLevel::Full) |
-                    Some(aegis_schemas::TrustLevel::Trusted) => false, // advisory
-                    _ => true, // blocking for public/unknown/restricted
+                    Some(aegis_schemas::TrustLevel::Trusted) => false,
+                    _ => true,
                 }
             };
             let result = tokio::task::spawn_blocking(move || {
@@ -513,22 +513,17 @@ impl SlmHook for SlmHookImpl {
 
             match result {
                 Ok((Some(screening_result), _advisory)) => {
-                    Some(self.record_and_alert(&screening_result, content))
+                    (Some(self.record_and_alert(&screening_result, content)), None)
                 }
                 Ok((None, advisory)) => {
-                    // Fast layers clean or advisory-only. Pass advisory to deep SLM path.
                     if let Some(ref adv) = advisory {
-                        tracing::info!(advisory = %adv, "classifier advisory passed to deep SLM path");
+                        tracing::info!(advisory = %adv, "classifier advisory → will pass to deep SLM");
                     }
-                    // Store advisory for the deep SLM verdict to pick up
-                    if let Some(adv) = advisory {
-                        CLASSIFIER_ADVISORY.lock().ok().map(|mut a| *a = Some(adv));
-                    }
-                    None
+                    (None, advisory)
                 }
                 Err(e) => {
                     tracing::warn!("fast screening task panicked: {e}");
-                    None
+                    (None, None)
                 }
             }
         })
@@ -537,6 +532,7 @@ impl SlmHook for SlmHookImpl {
     fn screen_deep<'a>(
         &'a self,
         content: &'a str,
+        classifier_advisory: Option<String>,
     ) -> Pin<Box<dyn Future<Output = (SlmDecision, Option<SlmVerdict>)> + Send + 'a>> {
         Box::pin(async move {
             let config_clone = self.config.clone();
@@ -553,7 +549,7 @@ impl SlmHook for SlmHookImpl {
             ).await;
 
             match result {
-                Ok(Ok(screening_result)) => self.record_and_alert(&screening_result, content),
+                Ok(Ok(screening_result)) => self.record_and_alert_with_advisory(&screening_result, content, classifier_advisory),
                 Ok(Err(e)) => {
                     tracing::warn!("deep SLM screening task panicked: {e}");
                     (SlmDecision::Admit, None)
