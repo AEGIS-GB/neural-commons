@@ -53,28 +53,56 @@ pub struct AdapterConfig {
     pub trust: TrustSection,
 }
 
-/// Channel trust configuration — maps channel patterns to trust levels.
+/// Trust configuration — channel-based access control + context observability.
+///
+/// An Aegis **channel** is the source connecting to the proxy (identified by IP).
+/// Trust is resolved from the channel (source IP), not from agent-internal context.
+///
+/// An agent framework like OpenClaw may report **context** metadata (e.g. which
+/// Telegram group or CLI session originated a request). This is observability
+/// metadata — useful for the dashboard and trace, but does not affect trust.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TrustSection {
-    /// Default trust level when no channel cert or no pattern match
+    /// Default trust level for unknown channels (default: "unknown")
     #[serde(default = "default_trust_level")]
     pub default_level: String,
 
-    /// Ed25519 public key (hex) for verifying channel certs from OpenClaw
+    /// Ed25519 public key (hex) for verifying context certs from OpenClaw.
+    /// Context certs are observability metadata (which context sent this request).
+    /// The signature ensures the context claim is authentic.
     #[serde(default)]
     pub signing_pubkey: Option<String>,
 
-    /// Channel pattern → trust level mappings
+    /// Channel → trust level mappings (access control).
+    /// A channel is identified by source IP or hostname pattern.
     #[serde(default)]
     pub channels: Vec<ChannelPattern>,
+
+    /// OpenClaw context patterns (observability metadata, not access control).
+    /// Maps context identifiers like "telegram:dm:*" for dashboard display.
+    #[serde(default)]
+    pub contexts: Vec<ContextPattern>,
 }
 
+/// Channel identity pattern for trust resolution.
+/// A channel = a source connecting to Aegis (IP, hostname).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChannelPattern {
-    /// Glob pattern (e.g. "telegram:dm:owner", "telegram:group:*")
-    pub pattern: String,
+    /// IP address, CIDR, or hostname pattern (e.g. "127.0.0.1", "192.168.*", "localhost")
+    pub identity: String,
     /// Trust level: "full", "trusted", "public", "restricted"
     pub level: String,
+}
+
+/// OpenClaw context pattern (observability metadata).
+/// Maps agent-framework-internal identifiers to labels for the dashboard.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ContextPattern {
+    /// Glob pattern (e.g. "telegram:dm:owner", "telegram:group:*", "openclaw:web:*")
+    pub pattern: String,
+    /// Label for this context (e.g. "owner-dm", "public-group")
+    #[serde(default)]
+    pub label: Option<String>,
 }
 
 impl Default for TrustSection {
@@ -83,6 +111,7 @@ impl Default for TrustSection {
             default_level: default_trust_level(),
             signing_pubkey: None,
             channels: Vec::new(),
+            contexts: Vec::new(),
         }
     }
 }

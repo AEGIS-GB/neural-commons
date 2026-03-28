@@ -840,7 +840,9 @@ pub async fn start(config: AdapterConfig, mode_override: Option<Mode>) -> Result
                   slm_verdict: Option<&aegis_proxy::middleware::SlmVerdict>,
                   channel: Option<&str>,
                   trust_level: Option<&str>,
-                  model: Option<&str>| {
+                  model: Option<&str>,
+                  context: Option<&str>,
+                  slm_detail: Option<serde_json::Value>| {
                 let (slm_dur, slm_action, slm_score) = match slm_verdict {
                     Some(v) => (
                         Some(v.screening_ms),
@@ -863,6 +865,8 @@ pub async fn start(config: AdapterConfig, mode_override: Option<Mode>) -> Result
                     channel,
                     trust_level,
                     model,
+                    context,
+                    slm_detail,
                 );
                 ts.last_id()
             },
@@ -872,8 +876,10 @@ pub async fn start(config: AdapterConfig, mode_override: Option<Mode>) -> Result
     let traffic_slm_updater: Arc<aegis_proxy::proxy::TrafficSlmUpdater> = {
         let ts = traffic_store.clone();
         Arc::new(
-            move |entry_id: u64, duration_ms: u64, verdict: &str, threat_score: u32| {
-                ts.update_slm(entry_id, duration_ms, verdict, threat_score);
+            move |entry_id: u64, verdict: &aegis_proxy::middleware::SlmVerdict| {
+                if let Ok(json) = serde_json::to_value(verdict) {
+                    ts.update_slm(entry_id, &json);
+                }
             },
         )
     };
@@ -882,19 +888,38 @@ pub async fn start(config: AdapterConfig, mode_override: Option<Mode>) -> Result
     let trust_config = {
         use aegis_proxy::channel_trust::{TrustConfig, parse_trust_level};
         let tc = &config.trust;
+
+        // Channel trust (access control — by source IP)
         let channels: Vec<(String, aegis_schemas::TrustLevel)> = tc
             .channels
             .iter()
-            .map(|cp| (cp.pattern.clone(), parse_trust_level(&cp.level)))
+            .map(|cp| (cp.identity.clone(), parse_trust_level(&cp.level)))
             .collect();
+
+        // Context patterns (OpenClaw metadata — observability only)
+        let contexts: Vec<(String, aegis_schemas::TrustLevel)> = tc
+            .contexts
+            .iter()
+            .map(|cp| (cp.pattern.clone(), parse_trust_level(cp.label.as_deref().unwrap_or("unknown"))))
+            .collect();
+
         let signing_pubkey = tc
             .signing_pubkey
             .as_ref()
             .and_then(|hex_str| hex::decode(hex_str).ok());
+
+        if channels.is_empty() {
+            tracing::info!(
+                "No [[trust.channels]] configured — all sources default to '{}'",
+                tc.default_level
+            );
+        }
+
         TrustConfig {
             default_level: parse_trust_level(&tc.default_level),
             signing_pubkey,
             channels,
+            contexts,
         }
     };
 

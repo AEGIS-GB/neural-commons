@@ -387,6 +387,25 @@ enum TrustCommands {
     },
     /// Show the signing public key (hex) for configuring [trust] signing_pubkey
     Pubkey,
+    /// Add a channel trust pattern to config.toml
+    ///
+    /// Examples:
+    ///   aegis trust add "telegram:dm:7965174951" trusted
+    ///   aegis trust add "telegram:dm:*" trusted
+    ///   aegis trust add "moltbook:*" public
+    Add {
+        /// Channel pattern (e.g. "telegram:dm:7965174951", "openclaw:web:*")
+        pattern: String,
+        /// Trust level: full, trusted, public, restricted, unknown
+        level: String,
+    },
+    /// Remove a channel trust pattern from config.toml
+    Remove {
+        /// Channel pattern to remove
+        pattern: String,
+    },
+    /// List all configured channel trust patterns
+    List,
 }
 
 fn main() {
@@ -419,17 +438,21 @@ fn main() {
         Some(Mode::ObserveOnly) | None => "observe-only",
     };
 
-    // Load configuration — resolve relative paths against $HOME
+    // Load configuration — always prefer $HOME/.aegis/config/config.toml
+    // so CLI and systemd service use the same config file.
+    // Only use cwd-relative if --config was explicitly specified.
     let config_path = {
         let p = Path::new(&cli.config);
-        if p.is_absolute() || p.exists() {
+        if p.is_absolute() {
             p.to_path_buf()
         } else if let Some(home) = dirs::home_dir() {
-            let resolved = home.join(p);
-            if resolved.exists() {
-                resolved
-            } else {
+            let home_config = home.join(p);
+            if home_config.exists() {
+                home_config
+            } else if p.exists() {
                 p.to_path_buf()
+            } else {
+                home_config // prefer home even if it doesn't exist yet
             }
         } else {
             p.to_path_buf()
@@ -966,6 +989,15 @@ fn main() {
             TrustCommands::Pubkey => {
                 trust_pubkey(&config);
             }
+            TrustCommands::Add { pattern, level } => {
+                trust_add_pattern(&config_path, &pattern, &level);
+            }
+            TrustCommands::Remove { pattern } => {
+                trust_remove_pattern(&config_path, &pattern);
+            }
+            TrustCommands::List => {
+                trust_list_patterns(&config);
+            }
         },
 
         Some(Commands::Start) => {
@@ -1425,6 +1457,135 @@ fn start_aegis_background() {
         Err(e) => {
             eprintln!("error: failed to start aegis: {e}");
             std::process::exit(1);
+        }
+    }
+}
+
+/// Add a channel trust pattern to config.toml.
+fn trust_add_pattern(config_path: &std::path::Path, pattern: &str, level: &str) {
+    let valid_levels = ["full", "trusted", "public", "restricted", "unknown"];
+    if !valid_levels.contains(&level) {
+        eprintln!("error: invalid trust level '{level}'");
+        eprintln!("  valid levels: {}", valid_levels.join(", "));
+        std::process::exit(1);
+    }
+
+    let mut content = std::fs::read_to_string(config_path).unwrap_or_else(|e| {
+        eprintln!("error: failed to read config: {e}");
+        std::process::exit(1);
+    });
+
+    // Check if identity already exists
+    if content.contains(&format!("identity = \"{pattern}\"")) {
+        eprintln!(
+            "  Channel '{pattern}' already exists. Use 'aegis trust remove' first to change it."
+        );
+        return;
+    }
+
+    // Append new trust channel entry
+    content.push_str(&format!(
+        "\n[[trust.channels]]\nidentity = \"{pattern}\"\nlevel = \"{level}\"\n"
+    ));
+
+    std::fs::write(config_path, &content).unwrap_or_else(|e| {
+        eprintln!("error: failed to write config: {e}");
+        std::process::exit(1);
+    });
+
+    eprintln!("  \x1b[32m✓\x1b[0m Added channel: {pattern} → {level}");
+    eprintln!("  Restart Aegis to apply: aegis restart");
+}
+
+/// Remove a channel trust pattern from config.toml.
+fn trust_remove_pattern(config_path: &std::path::Path, pattern: &str) {
+    let content = std::fs::read_to_string(config_path).unwrap_or_else(|e| {
+        eprintln!("error: failed to read config: {e}");
+        std::process::exit(1);
+    });
+
+    // Find and remove the [[trust.channels]] block with this identity
+    let mut lines: Vec<&str> = content.lines().collect();
+    let mut i = 0;
+    let mut found = false;
+    while i < lines.len() {
+        if lines[i].trim() == "[[trust.channels]]" {
+            let block_start = i;
+            let mut block_end = i + 1;
+            let mut has_pattern = false;
+            while block_end < lines.len()
+                && !lines[block_end].starts_with("[[")
+                && !lines[block_end].starts_with("[")
+            {
+                if lines[block_end].contains(&format!("identity = \"{pattern}\"")) {
+                    has_pattern = true;
+                }
+                block_end += 1;
+            }
+            if has_pattern {
+                lines.drain(block_start..block_end);
+                if block_start < lines.len() && lines[block_start].trim().is_empty() {
+                    lines.remove(block_start);
+                }
+                found = true;
+                break;
+            }
+        }
+        i += 1;
+    }
+
+    if !found {
+        eprintln!("  Channel '{pattern}' not found in config.");
+        return;
+    }
+
+    let new_content = lines.join("\n") + "\n";
+    std::fs::write(config_path, &new_content).unwrap_or_else(|e| {
+        eprintln!("error: failed to write config: {e}");
+        std::process::exit(1);
+    });
+
+    eprintln!("  \x1b[32m✓\x1b[0m Removed channel: {pattern}");
+    eprintln!("  Restart Aegis to apply: aegis restart");
+}
+
+/// List all configured channel trust patterns.
+fn trust_list_patterns(config: &AdapterConfig) {
+    let channels = &config.trust.channels;
+    let contexts = &config.trust.contexts;
+
+    if channels.is_empty() && contexts.is_empty() {
+        eprintln!("  No trust channels configured.");
+        eprintln!("  Add one: aegis trust add localhost trusted");
+        return;
+    }
+
+    if !channels.is_empty() {
+        eprintln!("\n  \x1b[1mChannels (access control)\x1b[0m");
+        let header = format!("  {:<40} {}", "Identity", "Trust Level");
+        eprintln!("{header}");
+        let sep = format!("  {}", "─".repeat(55));
+        eprintln!("{sep}");
+        for ch in channels {
+            let color = match ch.level.as_str() {
+                "full" => "\x1b[32m",
+                "trusted" => "\x1b[36m",
+                "public" => "\x1b[33m",
+                "restricted" => "\x1b[31m",
+                _ => "\x1b[90m",
+            };
+            eprintln!("  {:<40} {color}{}\x1b[0m", ch.identity, ch.level);
+        }
+    }
+
+    if !contexts.is_empty() {
+        eprintln!("\n  \x1b[1mContexts (OpenClaw observability)\x1b[0m");
+        let header = format!("  {:<40} {}", "Pattern", "Label");
+        eprintln!("{header}");
+        let sep = format!("  {}", "─".repeat(55));
+        eprintln!("{sep}");
+        for ctx in contexts {
+            eprintln!("  {:<40} {}", ctx.pattern, ctx.label.as_deref().unwrap_or("—"));
         }
     }
 }

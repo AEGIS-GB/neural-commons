@@ -38,15 +38,21 @@ pub struct TrafficEntry {
     pub slm_verdict: Option<String>,
     /// SLM threat score in basis points 0–10000 (None if not run).
     pub slm_threat_score: Option<u32>,
-    /// Channel identifier (e.g. "telegram:direct:123", "openclaw:web:session1").
+    /// Channel = source IP (e.g. "127.0.0.1", "85.1.2.3").
     #[serde(skip_serializing_if = "Option::is_none")]
     pub channel: Option<String>,
     /// Channel trust level (e.g. "full", "trusted", "unknown").
     #[serde(skip_serializing_if = "Option::is_none")]
     pub trust_level: Option<String>,
+    /// OpenClaw context (e.g. "telegram:dm:12345", "openclaw:web:session1").
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub context: Option<String>,
     /// LLM model used (e.g. "gpt-4o-mini").
     #[serde(skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
+    /// Full SLM verdict with annotations, explanation, intent (for trace detail view).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub slm_detail: Option<serde_json::Value>,
 }
 
 const MAX_BODY_CAPTURE: usize = 256 * 1024; // 256KB per body — large enough for streaming responses with tool schemas
@@ -83,6 +89,8 @@ impl TrafficStore {
         channel: Option<&str>,
         trust_level: Option<&str>,
         model: Option<&str>,
+        context: Option<&str>,
+        slm_detail: Option<serde_json::Value>,
     ) {
         let req_str =
             String::from_utf8_lossy(&req_body[..req_body.len().min(MAX_BODY_CAPTURE)]).into_owned();
@@ -117,6 +125,8 @@ impl TrafficStore {
             channel: channel.map(|s| s.to_string()),
             trust_level: trust_level.map(|s| s.to_string()),
             model: model.map(|s| s.to_string()),
+            context: context.map(|s| s.to_string()),
+            slm_detail,
         };
 
         let mut entries = self.entries.write().unwrap();
@@ -142,13 +152,15 @@ impl TrafficStore {
     }
 
     /// Update the SLM verdict on an existing entry (used for deferred/async SLM on trusted channels).
-    pub fn update_slm(&self, id: u64, duration_ms: u64, verdict: &str, threat_score: u32) {
+    /// Takes the full verdict JSON — all fields updated atomically, no partial writes.
+    pub fn update_slm(&self, id: u64, verdict: &serde_json::Value) {
         if let Ok(mut entries) = self.entries.write()
             && let Some(entry) = entries.iter_mut().find(|e| e.id == id)
         {
-            entry.slm_duration_ms = Some(duration_ms);
-            entry.slm_verdict = Some(verdict.to_string());
-            entry.slm_threat_score = Some(threat_score);
+            entry.slm_duration_ms = verdict.get("screening_ms").and_then(|v| v.as_u64());
+            entry.slm_verdict = verdict.get("action").and_then(|v| v.as_str()).map(|s| s.to_string());
+            entry.slm_threat_score = verdict.get("threat_score").and_then(|v| v.as_u64()).map(|v| v as u32);
+            entry.slm_detail = Some(verdict.clone());
         }
     }
 

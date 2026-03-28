@@ -29,7 +29,7 @@ jobs:
       - name: cargo check (all targets)
         run: cargo check --workspace --all-targets
       - name: cargo clippy
-        run: cargo clippy --workspace --all-targets -- -D warnings -A unexpected_cfgs -A clippy::too_many_arguments -A clippy::type_complexity -A dead_code -A clippy::match_like_matches_macro -A clippy::ptr_arg -A clippy::manual_strip -A clippy::needless_range_loop -A clippy::new_without_default -A clippy::manual_contains -A unused_variables -A unused_imports -A clippy::useless_format -A clippy::overly_complex_bool_expr -A unused_mut -A clippy::blocks_in_conditions -A clippy::collapsible_if
+        run: cargo clippy --workspace --all-targets -- -D warnings -A unexpected_cfgs -A clippy::too_many_arguments -A clippy::type_complexity -A dead_code -A clippy::match_like_matches_macro -A clippy::ptr_arg -A clippy::manual_strip -A clippy::needless_range_loop -A clippy::new_without_default -A clippy::manual_contains -A unused_variables -A unused_imports -A clippy::useless_format -A clippy::overly_complex_bool_expr -A unused_mut -A clippy::blocks_in_conditions -A clippy::collapsible_if -A clippy::literal_string_with_formatting_args
       - name: cargo fmt check
         run: cargo fmt --all -- --check
 

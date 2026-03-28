@@ -31,6 +31,7 @@ struct TrafficSummary {
     channel: Option<String>,
     trust_level: Option<String>,
     model: Option<String>,
+    context: Option<String>,
 }
 
 #[derive(Deserialize, Debug)]
@@ -58,6 +59,7 @@ struct TrafficDetailEntry {
     channel: Option<String>,
     trust_level: Option<String>,
     model: Option<String>,
+    context: Option<String>,
 }
 
 #[derive(Deserialize, Debug)]
@@ -260,10 +262,10 @@ fn show_table(
     // Header
     println!();
     println!(
-        " {:<5} {:<10} {:<18} {:<9} {:<14} {:>7} {:>7} {:<8} {:>8}",
-        "#", "Time", "Channel", "Trust", "Model", "Req", "Rsp", "SLM", "Duration"
+        " {:<5} {:<10} {:<16} {:<9} {:<18} {:<14} {:<8} {:>8}",
+        "#", "Time", "Channel", "Trust", "Context", "Model", "SLM", "Duration"
     );
-    println!("{}", "━".repeat(102));
+    println!("{}", "━".repeat(106));
 
     for entry in &entries {
         let time = {
@@ -278,14 +280,23 @@ fn show_table(
         let channel = entry
             .channel
             .as_deref()
+            .unwrap_or("—")
+            .chars()
+            .take(16)
+            .collect::<String>();
+
+        let context = entry
+            .context
+            .as_deref()
             .map(|c| {
-                // Shorten "telegram:direct:123" -> "tg:123", "openclaw:web:x" -> "web:x"
                 if c.starts_with("telegram:direct:") {
                     format!("tg:{}", &c[16..])
+                } else if c.starts_with("telegram:dm:") {
+                    format!("tg:dm:{}", &c[12..])
                 } else if c.starts_with("openclaw:web:") {
                     format!("web:{}", &c[13..])
-                } else if c.starts_with("cron:") {
-                    c.to_string()
+                } else if c.starts_with("cli:local:") {
+                    format!("cli:{}", &c[10..])
                 } else {
                     c.chars().take(18).collect()
                 }
@@ -312,8 +323,8 @@ fn show_table(
         };
 
         println!(
-            " {:<5} {:<10} {:<18} {:<9} {:<14} {:>7} {:>7} {:<8} {:>8}",
-            entry.id, time, channel, trust, model, req_tok, resp_tok, slm, dur
+            " {:<5} {:<10} {:<16} {:<9} {:<18} {:<14} {:<8} {:>8}",
+            entry.id, time, channel, trust, context, model, slm, dur
         );
     }
 
@@ -360,6 +371,7 @@ fn show_detail(base: &str, id: u64, show_body: bool) {
     let streaming = if e.is_streaming { "yes" } else { "no" };
     let channel = e.channel.as_deref().unwrap_or("—");
     let trust = e.trust_level.as_deref().unwrap_or("—");
+    let context = e.context.as_deref().unwrap_or("—");
 
     let upstream = if e.status == 403 {
         "BLOCKED (never forwarded)".to_string()
@@ -375,6 +387,7 @@ fn show_detail(base: &str, id: u64, show_body: bool) {
         e.duration_ms
     );
     println!("  Channel    {:<28} Trust      {}", channel, trust);
+    println!("  Context    {}", context);
     println!("  Route      {} {} {}", e.method, e.path, upstream);
     println!(
         "  Model      {:<28} Streaming  {}",

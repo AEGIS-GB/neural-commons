@@ -19,3 +19,7 @@ upstream_url = "https://api.anthropic.com"
 
 [slm]
 enabled = false
+
+[[trust.channels]]
+pattern = "telegram:dm:7965174951"
+level = "trusted"

@@ -256,7 +256,11 @@ impl BarrierHook for BarrierHookImpl {
             }
 
             // Layer 3b: Scan request body for references to protected filenames.
-            // Catches prompts like "write to SOUL.md" or "modify AGENTS.md".
+            // This is a WARN, not a BLOCK — the agent's own system prompt (SOUL.md)
+            // mentions protected filenames by name, which is normal. Blocking on
+            // mere references would block every legitimate OpenClaw request.
+            // Real write attempts are caught by the filesystem watcher (Layer 1)
+            // and periodic hash check (Layer 2), not by body scanning.
             if let Some(ref body_text) = req_info.body_text {
                 let body_upper = body_text.to_uppercase();
                 let filenames: Vec<String> = if let Ok(mgr) = self.protected_files.lock() {
@@ -275,7 +279,7 @@ impl BarrierHook for BarrierHookImpl {
                             &reason,
                             req_info.timestamp_ms,
                         );
-                        return BarrierDecision::Block(reason);
+                        return BarrierDecision::Warn(reason);
                     }
                 }
             }
