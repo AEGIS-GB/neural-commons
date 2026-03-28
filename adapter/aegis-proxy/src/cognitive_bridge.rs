@@ -80,13 +80,13 @@ async fn scan_handler() -> Json<ScanResponse> {
     })
 }
 
-/// GET /aegis/status — return adapter status.
-///
-/// Stub: returns mock status. Real implementation will be wired
-/// by aegis-adapter to read from the evidence recorder.
-async fn status_handler() -> Json<StatusResponse> {
+/// GET /aegis/status — return adapter status from live state.
+async fn status_handler(
+    State(state): State<crate::proxy::AppState>,
+) -> Json<StatusResponse> {
+    let mode = format!("{:?}", state.config.mode).to_lowercase();
     Json(StatusResponse {
-        mode: "observe_only".to_string(),
+        mode,
         chain_head_seq: 0,
         chain_head_hash: aegis_schemas::GENESIS_PREV_HASH.to_string(),
         receipt_count: 0,

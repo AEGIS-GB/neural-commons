@@ -1,4 +1,4 @@
-mode = "observe_only"
+mode = "enforce"
 data_dir = "/home/aegis/aegis/neural-commons/.aegis"
 
 [dashboard]
