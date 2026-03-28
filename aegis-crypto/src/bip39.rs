@@ -39,10 +39,10 @@ impl KeyPurpose {
     /// Returns the SLIP-0010 derivation path segments (all hardened)
     pub fn path_segments(&self) -> &[u32] {
         match self {
-            KeyPurpose::Signing => &[44 | 0x80000000, 784 | 0x80000000, 0 | 0x80000000, 0 | 0x80000000],
-            KeyPurpose::MeshEncryption => &[44 | 0x80000000, 784 | 0x80000000, 1 | 0x80000000, 0 | 0x80000000],
-            KeyPurpose::VaultKdf => &[44 | 0x80000000, 784 | 0x80000000, 2 | 0x80000000, 0 | 0x80000000],
-            KeyPurpose::TransportAuth => &[44 | 0x80000000, 784 | 0x80000000, 3 | 0x80000000, 0 | 0x80000000],
+            KeyPurpose::Signing => &[44 | 0x80000000, 784 | 0x80000000, 0x80000000, 0x80000000],
+            KeyPurpose::MeshEncryption => &[44 | 0x80000000, 784 | 0x80000000, 1 | 0x80000000, 0x80000000],
+            KeyPurpose::VaultKdf => &[44 | 0x80000000, 784 | 0x80000000, 2 | 0x80000000, 0x80000000],
+            KeyPurpose::TransportAuth => &[44 | 0x80000000, 784 | 0x80000000, 3 | 0x80000000, 0x80000000],
         }
     }
 
