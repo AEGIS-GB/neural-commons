@@ -13,6 +13,8 @@ tokio.workspace = true
 tracing.workspace = true
 tokio-stream = { version = "0.1", features = ["sync"] }
 futures = "0.3"
+aegis-crypto = { path = "../../aegis-crypto" }
 aegis-evidence = { path = "../aegis-evidence" }
 aegis-schemas = { path = "../../aegis-schemas" }
+hex.workspace = true
 aegis-trustmark = { path = "../../cluster/trustmark" }

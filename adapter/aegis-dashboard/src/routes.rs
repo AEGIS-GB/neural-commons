@@ -102,8 +102,17 @@ pub fn routes(state: Arc<DashboardSharedState>) -> Router {
         .with_state(state)
 }
 
-/// Auth middleware — checks Bearer token or ?token= query param.
-/// Allows access if no auth_token is configured (backward compatible).
+/// Cookie name for dashboard session.
+const SESSION_COOKIE: &str = "aegis_session";
+
+/// Auth middleware — cookie-based session with token login.
+///
+/// Flow:
+/// 1. First visit: `/dashboard?token=xxx` → validates token, sets HttpOnly cookie, redirects to `/dashboard`
+/// 2. Subsequent visits: cookie is sent automatically by browser, validated here
+/// 3. API clients can still use `Authorization: Bearer <token>` header
+///
+/// Cookie properties: HttpOnly (no JS access), SameSite=Strict (no CSRF), Path=/dashboard
 async fn dashboard_auth_middleware(
     State(state): State<Arc<DashboardSharedState>>,
     req: axum::extract::Request,
@@ -114,7 +123,21 @@ async fn dashboard_auth_middleware(
         None => return next.run(req).await, // no token configured = open access
     };
 
-    // Check Authorization: Bearer <token>
+    // Check 1: Valid session cookie
+    if let Some(cookie_header) = req.headers().get("cookie") {
+        if let Ok(cookies) = cookie_header.to_str() {
+            for cookie in cookies.split(';') {
+                let cookie = cookie.trim();
+                if let Some(value) = cookie.strip_prefix(&format!("{SESSION_COOKIE}=")) {
+                    if value == make_session_value(token) {
+                        return next.run(req).await;
+                    }
+                }
+            }
+        }
+    }
+
+    // Check 2: Authorization: Bearer header (for API/CLI clients)
     if let Some(auth) = req.headers().get("authorization") {
         if let Ok(auth_str) = auth.to_str() {
             if let Some(bearer) = auth_str.strip_prefix("Bearer ") {
@@ -125,12 +148,30 @@ async fn dashboard_auth_middleware(
         }
     }
 
-    // Check ?token=<token> query param (for browser access)
+    // Check 3: ?token= query param → set cookie and redirect (first-time browser login)
     if let Some(query) = req.uri().query() {
         for pair in query.split('&') {
             if let Some(val) = pair.strip_prefix("token=") {
                 if val == token {
-                    return next.run(req).await;
+                    // Valid token — set session cookie and redirect to clean URL
+                    let session = make_session_value(token);
+                    let cookie = format!(
+                        "{SESSION_COOKIE}={session}; HttpOnly; SameSite=Strict; Path=/dashboard; Max-Age=86400"
+                    );
+                    // Redirect to clean URL (without token in query string).
+                    // The router is mounted at /dashboard, so req path is relative.
+                    let rel_path = req.uri().path();
+                    let path = if rel_path == "/" {
+                        "/dashboard".to_string()
+                    } else {
+                        format!("/dashboard{rel_path}")
+                    };
+                    return axum::response::Response::builder()
+                        .status(302)
+                        .header("set-cookie", cookie)
+                        .header("location", path)
+                        .body(axum::body::Body::empty())
+                        .unwrap_or_default();
                 }
             }
         }
@@ -140,9 +181,16 @@ async fn dashboard_auth_middleware(
         .status(401)
         .header("content-type", "application/json")
         .body(axum::body::Body::from(
-            r#"{"error":"unauthorized","hint":"Include Authorization: Bearer <token> header or ?token=<token> query param. Get your token from aegis dashboard."}"#,
+            r#"{"error":"unauthorized","hint":"Open /dashboard?token=<your-token> in your browser, or use Authorization: Bearer <token> header for API access. Run 'aegis dashboard' to see your token."}"#,
         ))
         .unwrap_or_default()
+}
+
+/// Create a session cookie value from the auth token.
+/// Uses HMAC-like hashing so the raw token isn't stored in the cookie.
+fn make_session_value(token: &str) -> String {
+    let hash = aegis_crypto::hash(format!("aegis_session:{token}").as_bytes());
+    hex::encode(&hash[..16]) // 16 bytes = 32 hex chars, enough for session ID
 }
 
 // ── Response types ────────────────────────────────────────────────────────────

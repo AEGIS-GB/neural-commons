@@ -238,20 +238,8 @@ table.dtable .screening-row:hover{background:#1c2128}
 <div class="panel" id="panel-alerts"><div class="card"><h2>Emergency Alerts</h2><p>No alerts.</p></div></div>
 </div>
 <script>
-// Auth: read token from URL ?token= and inject into all fetch calls
-const _urlParams=new URLSearchParams(window.location.search);
-const _authToken=_urlParams.get('token')||localStorage.getItem('aegis_token')||'';
-if(_authToken){localStorage.setItem('aegis_token',_authToken);}
-const _origFetch=window.fetch;
-window.fetch=function(url,opts){
-  opts=opts||{};
-  if(_authToken&&typeof url==='string'&&url.startsWith('/dashboard')){
-    opts.headers=opts.headers||{};
-    if(opts.headers instanceof Headers){opts.headers.set('Authorization','Bearer '+_authToken);}
-    else{opts.headers['Authorization']='Bearer '+_authToken;}
-  }
-  return _origFetch.call(this,url,opts);
-};
+// Auth: cookie-based. Token is set via ?token= on first visit,
+// server sets HttpOnly cookie and redirects. No JS token handling needed.
 let activeTab='trace';
 let pageVisible=!document.hidden;
 let traceDetailId=null;
@@ -277,7 +265,7 @@ document.addEventListener('visibilitychange',()=>{
 const traceSearchEl=document.getElementById('trace-search');
 if(traceSearchEl){let st;traceSearchEl.addEventListener('input',()=>{clearTimeout(st);st=setTimeout(()=>{traceDetailId=null;poll();},300);});}
 const seenAlerts=new Set();
-const alertSource=new EventSource('/dashboard/api/alerts/stream'+(_authToken?'?token='+_authToken:''));
+const alertSource=new EventSource('/dashboard/api/alerts/stream');
 alertSource.onmessage=(e)=>{
   try{
     const alert=JSON.parse(e.data);
