@@ -26,6 +26,7 @@ pub fn pattern_severity(pattern: &Pattern) -> u32 {
         Pattern::Other => 4000,
         Pattern::BoundaryErosion => 3000,
         Pattern::SsrfAttempt => 7500,
+        Pattern::SystemProbing => 6500,
         Pattern::Benign => 0,
     }
 }
@@ -42,7 +43,8 @@ pub fn pattern_dimension(pattern: &Pattern) -> Option<Dimension> {
         Pattern::CredentialProbe
         | Pattern::ExfiltrationAttempt
         | Pattern::LinkInjection
-        | Pattern::SsrfAttempt => Some(Dimension::Exfiltration),
+        | Pattern::SsrfAttempt
+        | Pattern::SystemProbing => Some(Dimension::Exfiltration),
         Pattern::MemoryPoison => Some(Dimension::Persistence),
         Pattern::EncodingEvasion | Pattern::MultiTurnChain | Pattern::Other => {
             Some(Dimension::Evasion)

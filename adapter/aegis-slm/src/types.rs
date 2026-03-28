@@ -175,8 +175,11 @@ pub struct PeerReceiptRef {
 // Enums
 // ═══════════════════════════════════════════════════════════════════
 
-/// Pattern taxonomy (D4) — 15 patterns
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
+/// Pattern taxonomy (D4) — known patterns + catch-all Other.
+/// The SLM (Qwen3) may return any pattern name it wants. Unknown variants
+/// are mapped to `Other` instead of failing the parse — the threat score,
+/// intent, and excerpt are still valid even if we don't recognize the label.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "snake_case")]
 pub enum Pattern {
     ExfiltrationAttempt,
@@ -193,11 +196,44 @@ pub enum Pattern {
     Other,
     BoundaryErosion,
     SsrfAttempt,
+    SystemProbing,
     Benign,
 }
 
-/// Intent — derived from highest dimension score
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+impl<'de> serde::Deserialize<'de> for Pattern {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let s = String::deserialize(deserializer)?;
+        Ok(match s.as_str() {
+            "exfiltration_attempt" => Pattern::ExfiltrationAttempt,
+            "direct_injection" => Pattern::DirectInjection,
+            "memory_poison" => Pattern::MemoryPoison,
+            "credential_probe" => Pattern::CredentialProbe,
+            "indirect_injection" => Pattern::IndirectInjection,
+            "persona_hijack" => Pattern::PersonaHijack,
+            "tool_abuse" => Pattern::ToolAbuse,
+            "multi_turn_chain" => Pattern::MultiTurnChain,
+            "authority_escalation" => Pattern::AuthorityEscalation,
+            "encoding_evasion" => Pattern::EncodingEvasion,
+            "link_injection" => Pattern::LinkInjection,
+            "boundary_erosion" => Pattern::BoundaryErosion,
+            "ssrf_attempt" => Pattern::SsrfAttempt,
+            "system_probing" => Pattern::SystemProbing,
+            "benign" => Pattern::Benign,
+            "other" => Pattern::Other,
+            _ => {
+                tracing::debug!(unknown_pattern = %s, "SLM returned unknown pattern — mapping to Other");
+                Pattern::Other
+            }
+        })
+    }
+}
+
+/// Intent — derived from highest dimension score.
+/// Unknown intents from the SLM are mapped to Probe (suspicious but unclassified).
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum Intent {
     Benign,
@@ -205,6 +241,26 @@ pub enum Intent {
     Manipulate,
     Exfiltrate,
     Probe,
+}
+
+impl<'de> serde::Deserialize<'de> for Intent {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let s = String::deserialize(deserializer)?;
+        Ok(match s.as_str() {
+            "benign" => Intent::Benign,
+            "inject" => Intent::Inject,
+            "manipulate" => Intent::Manipulate,
+            "exfiltrate" => Intent::Exfiltrate,
+            "probe" => Intent::Probe,
+            _ => {
+                tracing::debug!(unknown_intent = %s, "SLM returned unknown intent — mapping to Probe");
+                Intent::Probe
+            }
+        })
+    }
 }
 
 /// Holster preset profiles (D8)
