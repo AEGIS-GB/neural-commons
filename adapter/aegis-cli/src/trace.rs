@@ -75,7 +75,6 @@ struct SlmEntry {
     trust_level: Option<String>,
 }
 
-
 /// Extract model name from request body JSON.
 fn extract_model(req_body: &str) -> Option<String> {
     serde_json::from_str::<serde_json::Value>(req_body)
@@ -134,7 +133,6 @@ fn format_ts(ts_ms: i64) -> String {
     format!("{:02}:{:02}:{:02} UTC ({})", h, m, s, ago)
 }
 
-
 /// Run the trace command.
 pub fn run(
     aegis_url: &str,
@@ -151,7 +149,13 @@ pub fn run(
     if let Some(entry_id) = id {
         show_detail(&dashboard_base, entry_id, show_body);
     } else {
-        show_table(&dashboard_base, channel_filter, verdict_filter, last_minutes, num);
+        show_table(
+            &dashboard_base,
+            channel_filter,
+            verdict_filter,
+            last_minutes,
+            num,
+        );
     }
 
     if show_health {
@@ -206,7 +210,10 @@ fn show_table(
     // Apply channel filter
     if let Some(cf) = channel_filter {
         entries.retain(|e| {
-            e.channel.as_deref().map(|c| c.contains(cf)).unwrap_or(false)
+            e.channel
+                .as_deref()
+                .map(|c| c.contains(cf))
+                .unwrap_or(false)
         });
     }
 
@@ -225,8 +232,10 @@ fn show_table(
 
     // Header
     println!();
-    println!(" {:<5} {:<10} {:<18} {:<9} {:<14} {:>7} {:>7} {:<8} {:>8}",
-        "#", "Time", "Channel", "Trust", "Model", "Req", "Rsp", "SLM", "Duration");
+    println!(
+        " {:<5} {:<10} {:<18} {:<9} {:<14} {:>7} {:>7} {:<8} {:>8}",
+        "#", "Time", "Channel", "Trust", "Model", "Req", "Rsp", "SLM", "Duration"
+    );
     println!("{}", "━".repeat(102));
 
     for entry in &entries {
@@ -239,13 +248,20 @@ fn show_table(
             format!("{:02}:{:02}:{:02}", h, m, s)
         };
 
-        let channel = entry.channel.as_deref()
+        let channel = entry
+            .channel
+            .as_deref()
             .map(|c| {
                 // Shorten "telegram:direct:123" -> "tg:123", "openclaw:web:x" -> "web:x"
-                if c.starts_with("telegram:direct:") { format!("tg:{}", &c[16..]) }
-                else if c.starts_with("openclaw:web:") { format!("web:{}", &c[13..]) }
-                else if c.starts_with("cron:") { c.to_string() }
-                else { c.chars().take(18).collect() }
+                if c.starts_with("telegram:direct:") {
+                    format!("tg:{}", &c[16..])
+                } else if c.starts_with("openclaw:web:") {
+                    format!("web:{}", &c[13..])
+                } else if c.starts_with("cron:") {
+                    c.to_string()
+                } else {
+                    c.chars().take(18).collect()
+                }
             })
             .unwrap_or_else(|| "—".to_string());
 
@@ -268,12 +284,17 @@ fn show_table(
             format!("{}ms", entry.duration_ms)
         };
 
-        println!(" {:<5} {:<10} {:<18} {:<9} {:<14} {:>7} {:>7} {:<8} {:>8}",
-            entry.id, time, channel, trust, model, req_tok, resp_tok, slm, dur);
+        println!(
+            " {:<5} {:<10} {:<18} {:<9} {:<14} {:>7} {:>7} {:<8} {:>8}",
+            entry.id, time, channel, trust, model, req_tok, resp_tok, slm, dur
+        );
     }
 
     println!();
-    println!("  {} entries shown. Use `aegis trace <ID>` for full detail.", entries.len());
+    println!(
+        "  {} entries shown. Use `aegis trace <ID>` for full detail.",
+        entries.len()
+    );
     println!();
 }
 
@@ -287,11 +308,22 @@ fn show_detail(base: &str, id: u64, show_body: bool) {
     };
 
     let e = &detail.entry;
-    let model = e.model.as_deref()
-        .or_else(|| e.request_body.as_deref().and_then(extract_model).as_deref().map(|_| ""))
+    let model = e
+        .model
+        .as_deref()
+        .or_else(|| {
+            e.request_body
+                .as_deref()
+                .and_then(extract_model)
+                .as_deref()
+                .map(|_| "")
+        })
         .unwrap_or("—");
     let model_display = if model.is_empty() {
-        e.request_body.as_deref().and_then(extract_model).unwrap_or_else(|| "—".to_string())
+        e.request_body
+            .as_deref()
+            .and_then(extract_model)
+            .unwrap_or_else(|| "—".to_string())
     } else {
         model.to_string()
     };
@@ -302,19 +334,33 @@ fn show_detail(base: &str, id: u64, show_body: bool) {
     let channel = e.channel.as_deref().unwrap_or("—");
     let trust = e.trust_level.as_deref().unwrap_or("—");
 
-    let upstream = if e.status == 403 { "BLOCKED (never forwarded)".to_string() } else { format!("→ {}", e.status) };
+    let upstream = if e.status == 403 {
+        "BLOCKED (never forwarded)".to_string()
+    } else {
+        format!("→ {}", e.status)
+    };
 
     println!();
     println!("━━━ Request #{} {}", e.id, "━".repeat(58));
-    println!("  Time       {}                Duration   {}ms", format_ts(e.ts_ms), e.duration_ms);
+    println!(
+        "  Time       {}                Duration   {}ms",
+        format_ts(e.ts_ms),
+        e.duration_ms
+    );
     println!("  Channel    {:<28} Trust      {}", channel, trust);
     println!("  Route      {} {} {}", e.method, e.path, upstream);
-    println!("  Model      {:<28} Streaming  {}", model_display, streaming);
+    println!(
+        "  Model      {:<28} Streaming  {}",
+        model_display, streaming
+    );
 
     // Tokens
     println!();
     println!("  ── Tokens ─────────────────────────────────────────────────────────");
-    println!("  Prompt     {:<10} Completion   {:<10} Total   {}", req_tok, resp_tok, total_tok);
+    println!(
+        "  Prompt     {:<10} Completion   {:<10} Total   {}",
+        req_tok, resp_tok, total_tok
+    );
 
     // SLM Screening
     let verdict_label = match e.slm_verdict.as_deref() {
@@ -325,24 +371,31 @@ fn show_detail(base: &str, id: u64, show_body: bool) {
         None => "NOT RUN",
     };
     println!();
-    println!("  ── SLM Screening ── verdict: {} ───────────────────────────────", verdict_label);
+    println!(
+        "  ── SLM Screening ── verdict: {} ───────────────────────────────",
+        verdict_label
+    );
 
     if let Some(dur) = e.slm_duration_ms {
-        println!("  Deep SLM     {}  {}ms   threat={}/10000",
-            verdict_label.to_lowercase(), dur, e.slm_threat_score.unwrap_or(0));
+        println!(
+            "  Deep SLM     {}  {}ms   threat={}/10000",
+            verdict_label.to_lowercase(),
+            dur,
+            e.slm_threat_score.unwrap_or(0)
+        );
     } else {
         println!("  (SLM screening not recorded for this entry)");
     }
 
     // Last user message
-    if let Some(ref body) = e.request_body {
-        if let Some(msg) = extract_last_user_message(body) {
-            println!();
-            println!("  ── Last User Message ──────────────────────────────────────────────");
-            // Word-wrap at ~70 chars with indent
-            for line in textwrap(&msg, 68) {
-                println!("  {}", line);
-            }
+    if let Some(ref body) = e.request_body
+        && let Some(msg) = extract_last_user_message(body)
+    {
+        println!();
+        println!("  ── Last User Message ──────────────────────────────────────────────");
+        // Word-wrap at ~70 chars with indent
+        for line in textwrap(&msg, 68) {
+            println!("  {}", line);
         }
     }
 
@@ -355,13 +408,19 @@ fn show_detail(base: &str, id: u64, show_body: bool) {
     if show_body {
         if let Some(ref body) = e.request_body {
             println!();
-            println!("  ── Request Body ({} bytes) ────────────────────────────────────", e.request_size);
+            println!(
+                "  ── Request Body ({} bytes) ────────────────────────────────────",
+                e.request_size
+            );
             let truncated: String = body.chars().take(2000).collect();
             println!("{}", truncated);
         }
         if let Some(ref body) = e.response_body {
             println!();
-            println!("  ── Response Body ({} bytes) ───────────────────────────────────", e.response_size);
+            println!(
+                "  ── Response Body ({} bytes) ───────────────────────────────────",
+                e.response_size
+            );
             let truncated: String = body.chars().take(2000).collect();
             println!("{}", truncated);
         }
@@ -379,28 +438,39 @@ fn show_slm_health(aegis_url: &str) {
 
     if let Some(status) = fetch_json::<serde_json::Value>(&status_url) {
         let mode = status.get("mode").and_then(|v| v.as_str()).unwrap_or("?");
-        let slm_model = status.get("slm_model").and_then(|v| v.as_str()).unwrap_or("?");
-        let slm_engine = status.get("slm_engine").and_then(|v| v.as_str()).unwrap_or("?");
-        let slm_server = status.get("slm_server").and_then(|v| v.as_str()).unwrap_or("?");
+        let slm_model = status
+            .get("slm_model")
+            .and_then(|v| v.as_str())
+            .unwrap_or("?");
+        let slm_engine = status
+            .get("slm_engine")
+            .and_then(|v| v.as_str())
+            .unwrap_or("?");
+        let slm_server = status
+            .get("slm_server")
+            .and_then(|v| v.as_str())
+            .unwrap_or("?");
         println!("  Engine     {} → {}", slm_engine, slm_server);
         println!("  Model      {}", slm_model);
         println!("  Mode       {}", mode);
     }
 
-    if let Some(slm_data) = fetch_json::<SlmList>(&slm_url) {
-        if let Some(entries) = slm_data.entries {
-            if let Some(last) = entries.last() {
-                println!("  Last       verdict={} threat={} in {}ms",
-                    last.action.as_deref().unwrap_or("?"),
-                    last.threat_score.unwrap_or(0),
-                    last.screening_ms.unwrap_or(0));
-            }
-            // Average screening time
-            let times: Vec<u64> = entries.iter().filter_map(|e| e.screening_ms).collect();
-            if !times.is_empty() {
-                let avg = times.iter().sum::<u64>() / times.len() as u64;
-                println!("  Avg time   {}ms ({} screenings)", avg, times.len());
-            }
+    if let Some(slm_data) = fetch_json::<SlmList>(&slm_url)
+        && let Some(entries) = slm_data.entries
+    {
+        if let Some(last) = entries.last() {
+            println!(
+                "  Last       verdict={} threat={} in {}ms",
+                last.action.as_deref().unwrap_or("?"),
+                last.threat_score.unwrap_or(0),
+                last.screening_ms.unwrap_or(0)
+            );
+        }
+        // Average screening time
+        let times: Vec<u64> = entries.iter().filter_map(|e| e.screening_ms).collect();
+        if !times.is_empty() {
+            let avg = times.iter().sum::<u64>() / times.len() as u64;
+            println!("  Avg time   {}ms ({} screenings)", avg, times.len());
         }
     }
     println!();

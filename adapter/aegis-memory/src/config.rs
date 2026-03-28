@@ -7,12 +7,8 @@ use std::path::{Path, PathBuf};
 
 /// Hard-coded default memory file patterns (D11).
 /// These are always monitored regardless of config.
-pub const DEFAULT_MEMORY_PATTERNS: &[&str] = &[
-    "MEMORY.md",
-    "*.memory.md",
-    "memory/*.md",
-    "SOUL.md",
-];
+pub const DEFAULT_MEMORY_PATTERNS: &[&str] =
+    &["MEMORY.md", "*.memory.md", "memory/*.md", "SOUL.md"];
 
 /// Memory monitoring configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -31,8 +27,12 @@ pub struct MemoryConfig {
     pub hash_interval_secs: u64,
 }
 
-fn default_true() -> bool { true }
-fn default_hash_interval() -> u64 { 60 }
+fn default_true() -> bool {
+    true
+}
+fn default_hash_interval() -> u64 {
+    60
+}
 
 impl Default for MemoryConfig {
     fn default() -> Self {
@@ -60,7 +60,8 @@ impl MemoryConfig {
     /// Check if a file path matches any memory file pattern.
     pub fn is_memory_file(&self, path: &Path) -> bool {
         let path_str = path.to_string_lossy();
-        let file_name = path.file_name()
+        let file_name = path
+            .file_name()
             .map(|n| n.to_string_lossy().to_string())
             .unwrap_or_default();
 
@@ -88,13 +89,13 @@ impl MemoryConfig {
 
         // Also check memory/ subdirectory
         let memory_dir = base_dir.join("memory");
-        if memory_dir.is_dir() {
-            if let Ok(entries) = std::fs::read_dir(&memory_dir) {
-                for entry in entries.flatten() {
-                    let path = entry.path();
-                    if path.is_file() && self.is_memory_file(&path) {
-                        results.push(path);
-                    }
+        if memory_dir.is_dir()
+            && let Ok(entries) = std::fs::read_dir(&memory_dir)
+        {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_file() && self.is_memory_file(&path) {
+                    results.push(path);
                 }
             }
         }

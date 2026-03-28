@@ -57,9 +57,24 @@ pub struct ClassificationResult {
 /// Instruction verbs whose addition, removal, or change signals a behavioral
 /// shift in the document's intent. Case-insensitive matching.
 const INSTRUCTION_VERBS: &[&str] = &[
-    "MUST", "SHALL", "SHOULD", "NEVER", "ALWAYS", "REQUIRED", "PROHIBITED",
-    "FORBIDDEN", "MANDATORY", "DENY", "ALLOW", "PERMIT", "REFUSE", "REJECT",
-    "GRANT", "REVOKE", "RESTRICT", "ENFORCE",
+    "MUST",
+    "SHALL",
+    "SHOULD",
+    "NEVER",
+    "ALWAYS",
+    "REQUIRED",
+    "PROHIBITED",
+    "FORBIDDEN",
+    "MANDATORY",
+    "DENY",
+    "ALLOW",
+    "PERMIT",
+    "REFUSE",
+    "REJECT",
+    "GRANT",
+    "REVOKE",
+    "RESTRICT",
+    "ENFORCE",
 ];
 
 /// URL/endpoint patterns that indicate structural additions.
@@ -126,7 +141,9 @@ fn line_contains_any_ci(line: &str, patterns: &[&str]) -> bool {
 /// but paths like `/api/` are case-insensitive).
 fn line_contains_url(line: &str) -> bool {
     let lower = line.to_lowercase();
-    URL_PATTERNS.iter().any(|p| lower.contains(&p.to_lowercase()))
+    URL_PATTERNS
+        .iter()
+        .any(|p| lower.contains(&p.to_lowercase()))
 }
 
 /// Check if a line looks like an import/require/include statement.
@@ -224,8 +241,10 @@ pub fn classify_heuristic(old_content: &str, new_content: &str) -> HeuristicResu
 
     // ── Check 1: Whitespace-only changes ────────────────────────────
     let whitespace_only = {
-        let old_normalized: Vec<String> = old_lines.iter().map(|l| normalize_whitespace(l)).collect();
-        let new_normalized: Vec<String> = new_lines.iter().map(|l| normalize_whitespace(l)).collect();
+        let old_normalized: Vec<String> =
+            old_lines.iter().map(|l| normalize_whitespace(l)).collect();
+        let new_normalized: Vec<String> =
+            new_lines.iter().map(|l| normalize_whitespace(l)).collect();
         old_normalized == new_normalized
     };
 
@@ -295,8 +314,12 @@ pub fn classify_heuristic(old_content: &str, new_content: &str) -> HeuristicResu
     }
 
     // ── Check 5: Instruction verb changes ───────────────────────────
-    let added_has_verbs = added.iter().any(|l| line_contains_any_ci(l, INSTRUCTION_VERBS));
-    let removed_has_verbs = removed.iter().any(|l| line_contains_any_ci(l, INSTRUCTION_VERBS));
+    let added_has_verbs = added
+        .iter()
+        .any(|l| line_contains_any_ci(l, INSTRUCTION_VERBS));
+    let removed_has_verbs = removed
+        .iter()
+        .any(|l| line_contains_any_ci(l, INSTRUCTION_VERBS));
 
     if added_has_verbs || removed_has_verbs {
         let detail = match (added_has_verbs, removed_has_verbs) {
@@ -384,9 +407,8 @@ pub fn classify(
         // We still run heuristics to collect reasons for the audit trail.
         let heuristic = classify_heuristic(old_content, new_content);
         let mut reasons = heuristic.reasons;
-        reasons.push(
-            "Credential-class file: auto-classified as Structural (SLM skipped)".to_string(),
-        );
+        reasons
+            .push("Credential-class file: auto-classified as Structural (SLM skipped)".to_string());
 
         return ClassificationResult {
             severity: Severity::Structural,
@@ -481,7 +503,9 @@ fn apply_slm_fallback(
         }
         _ => {
             if severity == Severity::Behavioral || severity == Severity::Cosmetic {
-                reasons.push("SLM unavailable: no promotion needed (confidence sufficient)".to_string());
+                reasons.push(
+                    "SLM unavailable: no promotion needed (confidence sufficient)".to_string(),
+                );
             }
             ClassificationResult {
                 severity,
@@ -677,7 +701,10 @@ mod tests {
             .reasons
             .iter()
             .any(|r| r.contains(">50% lines changed"));
-        assert!(!structural_from_ratio, "40% change should not trigger >50% rule");
+        assert!(
+            !structural_from_ratio,
+            "40% change should not trigger >50% rule"
+        );
     }
 
     // ── Instruction verb changes → Behavioral ───────────────────────
@@ -686,7 +713,8 @@ mod tests {
     fn new_must_instruction_is_behavioral() {
         // Use enough context lines so the change stays below >50% threshold.
         let old = "Line one.\nLine two.\nThe system processes requests.\nLine four.\nLine five.\n";
-        let new = "Line one.\nLine two.\nThe system MUST process requests.\nLine four.\nLine five.\n";
+        let new =
+            "Line one.\nLine two.\nThe system MUST process requests.\nLine four.\nLine five.\n";
         assert_heuristic_severity(old, new, Some(Severity::Behavioral));
     }
 
@@ -760,7 +788,10 @@ mod tests {
             .reasons
             .iter()
             .any(|r| r.contains("import/require/include"));
-        assert!(!import_triggered, "Replacing an import (same count) should not trigger import rule");
+        assert!(
+            !import_triggered,
+            "Replacing an import (same count) should not trigger import rule"
+        );
     }
 
     // ── No rule matched → None ──────────────────────────────────────
@@ -778,7 +809,8 @@ mod tests {
     fn structural_beats_behavioral() {
         // Has both a URL and instruction verbs — Structural should win.
         let old = "The system processes requests.\n";
-        let new = "The system MUST process requests.\nendpoint = \"https://api.example.com/v2/data\"\n";
+        let new =
+            "The system MUST process requests.\nendpoint = \"https://api.example.com/v2/data\"\n";
         assert_heuristic_severity(old, new, Some(Severity::Structural));
     }
 
@@ -851,7 +883,10 @@ mod tests {
     #[test]
     fn credential_skips_slm() {
         let result = classify("A=1\n", "A=2\n", &SensitivityClass::Credential, true);
-        assert_eq!(result.method, ClassificationMethod::CredentialAutoStructural);
+        assert_eq!(
+            result.method,
+            ClassificationMethod::CredentialAutoStructural
+        );
         // The SLM should never be invoked; CredentialAutoStructural signals this.
     }
 
@@ -969,7 +1004,10 @@ mod tests {
     fn credential_reasons_include_auto_note() {
         let result = classify("K=1\n", "K=2\n", &SensitivityClass::Credential, true);
         assert!(
-            result.reasons.iter().any(|r| r.contains("Credential-class")),
+            result
+                .reasons
+                .iter()
+                .any(|r| r.contains("Credential-class")),
             "Credential classification should mention credential-class in reasons"
         );
     }
@@ -984,7 +1022,10 @@ mod tests {
             false,
         );
         assert!(
-            result.reasons.iter().any(|r| r.contains("promoted") || r.contains("SLM unavailable")),
+            result
+                .reasons
+                .iter()
+                .any(|r| r.contains("promoted") || r.contains("SLM unavailable")),
             "Fallback promotion should be noted in reasons. Got: {:?}",
             result.reasons
         );

@@ -17,7 +17,7 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::types::{
-    ClassificationMethod, EvolutionDetail, EvolutionState, Severity, EVOLUTION_TIMEOUT_MS,
+    ClassificationMethod, EVOLUTION_TIMEOUT_MS, EvolutionDetail, EvolutionState, Severity,
 };
 
 // ═══════════════════════════════════════════════════════════════════
@@ -93,7 +93,8 @@ impl EvolutionManager {
             from_quarantine,
         };
 
-        self.active_evolutions.insert(file_path.to_path_buf(), state);
+        self.active_evolutions
+            .insert(file_path.to_path_buf(), state);
         Ok(())
     }
 
@@ -248,7 +249,10 @@ mod tests {
         assert_eq!(detail.new_hash, "bbb222");
         assert_eq!(detail.diff_hash, "ccc333");
         assert_eq!(detail.change_severity, Severity::Behavioral);
-        assert_eq!(detail.classification_method, ClassificationMethod::Heuristic);
+        assert_eq!(
+            detail.classification_method,
+            ClassificationMethod::Heuristic
+        );
         assert_eq!(detail.source, "editor");
 
         // State should be gone after confirm.
@@ -283,9 +287,7 @@ mod tests {
         let mut mgr = start_fresh("SOUL.md", false);
 
         let err = mgr.start(Path::new("SOUL.md"), false).unwrap_err();
-        assert!(
-            matches!(err, EvolutionError::AlreadyEvolving(ref p) if p == Path::new("SOUL.md"))
-        );
+        assert!(matches!(err, EvolutionError::AlreadyEvolving(ref p) if p == Path::new("SOUL.md")));
     }
 
     // ---------------------------------------------------------------

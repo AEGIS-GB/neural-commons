@@ -147,7 +147,14 @@ pub fn mask_credential(raw: &str) -> String {
         return "****".to_string();
     }
     let first4: String = raw.chars().take(4).collect();
-    let last4: String = raw.chars().rev().take(4).collect::<Vec<_>>().into_iter().rev().collect();
+    let last4: String = raw
+        .chars()
+        .rev()
+        .take(4)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect();
     format!("{first4}****{last4}")
 }
 
@@ -206,7 +213,18 @@ pub fn redact_text(content: &str) -> (String, ScanResult) {
 }
 
 /// Scan arbitrary text for plaintext credentials.
+/// Scan text for credentials. Use `scan_text_filtered` to exclude known-safe tokens.
 pub fn scan_text(content: &str) -> ScanResult {
+    scan_text_filtered(content, &[])
+}
+
+/// Scan text for credentials, excluding matches that contain any of the `allowlist` strings.
+///
+/// Use this to skip known-safe patterns like:
+/// - The proxy's own upstream API key (appears in every request)
+/// - The agent's authorized bearer tokens (e.g. MoltBook API key in tool calls)
+/// - Known example patterns from documentation
+pub fn scan_text_filtered(content: &str, allowlist: &[&str]) -> ScanResult {
     let mut findings = Vec::new();
 
     for pdef in PATTERNS {
@@ -219,6 +237,12 @@ pub fn scan_text(content: &str) -> ScanResult {
             let full_match = caps.get(0).unwrap();
             let secret_match = caps.get(pdef.secret_group).unwrap_or(full_match);
             let secret_text = secret_match.as_str();
+
+            // Skip only explicitly allowlisted tokens (warden-configured).
+            // No pattern guessing — that's a bypass vector.
+            if allowlist.contains(&secret_text) {
+                continue;
+            }
 
             findings.push(Finding {
                 credential_type: pdef.credential_type.clone(),
@@ -260,8 +284,9 @@ pub fn scan_directory(
 ) -> Result<Vec<(PathBuf, ScanResult)>, VaultError> {
     let mut results = Vec::new();
 
-    let entries = std::fs::read_dir(dir)
-        .map_err(|e| VaultError::ScannerError(format!("failed to read dir {}: {e}", dir.display())))?;
+    let entries = std::fs::read_dir(dir).map_err(|e| {
+        VaultError::ScannerError(format!("failed to read dir {}: {e}", dir.display()))
+    })?;
 
     for entry in entries {
         let entry = entry.map_err(|e| VaultError::ScannerError(e.to_string()))?;
@@ -280,7 +305,7 @@ pub fn scan_directory(
                 let ext_matches = path
                     .extension()
                     .and_then(|e| e.to_str())
-                    .is_some_and(|ext| extensions.iter().any(|&wanted| wanted == ext));
+                    .is_some_and(|ext| extensions.contains(&ext));
                 if !ext_matches {
                     continue;
                 }
@@ -314,7 +339,10 @@ mod tests {
         let content = "aws_access_key_id = AKIAIOSFODNN7EXAMPLE";
         let result = scan_text(content);
         assert!(
-            result.findings.iter().any(|f| f.credential_type == CredentialType::AwsKey),
+            result
+                .findings
+                .iter()
+                .any(|f| f.credential_type == CredentialType::AwsKey),
             "should detect AWS key"
         );
     }
@@ -324,7 +352,10 @@ mod tests {
         let content = r#"Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.test_payload"#;
         let result = scan_text(content);
         assert!(
-            result.findings.iter().any(|f| f.credential_type == CredentialType::BearerToken),
+            result
+                .findings
+                .iter()
+                .any(|f| f.credential_type == CredentialType::BearerToken),
             "should detect bearer token"
         );
     }
@@ -334,7 +365,10 @@ mod tests {
         let content = "-----BEGIN RSA PRIVATE KEY-----\nMIIEow...";
         let result = scan_text(content);
         assert!(
-            result.findings.iter().any(|f| f.credential_type == CredentialType::PrivateKey),
+            result
+                .findings
+                .iter()
+                .any(|f| f.credential_type == CredentialType::PrivateKey),
             "should detect private key"
         );
     }
@@ -344,7 +378,10 @@ mod tests {
         let content = r#"API_KEY = "sk_live_abcdefghijklmnopqrstuv""#;
         let result = scan_text(content);
         assert!(
-            result.findings.iter().any(|f| f.credential_type == CredentialType::ApiKey),
+            result
+                .findings
+                .iter()
+                .any(|f| f.credential_type == CredentialType::ApiKey),
             "should detect api key"
         );
     }
@@ -365,7 +402,10 @@ mod tests {
         let content = "postgres://admin:supersecretpassword@db.example.com/mydb";
         let result = scan_text(content);
         assert!(
-            result.findings.iter().any(|f| f.credential_type == CredentialType::Password),
+            result
+                .findings
+                .iter()
+                .any(|f| f.credential_type == CredentialType::Password),
             "should detect password in URL"
         );
     }
@@ -375,7 +415,10 @@ mod tests {
         let content = r#"token = "abcdef1234567890""#;
         let result = scan_text(content);
         assert!(
-            result.findings.iter().any(|f| f.credential_type == CredentialType::GenericSecret),
+            result
+                .findings
+                .iter()
+                .any(|f| f.credential_type == CredentialType::GenericSecret),
             "should detect generic secret"
         );
     }
@@ -393,7 +436,10 @@ mod tests {
     #[test]
     fn no_findings_in_clean_text() {
         let result = scan_text("This is perfectly clean text with no secrets at all.");
-        assert!(result.findings.is_empty(), "should find nothing in clean text");
+        assert!(
+            result.findings.is_empty(),
+            "should find nothing in clean text"
+        );
     }
 
     #[test]

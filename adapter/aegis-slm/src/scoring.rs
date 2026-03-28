@@ -39,9 +39,10 @@ pub fn pattern_dimension(pattern: &Pattern) -> Option<Dimension> {
         Pattern::PersonaHijack | Pattern::AuthorityEscalation | Pattern::BoundaryErosion => {
             Some(Dimension::Manipulation)
         }
-        Pattern::CredentialProbe | Pattern::ExfiltrationAttempt | Pattern::LinkInjection | Pattern::SsrfAttempt => {
-            Some(Dimension::Exfiltration)
-        }
+        Pattern::CredentialProbe
+        | Pattern::ExfiltrationAttempt
+        | Pattern::LinkInjection
+        | Pattern::SsrfAttempt => Some(Dimension::Exfiltration),
         Pattern::MemoryPoison => Some(Dimension::Persistence),
         Pattern::EncodingEvasion | Pattern::MultiTurnChain | Pattern::Other => {
             Some(Dimension::Evasion)
@@ -72,10 +73,7 @@ pub fn compound_bonus(k: usize) -> u32 {
 
 /// Enrich SLM output with deterministic scoring.
 /// This is the core scoring_v1 algorithm.
-pub fn enrich(
-    slm_output: &SlmOutput,
-    screened_input: &[u8],
-) -> EnrichedAnalysis {
+pub fn enrich(slm_output: &SlmOutput, screened_input: &[u8]) -> EnrichedAnalysis {
     // Step 1: Enrich each annotation with span + severity.
     // Discard annotations whose excerpt is not found in the input (hallucinated).
     let enriched_annotations: Vec<EnrichedAnnotation> = slm_output
@@ -135,9 +133,7 @@ pub fn enrich(
                 Dimension::Exfiltration => {
                     dimensions.exfiltration = dimensions.exfiltration.max(sev)
                 }
-                Dimension::Persistence => {
-                    dimensions.persistence = dimensions.persistence.max(sev)
-                }
+                Dimension::Persistence => dimensions.persistence = dimensions.persistence.max(sev),
                 Dimension::Evasion => dimensions.evasion = dimensions.evasion.max(sev),
             }
         }
@@ -145,10 +141,7 @@ pub fn enrich(
 
     // Step 4: Compute threat_score with compounding
     let base = per_pattern_max.values().copied().max().unwrap_or(0);
-    let k = per_pattern_max
-        .iter()
-        .filter(|(_, sev)| **sev > 0)
-        .count();
+    let k = per_pattern_max.iter().filter(|(_, sev)| **sev > 0).count();
     let threat_score = (base + compound_bonus(k)).min(10000);
 
     // Step 5: Derive intent from highest dimension
@@ -241,13 +234,13 @@ fn derive_intent(dims: &ThreatDimensions, annotations: &[EnrichedAnnotation]) ->
     let mut best_dim = candidates[0]; // fallback to priority order
     let mut best_sev = 0u32;
     for ann in annotations {
-        if ann.severity >= best_sev {
-            if let Some(dim) = pattern_dimension(&ann.pattern) {
-                if candidates.contains(&dim) && ann.severity > best_sev {
-                    best_dim = dim;
-                    best_sev = ann.severity;
-                }
-            }
+        if ann.severity >= best_sev
+            && let Some(dim) = pattern_dimension(&ann.pattern)
+            && candidates.contains(&dim)
+            && ann.severity > best_sev
+        {
+            best_dim = dim;
+            best_sev = ann.severity;
         }
     }
 

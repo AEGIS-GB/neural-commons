@@ -10,10 +10,10 @@
 //!   enforce: full inspection + receipts + blocking
 
 pub mod anthropic;
-pub mod proxy;
-pub mod middleware;
+pub mod channel_trust;
 pub mod cognitive_bridge;
 pub mod config;
 pub mod error;
+pub mod middleware;
+pub mod proxy;
 pub mod rate_limit;
-pub mod channel_trust;

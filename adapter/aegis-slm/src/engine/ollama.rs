@@ -107,11 +107,10 @@ impl OllamaEngine {
             .map_err(|e| format!("failed to parse Ollama tags response: {e}"))?;
 
         // Check if model is available (exact match or prefix match for tagged models)
-        let model_found = tags.models.iter().any(|m| {
-            m.name == self.model
-                || m.name.starts_with(&format!("{}:", self.model))
-                || self.model.contains(':') && m.name == self.model
-        });
+        let model_found = tags
+            .models
+            .iter()
+            .any(|m| m.name == self.model || m.name.starts_with(&format!("{}:", self.model)));
 
         if model_found {
             debug!(model = %self.model, "Ollama model available");
@@ -138,7 +137,10 @@ impl SlmEngine for OllamaEngine {
             prompt,
             stream: false,
             format: "json",
-            options: OllamaOptions { num_predict: 256, num_ctx: 32768 },
+            options: OllamaOptions {
+                num_predict: 256,
+                num_ctx: 32768,
+            },
         };
 
         debug!(
@@ -168,9 +170,7 @@ impl SlmEngine for OllamaEngine {
         if !resp.status().is_success() {
             let status = resp.status();
             let body = resp.text().unwrap_or_default();
-            return Err(format!(
-                "Ollama generate returned status {status}: {body}"
-            ));
+            return Err(format!("Ollama generate returned status {status}: {body}"));
         }
 
         let response: OllamaGenerateResponse = resp
@@ -185,10 +185,7 @@ impl SlmEngine for OllamaEngine {
             response.response
         };
 
-        debug!(
-            response_len = output.len(),
-            "Ollama inference complete"
-        );
+        debug!(response_len = output.len(), "Ollama inference complete");
 
         Ok(output)
     }

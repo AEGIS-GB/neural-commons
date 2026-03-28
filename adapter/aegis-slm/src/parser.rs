@@ -49,23 +49,20 @@ fn extract_json(raw: &str) -> &str {
 
     // Find the first '{' and last '}' to extract the JSON object
     let trimmed = text.trim();
-    if let Some(start) = trimmed.find('{') {
-        if let Some(end) = trimmed.rfind('}') {
-            return &trimmed[start..=end];
-        }
+    if let Some(start) = trimmed.find('{')
+        && let Some(end) = trimmed.rfind('}')
+    {
+        return &trimmed[start..=end];
     }
     trimmed
 }
 
 /// Parse and validate SLM output.
 /// Returns ParseError on ANY validation failure — no best-effort coercion.
-pub fn parse_slm_output(
-    raw_json: &str,
-    engine: &EngineProfile,
-) -> Result<SlmOutput, ParseError> {
+pub fn parse_slm_output(raw_json: &str, engine: &EngineProfile) -> Result<SlmOutput, ParseError> {
     let cleaned = extract_json(raw_json);
-    let output: SlmOutput = serde_json::from_str(cleaned)
-        .map_err(|e| ParseError::InvalidJson(e.to_string()))?;
+    let output: SlmOutput =
+        serde_json::from_str(cleaned).map_err(|e| ParseError::InvalidJson(e.to_string()))?;
 
     // Validate schema_version
     if output.schema_version != 2 {

@@ -81,7 +81,10 @@ mod tests {
 
         let key_a = derive_vault_key(master, fp_a).unwrap();
         let key_b = derive_vault_key(master, fp_b).unwrap();
-        assert_ne!(key_a, key_b, "different fingerprints must produce different keys");
+        assert_ne!(
+            key_a, key_b,
+            "different fingerprints must produce different keys"
+        );
     }
 
     #[test]
@@ -89,7 +92,10 @@ mod tests {
         let fp = "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789";
         let key_a = derive_vault_key(b"master-a", fp).unwrap();
         let key_b = derive_vault_key(b"master-b", fp).unwrap();
-        assert_ne!(key_a, key_b, "different master keys must produce different keys");
+        assert_ne!(
+            key_a, key_b,
+            "different master keys must produce different keys"
+        );
     }
 
     #[test]

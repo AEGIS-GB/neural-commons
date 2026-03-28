@@ -7,7 +7,7 @@
 use std::path::Path;
 
 use crate::types::{
-    FileScope, ProtectedFileEntry, SensitivityClass, EXCLUDED_DIRS, MAX_WATCHED_PATHS,
+    EXCLUDED_DIRS, FileScope, MAX_WATCHED_PATHS, ProtectedFileEntry, SensitivityClass,
 };
 
 // ═══════════════════════════════════════════════════════════════════
@@ -347,10 +347,10 @@ impl ProtectedFileManager {
                 }
             }
             FileScope::DepthLimited => {
-                if let Some(max) = max_depth {
-                    if depth as u32 > max {
-                        return false;
-                    }
+                if let Some(max) = max_depth
+                    && depth as u32 > max
+                {
+                    return false;
                 }
             }
         }
@@ -366,13 +366,11 @@ impl ProtectedFileManager {
 
     /// Pure file-name vs pattern check (no scope/depth logic).
     fn name_matches_pattern(pattern: &str, file_name: &str) -> bool {
-        if pattern.starts_with('*') {
+        if let Some(suffix) = pattern.strip_prefix('*') {
             // Leading glob: "*.memory.md"  ->  suffix = ".memory.md"
-            let suffix = &pattern[1..];
             file_name.ends_with(suffix)
-        } else if pattern.ends_with('*') {
+        } else if let Some(prefix) = pattern.strip_suffix('*') {
             // Trailing glob: ".env*"  ->  prefix = ".env"
-            let prefix = &pattern[..pattern.len() - 1];
             file_name.starts_with(prefix)
         } else {
             // Exact match.
@@ -393,7 +391,11 @@ impl ProtectedFileManager {
         let file_pattern = parts[1];
 
         // Check that the path has a parent component matching dir_name
-        let parent = match path.parent().and_then(|p| p.file_name()).and_then(|n| n.to_str()) {
+        let parent = match path
+            .parent()
+            .and_then(|p| p.file_name())
+            .and_then(|n| n.to_str())
+        {
             Some(p) => p,
             None => return false,
         };
@@ -408,8 +410,7 @@ impl ProtectedFileManager {
         };
 
         // Match the file part
-        if file_pattern.starts_with('*') {
-            let suffix = &file_pattern[1..];
+        if let Some(suffix) = file_pattern.strip_prefix('*') {
             file_name.ends_with(suffix)
         } else {
             file_name == file_pattern
@@ -424,10 +425,10 @@ impl ProtectedFileManager {
     /// [`EXCLUDED_DIRS`] (e.g. `.git`, `node_modules`, `target`).
     pub fn is_excluded_dir(path: &Path) -> bool {
         for component in path.components() {
-            if let Some(s) = component.as_os_str().to_str() {
-                if EXCLUDED_DIRS.contains(&s) {
-                    return true;
-                }
+            if let Some(s) = component.as_os_str().to_str()
+                && EXCLUDED_DIRS.contains(&s)
+            {
+                return true;
             }
         }
         false

@@ -66,8 +66,7 @@ pub fn parse_auth_header(header: &str) -> Option<NcAuth> {
     }
 
     // Validate hex chars
-    if !pubkey.chars().all(|c| c.is_ascii_hexdigit())
-        || !sig.chars().all(|c| c.is_ascii_hexdigit())
+    if !pubkey.chars().all(|c| c.is_ascii_hexdigit()) || !sig.chars().all(|c| c.is_ascii_hexdigit())
     {
         return None;
     }

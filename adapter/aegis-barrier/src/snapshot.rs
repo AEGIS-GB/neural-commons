@@ -70,10 +70,7 @@ impl SnapshotStore {
                         size = content.len(),
                         "snapshot: captured critical file"
                     );
-                    snapshots.insert(
-                        rel_path.clone(),
-                        FileSnapshot { content, hash },
-                    );
+                    snapshots.insert(rel_path.clone(), FileSnapshot { content, hash });
                 }
                 Err(e) => {
                     debug!(
@@ -270,7 +267,10 @@ mod tests {
         let expected_hash = hex::encode(aegis_crypto::hash(content));
         let store = SnapshotStore::load(ws, &[PathBuf::from("test.md")]);
 
-        assert_eq!(store.get_hash(Path::new("test.md")), Some(expected_hash.as_str()));
+        assert_eq!(
+            store.get_hash(Path::new("test.md")),
+            Some(expected_hash.as_str())
+        );
     }
 
     #[test]
@@ -308,10 +308,8 @@ mod tests {
         fs::write(ws.join("SOUL.md"), b"soul content").unwrap();
         fs::write(ws.join("AGENTS.md"), b"agents content").unwrap();
 
-        let store = SnapshotStore::load(
-            ws,
-            &[PathBuf::from("SOUL.md"), PathBuf::from("AGENTS.md")],
-        );
+        let store =
+            SnapshotStore::load(ws, &[PathBuf::from("SOUL.md"), PathBuf::from("AGENTS.md")]);
 
         // No changes — verify should find nothing
         let mismatches = store.verify_all(ws);
@@ -332,7 +330,10 @@ mod tests {
         let mismatches = store.verify_all(ws);
         assert_eq!(mismatches.len(), 1);
         assert_eq!(mismatches[0].0, PathBuf::from("SOUL.md"));
-        assert!(matches!(mismatches[0].1, SnapshotMismatch::HashChanged { .. }));
+        assert!(matches!(
+            mismatches[0].1,
+            SnapshotMismatch::HashChanged { .. }
+        ));
     }
 
     #[test]
@@ -373,7 +374,10 @@ mod tests {
 
         let mismatches = store.verify_all(ws);
         assert_eq!(mismatches.len(), 1);
-        assert!(matches!(mismatches[0].1, SnapshotMismatch::HashChanged { .. }));
+        assert!(matches!(
+            mismatches[0].1,
+            SnapshotMismatch::HashChanged { .. }
+        ));
     }
 
     #[test]

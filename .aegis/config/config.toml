@@ -1,4 +1,5 @@
 mode = "observe_only"
+data_dir = "/home/aegis/aegis/neural-commons/.aegis"
 
 [dashboard]
 path = "/dashboard"

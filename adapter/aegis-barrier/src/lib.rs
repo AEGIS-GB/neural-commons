@@ -15,13 +15,13 @@
 //!   Mode read from `EnforcementConfig::write_barrier` at decision time.
 //!   Receipt includes `enforcement_mode` field for TRUSTMARK weighting.
 
-pub mod watcher;
 pub mod diff;
-pub mod severity;
-pub mod types;
-pub mod registry;
-pub mod write_token;
-pub mod protected_files;
-pub mod snapshot;
-pub mod manifest;
 pub mod evolution;
+pub mod manifest;
+pub mod protected_files;
+pub mod registry;
+pub mod severity;
+pub mod snapshot;
+pub mod types;
+pub mod watcher;
+pub mod write_token;

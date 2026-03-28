@@ -49,8 +49,7 @@ impl MonotonicCounter {
 
     /// Get the current value without incrementing.
     pub fn current(&self) -> u64 {
-        self.current
-            .load(std::sync::atomic::Ordering::Relaxed)
+        self.current.load(std::sync::atomic::Ordering::Relaxed)
     }
 }
 
@@ -107,13 +106,13 @@ impl NonceRegistry {
         }
 
         // Check for duplicate
-        if let Some(prev_time) = self.nonces.get(nonce) {
-            if now.duration_since(*prev_time) < self.window {
-                // Nonce still within window — replay detected
-                return false;
-            }
-            // Nonce expired — allow reuse (unlikely but valid)
+        if let Some(prev_time) = self.nonces.get(nonce)
+            && now.duration_since(*prev_time) < self.window
+        {
+            // Nonce still within window — replay detected
+            return false;
         }
+        // Nonce expired — allow reuse (unlikely but valid)
 
         self.nonces.insert(nonce.to_string(), now);
         true

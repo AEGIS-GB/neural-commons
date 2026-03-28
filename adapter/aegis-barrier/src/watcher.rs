@@ -16,8 +16,8 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use notify::event::{CreateKind, ModifyKind, RemoveKind, RenameMode};
 use notify::EventKind;
+use notify::event::{CreateKind, ModifyKind, RemoveKind, RenameMode};
 use tracing::{debug, trace, warn};
 
 use crate::types::{DebounceConfig, EXCLUDED_DIRS};
@@ -249,12 +249,11 @@ pub fn map_notify_event(event: &notify::Event) -> Vec<WatchEvent> {
 /// regardless of OS path separators.
 pub fn is_excluded(path: &Path) -> bool {
     for component in path.components() {
-        if let std::path::Component::Normal(os_str) = component {
-            if let Some(s) = os_str.to_str() {
-                if EXCLUDED_DIRS.contains(&s) {
-                    return true;
-                }
-            }
+        if let std::path::Component::Normal(os_str) = component
+            && let Some(s) = os_str.to_str()
+            && EXCLUDED_DIRS.contains(&s)
+        {
+            return true;
         }
     }
     false
@@ -275,7 +274,11 @@ mod tests {
     }
 
     /// Helper: build a `FileWatcher` with custom config values for tighter test control.
-    fn watcher_with(cooldown_ms: u64, max_events_per_minute: u32, suppression_quiet_ms: u64) -> FileWatcher {
+    fn watcher_with(
+        cooldown_ms: u64,
+        max_events_per_minute: u32,
+        suppression_quiet_ms: u64,
+    ) -> FileWatcher {
         FileWatcher::new(DebounceConfig {
             cooldown_ms,
             max_events_per_minute,
@@ -360,8 +363,8 @@ mod tests {
         // so let's just verify the minute-window reset path by using a
         // fresh watcher that doesn't get suppressed first.
         let mut w2 = watcher_with(0, 2, 60_000);
-        assert!(w2.should_process(p, 0));    // count=1, window starts at 0
-        assert!(w2.should_process(p, 1));    // count=2
+        assert!(w2.should_process(p, 0)); // count=1, window starts at 0
+        assert!(w2.should_process(p, 1)); // count=2
         // cap hit at count=2
         assert!(!w2.should_process(p, 2));
         // After 60s quiet, suppression lifts
@@ -390,9 +393,9 @@ mod tests {
         let mut w = watcher_with(0, 2, 5000);
         let p = Path::new("/workspace/file.txt");
 
-        assert!(w.should_process(p, 0));    // 1
-        assert!(w.should_process(p, 1));    // 2, cap
-        assert!(!w.should_process(p, 2));   // suppressed, last_event_ms=2
+        assert!(w.should_process(p, 0)); // 1
+        assert!(w.should_process(p, 1)); // 2, cap
+        assert!(!w.should_process(p, 2)); // suppressed, last_event_ms=2
 
         // An event at 4000 -- not quiet enough (4000-2=3998 < 5000),
         // but it resets last_event_ms to 4000.
@@ -412,7 +415,7 @@ mod tests {
         let a = Path::new("/workspace/a.txt");
         let b = Path::new("/workspace/b.txt");
 
-        assert!(w.should_process(a, 0));  // a: count=1 -> cap
+        assert!(w.should_process(a, 0)); // a: count=1 -> cap
         assert!(!w.should_process(a, 1)); // a: suppressed
         // b is independent
         assert!(w.should_process(b, 2));
@@ -578,10 +581,7 @@ mod tests {
 
     #[test]
     fn map_other_event_dropped() {
-        let ev = make_notify_event(
-            EventKind::Other,
-            vec![PathBuf::from("/workspace/file.txt")],
-        );
+        let ev = make_notify_event(EventKind::Other, vec![PathBuf::from("/workspace/file.txt")]);
         let mapped = map_notify_event(&ev);
         assert!(mapped.is_empty());
     }

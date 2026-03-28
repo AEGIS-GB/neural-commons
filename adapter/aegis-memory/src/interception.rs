@@ -8,8 +8,8 @@
 //! Both produce MemoryIntegrity receipts.
 
 use serde::{Deserialize, Serialize};
-use std::path::{Path, PathBuf};
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Tracks the known state of each monitored memory file.
@@ -75,8 +75,7 @@ impl MemoryTracker {
 
     /// Initialize tracking for a file (first scan).
     pub fn track_file(&mut self, path: &Path) -> Result<MemoryFileState, crate::MemoryError> {
-        let content = std::fs::read(path)
-            .map_err(|e| crate::MemoryError::IoError(e))?;
+        let content = std::fs::read(path).map_err(crate::MemoryError::IoError)?;
         let hash = compute_content_hash(&content);
         let now_ms = current_epoch_ms();
 
@@ -107,8 +106,7 @@ impl MemoryTracker {
             };
         }
 
-        let content = std::fs::read(path)
-            .map_err(|e| crate::MemoryError::IoError(e))?;
+        let content = std::fs::read(path).map_err(crate::MemoryError::IoError)?;
         let new_hash = compute_content_hash(&content);
 
         match known_state {
@@ -238,7 +236,9 @@ mod tests {
         std::fs::write(&file_path, "modified content").unwrap();
 
         match tracker.check_file(&file_path).unwrap() {
-            ChangeDetection::Changed { old_hash, new_hash, .. } => {
+            ChangeDetection::Changed {
+                old_hash, new_hash, ..
+            } => {
                 assert_ne!(old_hash, new_hash);
             }
             other => panic!("expected Changed, got {:?}", other),

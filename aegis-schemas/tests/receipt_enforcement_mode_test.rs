@@ -1,4 +1,4 @@
-use aegis_schemas::receipt::{generate_blinding_nonce, ReceiptContext};
+use aegis_schemas::receipt::{ReceiptContext, generate_blinding_nonce};
 
 #[test]
 fn enforcement_mode_field_omitted_when_none() {

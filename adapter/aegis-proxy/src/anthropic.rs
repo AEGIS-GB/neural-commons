@@ -6,9 +6,9 @@
 
 use std::collections::HashMap;
 
+use axum::Json;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use axum::Json;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
@@ -101,27 +101,28 @@ pub fn parse_request(body: &[u8]) -> Result<AnthropicRequest, serde_json::Error>
 /// Concatenates all text content from messages and the system prompt
 /// into a format the SLM can analyze without wasting tokens on API metadata.
 pub fn extract_screen_payload(req: &AnthropicRequest) -> AnthropicScreenPayload {
-    let messages = req.messages.iter().map(|msg| {
-        let content = match &msg.content {
-            MessageContent::Text(s) => s.clone(),
-            MessageContent::Blocks(blocks) => {
-                blocks.iter()
-                    .filter_map(|b| {
-                        match b.block_type.as_str() {
-                            "text" => b.text.clone(),
-                            "tool_result" => b.content.clone(),
-                            _ => None,
-                        }
+    let messages = req
+        .messages
+        .iter()
+        .map(|msg| {
+            let content = match &msg.content {
+                MessageContent::Text(s) => s.clone(),
+                MessageContent::Blocks(blocks) => blocks
+                    .iter()
+                    .filter_map(|b| match b.block_type.as_str() {
+                        "text" => b.text.clone(),
+                        "tool_result" => b.content.clone(),
+                        _ => None,
                     })
                     .collect::<Vec<_>>()
-                    .join("\n")
+                    .join("\n"),
+            };
+            ScreenMessage {
+                role: msg.role.clone(),
+                content,
             }
-        };
-        ScreenMessage {
-            role: msg.role.clone(),
-            content,
-        }
-    }).collect();
+        })
+        .collect();
 
     AnthropicScreenPayload {
         system: req.system.clone(),
@@ -188,10 +189,10 @@ pub fn detect_provider(headers: &HashMap<String, String>) -> DetectedProvider {
         return DetectedProvider::Anthropic;
     }
 
-    if let Some(auth) = headers.get("authorization") {
-        if auth.starts_with("Bearer sk-") {
-            return DetectedProvider::OpenAI;
-        }
+    if let Some(auth) = headers.get("authorization")
+        && auth.starts_with("Bearer sk-")
+    {
+        return DetectedProvider::OpenAI;
     }
 
     DetectedProvider::Unknown
@@ -203,18 +204,20 @@ pub fn unsupported_provider_response(detected: DetectedProvider) -> Response {
         DetectedProvider::OpenAI => {
             "OpenAI provider detected but not yet supported. Phase 2 will add OpenAI support."
         }
-        _ => {
-            "Unknown provider. Missing anthropic-version header."
-        }
+        _ => "Unknown provider. Missing anthropic-version header.",
     };
 
-    (StatusCode::UNPROCESSABLE_ENTITY, Json(json!({
-        "error": "provider_not_supported",
-        "message": message,
-        "detected": format!("{:?}", detected),
-        "supported": ["anthropic"],
-        "docs": "https://docs.anthropic.com/en/api/messages"
-    }))).into_response()
+    (
+        StatusCode::UNPROCESSABLE_ENTITY,
+        Json(json!({
+            "error": "provider_not_supported",
+            "message": message,
+            "detected": format!("{:?}", detected),
+            "supported": ["anthropic"],
+            "docs": "https://docs.anthropic.com/en/api/messages"
+        })),
+    )
+        .into_response()
 }
 
 // ---------------------------------------------------------------------------
@@ -332,7 +335,10 @@ mod tests {
         assert!(text.contains("[user] Hello"));
         assert!(text.contains("[user] What is 2+2?"));
         // Assistant messages excluded (self-generated, not attack surface)
-        assert!(!text.contains("[assistant]"), "assistant messages should be excluded from screening");
+        assert!(
+            !text.contains("[assistant]"),
+            "assistant messages should be excluded from screening"
+        );
     }
 
     #[test]

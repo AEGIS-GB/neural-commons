@@ -231,16 +231,26 @@ pub struct SlmDimensions {
 pub trait SlmHook: Send + Sync {
     /// Fast screening: heuristic + classifier only (<10ms).
     /// Returns the decision if caught, or None if content needs deep SLM analysis.
+    /// Returns: Some((decision, verdict)) if fast layers made a decision,
+    /// None if content should go to deep SLM.
+    /// The String in the tuple is the classifier advisory (if any) to pass to screen_deep.
     fn screen_fast<'a>(
         &'a self,
         content: &'a str,
-    ) -> Pin<Box<dyn Future<Output = Option<(SlmDecision, Option<SlmVerdict>)>> + Send + 'a>>;
+    ) -> Pin<
+        Box<
+            dyn Future<Output = (Option<(SlmDecision, Option<SlmVerdict>)>, Option<String>)>
+                + Send
+                + 'a,
+        >,
+    >;
 
     /// Deep SLM screening: runs the 30B model (~2-3s).
-    /// Only called when screen_fast returns None (content passed fast layers).
+    /// `classifier_advisory` comes from screen_fast — threaded through, not global state.
     fn screen_deep<'a>(
         &'a self,
         content: &'a str,
+        classifier_advisory: Option<String>,
     ) -> Pin<Box<dyn Future<Output = (SlmDecision, Option<SlmVerdict>)> + Send + 'a>>;
 
     /// Full screening: fast + deep combined (legacy, blocking).
@@ -290,23 +300,12 @@ pub trait VaultHook: Send + Sync {
 ///
 /// The proxy server holds an `Arc<MiddlewareHooks>`. Each hook is optional;
 /// when `None`, the corresponding middleware step is skipped.
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct MiddlewareHooks {
     pub evidence: Option<Arc<dyn EvidenceHook>>,
     pub barrier: Option<Arc<dyn BarrierHook>>,
     pub slm: Option<Arc<dyn SlmHook>>,
     pub vault: Option<Arc<dyn VaultHook>>,
-}
-
-impl Default for MiddlewareHooks {
-    fn default() -> Self {
-        Self {
-            evidence: None,
-            barrier: None,
-            slm: None,
-            vault: None,
-        }
-    }
 }
 
 impl std::fmt::Debug for MiddlewareHooks {
@@ -372,12 +371,19 @@ impl SlmHook for NoopSlmHook {
     fn screen_fast<'a>(
         &'a self,
         _content: &'a str,
-    ) -> Pin<Box<dyn Future<Output = Option<(SlmDecision, Option<SlmVerdict>)>> + Send + 'a>> {
-        Box::pin(async { None })
+    ) -> Pin<
+        Box<
+            dyn Future<Output = (Option<(SlmDecision, Option<SlmVerdict>)>, Option<String>)>
+                + Send
+                + 'a,
+        >,
+    > {
+        Box::pin(async { (None, None) })
     }
     fn screen_deep<'a>(
         &'a self,
         _content: &'a str,
+        _classifier_advisory: Option<String>,
     ) -> Pin<Box<dyn Future<Output = (SlmDecision, Option<SlmVerdict>)> + Send + 'a>> {
         Box::pin(async { (SlmDecision::Admit, None) })
     }

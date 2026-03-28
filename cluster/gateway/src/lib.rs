@@ -10,6 +10,6 @@
 
 pub mod auth;
 pub mod embedding_pool;
+pub mod nats_bridge;
 pub mod routes;
 pub mod ws;
-pub mod nats_bridge;

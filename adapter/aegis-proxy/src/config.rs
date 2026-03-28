@@ -6,6 +6,13 @@ use serde::{Deserialize, Serialize};
 ///
 /// Phase 1: Anthropic only. When OpenAI support is added in Phase 2,
 /// a new variant is added here — no string comparisons needed.
+fn default_slm_max_content_chars() -> usize {
+    24_000
+}
+fn default_burst_size() -> u32 {
+    50
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum Provider {
@@ -40,6 +47,10 @@ pub struct ProxyConfig {
     /// Keyed by bot Ed25519 fingerprint, not source IP (D30).
     pub rate_limit_per_minute: u32,
 
+    /// Rate limit burst size (default: 50)
+    #[serde(default = "default_burst_size")]
+    pub rate_limit_burst: u32,
+
     /// Operating mode
     pub mode: ProxyMode,
 
@@ -57,6 +68,10 @@ pub struct ProxyConfig {
     /// as untrusted and refuse social engineering / exfiltration attempts.
     #[serde(default)]
     pub metaprompt_hardening: bool,
+
+    /// Max characters of content to send to SLM for screening (default: 24000).
+    #[serde(default = "default_slm_max_content_chars")]
+    pub slm_max_content_chars: usize,
 }
 
 /// Proxy operating mode.
@@ -123,6 +138,8 @@ impl Default for ProxyConfig {
             provider: Provider::Anthropic,
             allow_any_provider: false,
             metaprompt_hardening: false,
+            slm_max_content_chars: default_slm_max_content_chars(),
+            rate_limit_burst: default_burst_size(),
         }
     }
 }

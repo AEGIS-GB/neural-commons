@@ -23,5 +23,5 @@
 //!   as rate limits (D24). Structural guarantee, not a convention.
 
 pub mod balance;
-pub mod yield_calc;
 pub mod circuit_breaker;
+pub mod yield_calc;

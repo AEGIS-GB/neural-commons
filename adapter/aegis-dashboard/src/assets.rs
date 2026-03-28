@@ -180,6 +180,14 @@ table.dtable .screening-row:hover{background:#1c2128}
 <div class="card"><div class="stat" id="stat-memory">0</div><div class="stat-label">Memory Files</div></div>
 <div class="card"><div class="stat status-ok" id="stat-health">Healthy</div><div class="stat-label">System Health</div></div>
 </div>
+<div class="card" id="trustmark-card" style="margin-top:16px">
+<h2>TRUSTMARK Score</h2>
+<div style="display:flex;align-items:center;gap:16px;margin-bottom:12px">
+<div style="font-size:36px;font-weight:700" id="trustmark-total">—</div>
+<div id="trustmark-tier" style="font-size:14px;color:#8b949e"></div>
+</div>
+<div id="trustmark-dims"></div>
+</div>
 </div>
 <div class="panel" id="panel-evidence">
 <div class="card"><h2>Evidence Chain</h2>
@@ -332,6 +340,12 @@ async function poll(){
       const m=await(await fetch('/dashboard/api/memory')).json();
       document.getElementById('stat-memory').textContent=m.tracked_files;
       if(activeTab==='memory'){renderMemory(m);}
+    }catch(e){}
+  }
+  if(activeTab==='overview'){
+    try{
+      const tm=await(await fetch('/dashboard/api/trustmark')).json();
+      renderTrustmark(tm);
     }catch(e){}
   }
   if(activeTab==='slm'){
@@ -1048,6 +1062,67 @@ function closeSlmDetail(){
   tblCard.style.display='';
   if(slmData)renderSlmTable(slmData);
 }
+// ═══ TRUSTMARK RENDERING ═══
+const dimHints={
+  persona_integrity:{icon:'\uD83D\uDEE1',label:'Persona Integrity',desc:'Are your identity files (SOUL.md, AGENTS.md) intact and untampered?',good:'All protected files match their startup hashes. Manifest signature valid.',bad:'Files were modified between sessions or manifest signature is invalid.',fix:'Check barrier alerts in the Trace tab. Run aegis scan to verify file integrity.'},
+  chain_integrity:{icon:'\uD83D\uDD17',label:'Chain Integrity',desc:'Is your evidence chain unbroken? Every receipt links to the previous one via SHA-256.',good:'Full chain verified — no gaps, no tampering.',bad:'Chain verification failed or no receipts recorded yet.',fix:'Ensure Aegis is running continuously. Check aegis export --verify.'},
+  vault_hygiene:{icon:'\uD83D\uDD10',label:'Vault Hygiene',desc:'Are credentials being leaked through the proxy? Lower leak rate = higher score.',good:'No credentials detected in traffic. Your secrets stay on your machine.',bad:'Credentials found in request or response bodies.',fix:'Check which requests contain API keys. Rotate leaked credentials immediately.'},
+  temporal_consistency:{icon:'\u23F0',label:'Temporal Consistency',desc:'Is traffic arriving at regular intervals? Consistent patterns indicate healthy operation.',good:'Regular request intervals — your agent is operating on a stable rhythm.',bad:'Bursty or irregular traffic patterns detected.',fix:'This improves naturally as more traffic flows through Aegis. Send requests consistently.'},
+  relay_reliability:{icon:'\uD83D\uDD04',label:'Relay Reliability',desc:'Mesh relay performance. Not active until mesh network is enabled (Tier 3 feature).',good:'Relay is forwarding messages successfully.',bad:'Not applicable yet — mesh is not active.',fix:'This dimension activates when mesh networking is enabled. Default score: 50%.'},
+  contribution_volume:{icon:'\uD83D\uDCCA',label:'Contribution Volume',desc:'How active is this adapter? Measured against a baseline of 100 receipts/day.',good:'Meeting or exceeding the activity baseline.',bad:'Low activity — the adapter is installed but underutilized.',fix:'Route more traffic through Aegis. Any channel (web, Telegram, cron) counts equally.'}
+};
+function renderTrustmark(tm){
+  const total=document.getElementById('trustmark-total');
+  const tier=document.getElementById('trustmark-tier');
+  const dims=document.getElementById('trustmark-dims');
+  if(!total)return;
+  // Summary line (small, at top)
+  const col=tm.total>=0.8?'#3fb950':tm.total>=0.5?'#d29922':'#f85149';
+  const statusLabel=tm.total>=0.8?'healthy':tm.total>=0.5?'needs attention':'critical';
+  total.style.cssText='font-size:16px;font-weight:600';
+  total.innerHTML='TRUSTMARK <span style="color:'+col+'">'+tm.total.toFixed(3)+'</span> <span style="color:#8b949e;font-weight:400;font-size:13px">'+statusLabel+'</span>';
+  const tierText=tm.tier?(' · '+tm.tier.current+' · Identity: '+Math.round(tm.identity_age_hours||0)+'h'):'';
+  tier.innerHTML='<span style="color:#8b949e;font-size:12px">'+tierText+'</span>';
+  // Dimension cards
+  let h='';
+  for(const d of tm.dimensions||[]){
+    const hint=dimHints[d.name]||{icon:'?',label:d.name,desc:''};
+    const st=d.status||'attention';
+    const stCol=st==='healthy'?'#3fb950':st==='attention'?'#d29922':'#f85149';
+    const stIcon=st==='healthy'?'\u2713':st==='attention'?'!':'\u2717';
+    const barCol=st==='healthy'?'#238636':st==='attention'?'#9e6a03':'#da3633';
+    const targetPct=Math.round((d.target||0.8)*100);
+    const valuePct=Math.round(d.value*100);
+    h+='<div style="background:#0d1117;border:1px solid '+(st==='healthy'?'#21262d':st==='attention'?'#9e6a03':'#da3633')+';border-radius:6px;padding:10px 14px;margin-bottom:8px">';
+    // Header: icon + label + status + score/target
+    h+='<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">';
+    h+='<span style="font-size:16px">'+hint.icon+'</span>';
+    h+='<span style="font-size:13px;font-weight:600;color:#e1e4e8">'+hint.label+'</span>';
+    h+='<span style="font-size:11px;color:'+stCol+';margin-left:8px">'+stIcon+' '+st+'</span>';
+    h+='<span style="font-size:12px;color:#8b949e;margin-left:auto">';
+    h+='<span style="color:'+stCol+';font-weight:600">'+d.value.toFixed(3)+'</span>';
+    h+=' / '+d.target.toFixed(2)+' target';
+    h+='<span style="color:#484f58;margin-left:6px">(weight '+(d.weight*100).toFixed(0)+'%)</span>';
+    h+='</span></div>';
+    // Progress bar with target marker
+    h+='<div style="position:relative;height:8px;background:#21262d;border-radius:4px;overflow:visible;margin-bottom:8px">';
+    h+='<div style="width:'+Math.min(valuePct,100)+'%;height:100%;background:'+barCol+';border-radius:4px;transition:width 0.3s"></div>';
+    h+='<div style="position:absolute;left:'+targetPct+'%;top:-2px;width:2px;height:12px;background:#e1e4e8;border-radius:1px" title="target: '+d.target.toFixed(2)+'"></div>';
+    h+='</div>';
+    // Description
+    h+='<div style="font-size:11px;color:#8b949e;margin-bottom:4px">'+hint.desc+'</div>';
+    // Inputs + formula
+    if(d.inputs)h+='<div style="font-size:10px;color:#8b949e;font-family:monospace">'+d.inputs+'</div>';
+    if(d.formula)h+='<div style="font-size:10px;color:#484f58;font-family:monospace">'+d.formula+'</div>';
+    // How to improve
+    if(d.improve&&d.improve.length>0){
+      h+='<div style="font-size:11px;color:#58a6ff;margin-top:4px">\u2192 '+d.improve+'</div>';
+    }
+    h+='</div>';
+  }
+  dims.innerHTML=h;
+}
+
 // ═══ TRACE VIEW RENDERING ═══
 function renderTrace(data,status){
   // Health bar

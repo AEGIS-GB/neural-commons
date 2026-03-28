@@ -36,10 +36,8 @@ fn canonicalize_value(value: &serde_json::Value) -> Result<String, Canonicalizat
         serde_json::Value::Null => Ok("null".to_string()),
         serde_json::Value::Bool(b) => Ok(if *b { "true" } else { "false" }.to_string()),
         serde_json::Value::Number(n) => Ok(n.to_string()),
-        serde_json::Value::String(s) => {
-            Ok(serde_json::to_string(s)
-                .map_err(|e| CanonicalizationError::SerializationFailed(e.to_string()))?)
-        }
+        serde_json::Value::String(s) => Ok(serde_json::to_string(s)
+            .map_err(|e| CanonicalizationError::SerializationFailed(e.to_string()))?),
         serde_json::Value::Array(arr) => {
             let items: Result<Vec<String>, _> = arr.iter().map(canonicalize_value).collect();
             Ok(format!("[{}]", items?.join(",")))

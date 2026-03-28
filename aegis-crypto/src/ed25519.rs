@@ -25,7 +25,7 @@ pub fn generate_keypair() -> SigningKey {
 
 /// Compute the bot fingerprint (thumbprint) from a verifying key — raw bytes
 pub fn fingerprint(key: &VerifyingKey) -> [u8; 32] {
-    use sha2::{Sha256, Digest};
+    use sha2::{Digest, Sha256};
     let mut hasher = Sha256::new();
     hasher.update(key.as_bytes());
     hasher.finalize().into()

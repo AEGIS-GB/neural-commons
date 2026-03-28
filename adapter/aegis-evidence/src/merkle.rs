@@ -36,10 +36,10 @@ pub fn compute_merkle_root(hashes: &[String]) -> String {
         while i < current_level.len() {
             if i + 1 < current_level.len() {
                 // Combine pair: hash(left_bytes || right_bytes)
-                let left_bytes = hex::decode(&current_level[i])
-                    .expect("merkle hash must be valid hex");
-                let right_bytes = hex::decode(&current_level[i + 1])
-                    .expect("merkle hash must be valid hex");
+                let left_bytes =
+                    hex::decode(&current_level[i]).expect("merkle hash must be valid hex");
+                let right_bytes =
+                    hex::decode(&current_level[i + 1]).expect("merkle hash must be valid hex");
 
                 let mut combined = Vec::with_capacity(left_bytes.len() + right_bytes.len());
                 combined.extend_from_slice(&left_bytes);
@@ -65,7 +65,10 @@ pub fn compute_merkle_root(hashes: &[String]) -> String {
 /// Collects receipt hashes, computes Merkle root, builds histogram,
 /// and packages everything into a RollupDetail.
 pub fn build_rollup(receipts: &[Receipt], chain_state: &ChainState) -> RollupDetail {
-    assert!(!receipts.is_empty(), "cannot build rollup from empty receipts");
+    assert!(
+        !receipts.is_empty(),
+        "cannot build rollup from empty receipts"
+    );
 
     let seq_start = receipts.first().unwrap().core.seq;
     let seq_end = receipts.last().unwrap().core.seq;
@@ -112,9 +115,9 @@ pub fn build_histogram(receipts: &[Receipt]) -> RollupHistogram {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::chain::{advance_chain_state, create_receipt, init_genesis};
     use aegis_crypto::ed25519::{self, generate_keypair};
     use aegis_schemas::{ReceiptContext, ReceiptType, receipt::generate_blinding_nonce};
-    use crate::chain::{create_receipt, init_genesis, advance_chain_state};
 
     fn make_context() -> ReceiptContext {
         ReceiptContext {
@@ -132,7 +135,7 @@ mod tests {
     #[test]
     fn test_merkle_single_hash() {
         let hash = hex::encode(aegis_crypto::sha256::hash(b"hello"));
-        let root = compute_merkle_root(&[hash.clone()]);
+        let root = compute_merkle_root(std::slice::from_ref(&hash));
         assert_eq!(root, hash);
     }
 
@@ -204,7 +207,8 @@ mod tests {
         let mut receipts = Vec::new();
 
         for _ in 0..3 {
-            let r = create_receipt(&key, &bot_id, ReceiptType::ApiCall, make_context(), &state).unwrap();
+            let r = create_receipt(&key, &bot_id, ReceiptType::ApiCall, make_context(), &state)
+                .unwrap();
             state = advance_chain_state(&state, &r);
             receipts.push(r);
         }
@@ -224,7 +228,11 @@ mod tests {
         let mut state = init_genesis();
         let mut receipts = Vec::new();
 
-        let types = [ReceiptType::ApiCall, ReceiptType::ApiCall, ReceiptType::WriteBarrier];
+        let types = [
+            ReceiptType::ApiCall,
+            ReceiptType::ApiCall,
+            ReceiptType::WriteBarrier,
+        ];
         for t in &types {
             let r = create_receipt(&key, &bot_id, t.clone(), make_context(), &state).unwrap();
             state = advance_chain_state(&state, &r);

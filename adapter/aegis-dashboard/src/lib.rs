@@ -6,8 +6,8 @@
 //! Total size: <50KB (HTML + CSS + JS embedded in binary).
 //! Refresh: 2s recursive-setTimeout polling + SSE push for critical alerts (D12).
 
-pub mod routes;
 pub mod assets;
+pub mod routes;
 pub mod traffic;
 
 pub use routes::{DashboardAlert, DashboardSharedState};
