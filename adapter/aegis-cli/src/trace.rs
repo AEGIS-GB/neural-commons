@@ -163,8 +163,35 @@ pub fn run(
     }
 }
 
+/// Read dashboard auth token from config files.
+fn get_dashboard_token() -> Option<String> {
+    let candidates = [
+        std::path::PathBuf::from(".aegis/config/config.toml"),
+        dirs::home_dir()?.join(".aegis/config/config.toml"),
+    ];
+    for path in &candidates {
+        if let Ok(content) = std::fs::read_to_string(path) {
+            for line in content.lines() {
+                if let Some(val) = line.trim().strip_prefix("auth_token") {
+                    let val = val.trim().trim_start_matches('=').trim().trim_matches('"');
+                    if !val.is_empty() {
+                        return Some(val.to_string());
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
 fn fetch_json<T: for<'de> Deserialize<'de>>(url: &str) -> Option<T> {
-    let resp = reqwest::blocking::get(url).ok()?;
+    let client = reqwest::blocking::Client::new();
+    let mut req = client.get(url);
+    // Read dashboard auth token from config
+    if let Some(token) = get_dashboard_token() {
+        req = req.header("Authorization", format!("Bearer {token}"));
+    }
+    let resp = req.send().ok()?;
     if !resp.status().is_success() {
         eprintln!("  error: {} returned {}", url, resp.status());
         return None;

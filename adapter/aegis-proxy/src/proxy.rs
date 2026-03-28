@@ -416,18 +416,28 @@ async fn forward_request(
         channel_trust,
     };
 
+    // Helper: record a blocked/rejected request in the traffic store before returning.
+    let record_rejection = |status: u16, reason: &str, body: &[u8], slm_verdict: Option<&middleware::SlmVerdict>| {
+        if let Some(ref recorder) = state.traffic_recorder {
+            let channel = req_info.channel_trust.channel.as_deref();
+            let trust = format!("{:?}", req_info.channel_trust.trust_level).to_lowercase();
+            let model = extract_model_from_body(body);
+            recorder(
+                method.as_ref(), &path, status, body, reason.as_bytes(),
+                start_time.elapsed().as_millis() as u64, false, slm_verdict,
+                channel, Some(&trust), model.as_deref(),
+            );
+        }
+    };
+
     // --- Reject requests without Authorization header early ---
-    // Prevents DDoS via SLM: without this, every garbage request triggers
-    // expensive SLM screening before the upstream rejects it with 401.
     if !headers.contains_key("authorization")
         && !headers.contains_key("x-api-key")
         && state.config.mode != ProxyMode::PassThrough
     {
-        return Ok((
-            StatusCode::UNAUTHORIZED,
-            "Missing Authorization header — request rejected before screening",
-        )
-            .into_response());
+        let reason = "Missing Authorization header — request rejected before screening";
+        record_rejection(401, reason, &body_bytes, None);
+        return Ok((StatusCode::UNAUTHORIZED, reason).into_response());
     }
 
     // --- Parse Anthropic request for SLM screening (BUG 5 fix) ---
@@ -461,6 +471,7 @@ async fn forward_request(
                     if state.config.mode == ProxyMode::Enforce =>
                 {
                     warn!(path = %path, reason = %reason, "barrier blocked request");
+                    record_rejection(403, &format!("blocked: {reason}"), &body_bytes, None);
                     return Ok(
                         (StatusCode::FORBIDDEN, format!("blocked: {reason}")).into_response()
                     );
@@ -538,6 +549,7 @@ async fn forward_request(
                             if state.config.mode == ProxyMode::Enforce =>
                         {
                             warn!(path = %path, reason = %reason, "SLM fast-layer rejected request");
+                            record_rejection(403, &format!("rejected: {reason}"), &body_bytes, slm_verdict.as_ref());
                             return Ok((StatusCode::FORBIDDEN, format!("rejected: {reason}"))
                                 .into_response());
                         }
@@ -545,6 +557,7 @@ async fn forward_request(
                             if state.config.mode == ProxyMode::Enforce =>
                         {
                             warn!(path = %path, reason = %reason, "SLM fast-layer quarantined — blocking in enforce mode");
+                            record_rejection(403, &format!("blocked: {reason}"), &body_bytes, slm_verdict.as_ref());
                             return Ok((StatusCode::FORBIDDEN, format!("blocked: {reason}"))
                                 .into_response());
                         }
@@ -588,6 +601,7 @@ async fn forward_request(
                                 if state.config.mode == ProxyMode::Enforce =>
                             {
                                 warn!(path = %path, reason = %reason, "SLM deep-layer rejected request (sequential)");
+                                record_rejection(403, &format!("rejected: {reason}"), &body_bytes, slm_verdict.as_ref());
                                 return Ok((StatusCode::FORBIDDEN, format!("rejected: {reason}"))
                                     .into_response());
                             }
@@ -595,6 +609,7 @@ async fn forward_request(
                                 if state.config.mode == ProxyMode::Enforce =>
                             {
                                 warn!(path = %path, reason = %reason, "SLM deep-layer quarantined — blocking (sequential)");
+                                record_rejection(403, &format!("blocked: {reason}"), &body_bytes, slm_verdict.as_ref());
                                 return Ok((StatusCode::FORBIDDEN, format!("blocked: {reason}"))
                                     .into_response());
                             }
