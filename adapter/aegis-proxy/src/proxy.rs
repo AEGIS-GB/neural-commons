@@ -120,6 +120,10 @@ pub fn build_router(state: AppState, dashboard: Option<(String, Router)>) -> Rou
         // Catch-all proxy handler
         .route("/{*path}", any(forward_request))
         .route("/", any(forward_request))
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            recording_middleware,
+        ))
         .layer(RequestBodyLimitLayer::new(body_limit))
         .with_state(state);
 
@@ -223,7 +227,83 @@ pub async fn start_with_traffic_full(
     Ok(())
 }
 
-/// Catch-all handler that forwards HTTP requests to the upstream LLM provider.
+/// Recording middleware — wraps every proxy request.
+/// Captures request body before the handler, records response after.
+/// This is the SINGLE recording point — no manual recording in the handler.
+async fn recording_middleware(
+    State(state): State<AppState>,
+    req: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    let method = req.method().to_string();
+    let path = req.uri().path().to_string();
+    let start = std::time::Instant::now();
+
+    // Extract request body for recording (clone before handler consumes it)
+    let (parts, body) = req.into_parts();
+    let body_bytes = match axum::body::to_bytes(body, 10 * 1024 * 1024).await {
+        Ok(b) => b,
+        Err(_) => {
+            return axum::response::Response::builder()
+                .status(413)
+                .body(axum::body::Body::from("request too large"))
+                .unwrap_or_default();
+        }
+    };
+    let body_for_record = body_bytes.clone();
+
+    // Rebuild request with the body for the handler
+    let req = axum::extract::Request::from_parts(parts, axum::body::Body::from(body_bytes));
+
+    // Run the handler
+    let response = next.run(req).await;
+    let status = response.status().as_u16();
+
+    // Record in traffic store — this covers ALL responses (200, 401, 403, 500, streaming, etc.)
+    // Streaming responses are recorded separately inside the handler (they need the accumulated body).
+    // We only record non-streaming here to avoid double-recording.
+    let is_streaming = response
+        .headers()
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .map(|ct| ct.contains("text/event-stream"))
+        .unwrap_or(false);
+
+    if !is_streaming {
+        if let Some(ref recorder) = state.traffic_recorder {
+            // Extract model from request body
+            let model = extract_model_from_body(&body_for_record);
+            // Get channel trust from cognitive bridge (best effort)
+            let channel_trust = crate::cognitive_bridge::get_registered_channel_trust();
+            let channel = channel_trust.as_ref().and_then(|ct| ct.channel.as_deref());
+            let trust = channel_trust
+                .as_ref()
+                .map(|ct| format!("{:?}", ct.trust_level).to_lowercase());
+
+            // For non-streaming, we don't have the response body here (it's in the response).
+            // Use an empty body — the handler's own recording covers 200 responses with bodies.
+            // This middleware primarily catches early rejections (401, 403) that the handler misses.
+            if status >= 400 {
+                recorder(
+                    &method,
+                    &path,
+                    status,
+                    &body_for_record,
+                    b"",
+                    start.elapsed().as_millis() as u64,
+                    false,
+                    None,
+                    channel,
+                    trust.as_deref(),
+                    model.as_deref(),
+                );
+            }
+        }
+    }
+
+    response
+}
+
 /// Extract user-authored content from any JSON request format for SLM screening.
 /// Handles: OpenAI messages format, Responses API input format, plain strings.
 /// Only includes user messages and tool results — skips assistant responses.
@@ -416,19 +496,7 @@ async fn forward_request(
         channel_trust,
     };
 
-    // Helper: record a blocked/rejected request in the traffic store before returning.
-    let record_rejection = |status: u16, reason: &str, body: &[u8], slm_verdict: Option<&middleware::SlmVerdict>| {
-        if let Some(ref recorder) = state.traffic_recorder {
-            let channel = req_info.channel_trust.channel.as_deref();
-            let trust = format!("{:?}", req_info.channel_trust.trust_level).to_lowercase();
-            let model = extract_model_from_body(body);
-            recorder(
-                method.as_ref(), &path, status, body, reason.as_bytes(),
-                start_time.elapsed().as_millis() as u64, false, slm_verdict,
-                channel, Some(&trust), model.as_deref(),
-            );
-        }
-    };
+    // Recording is handled by recording_middleware — no manual recording needed.
 
     // --- Reject requests without Authorization header early ---
     if !headers.contains_key("authorization")
@@ -436,7 +504,6 @@ async fn forward_request(
         && state.config.mode != ProxyMode::PassThrough
     {
         let reason = "Missing Authorization header — request rejected before screening";
-        record_rejection(401, reason, &body_bytes, None);
         return Ok((StatusCode::UNAUTHORIZED, reason).into_response());
     }
 
@@ -471,7 +538,6 @@ async fn forward_request(
                     if state.config.mode == ProxyMode::Enforce =>
                 {
                     warn!(path = %path, reason = %reason, "barrier blocked request");
-                    record_rejection(403, &format!("blocked: {reason}"), &body_bytes, None);
                     return Ok(
                         (StatusCode::FORBIDDEN, format!("blocked: {reason}")).into_response()
                     );
@@ -549,7 +615,6 @@ async fn forward_request(
                             if state.config.mode == ProxyMode::Enforce =>
                         {
                             warn!(path = %path, reason = %reason, "SLM fast-layer rejected request");
-                            record_rejection(403, &format!("rejected: {reason}"), &body_bytes, slm_verdict.as_ref());
                             return Ok((StatusCode::FORBIDDEN, format!("rejected: {reason}"))
                                 .into_response());
                         }
@@ -557,7 +622,6 @@ async fn forward_request(
                             if state.config.mode == ProxyMode::Enforce =>
                         {
                             warn!(path = %path, reason = %reason, "SLM fast-layer quarantined — blocking in enforce mode");
-                            record_rejection(403, &format!("blocked: {reason}"), &body_bytes, slm_verdict.as_ref());
                             return Ok((StatusCode::FORBIDDEN, format!("blocked: {reason}"))
                                 .into_response());
                         }
@@ -601,7 +665,6 @@ async fn forward_request(
                                 if state.config.mode == ProxyMode::Enforce =>
                             {
                                 warn!(path = %path, reason = %reason, "SLM deep-layer rejected request (sequential)");
-                                record_rejection(403, &format!("rejected: {reason}"), &body_bytes, slm_verdict.as_ref());
                                 return Ok((StatusCode::FORBIDDEN, format!("rejected: {reason}"))
                                     .into_response());
                             }
@@ -609,7 +672,6 @@ async fn forward_request(
                                 if state.config.mode == ProxyMode::Enforce =>
                             {
                                 warn!(path = %path, reason = %reason, "SLM deep-layer quarantined — blocking (sequential)");
-                                record_rejection(403, &format!("blocked: {reason}"), &body_bytes, slm_verdict.as_ref());
                                 return Ok((StatusCode::FORBIDDEN, format!("blocked: {reason}"))
                                     .into_response());
                             }

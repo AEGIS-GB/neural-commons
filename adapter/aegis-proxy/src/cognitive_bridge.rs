@@ -81,9 +81,7 @@ async fn scan_handler() -> Json<ScanResponse> {
 }
 
 /// GET /aegis/status — return adapter status from live state.
-async fn status_handler(
-    State(state): State<crate::proxy::AppState>,
-) -> Json<StatusResponse> {
+async fn status_handler(State(state): State<crate::proxy::AppState>) -> Json<StatusResponse> {
     let mode = format!("{:?}", state.config.mode).to_lowercase();
     Json(StatusResponse {
         mode,
