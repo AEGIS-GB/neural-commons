@@ -2,6 +2,7 @@ mode = "observe_only"
 data_dir = "/home/aegis/aegis/neural-commons/.aegis"
 
 [dashboard]
+auth_token = "aegis_dk_afc854b3df4239ec38bb06b1ef97645a"
 path = "/dashboard"
 
 [memory]
