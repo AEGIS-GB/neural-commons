@@ -296,7 +296,10 @@ async fn recording_middleware(
     // (non-streaming completed, streaming stream-task). Middleware only records early
     // rejections (401, 422, 429) and SLM blocks (403 with verdict in RecordingContext).
     let rec_ctx = response.extensions().get::<RecordingContext>().cloned();
-    let handler_recorded = rec_ctx.as_ref().map(|c| c.handler_recorded).unwrap_or(false);
+    let handler_recorded = rec_ctx
+        .as_ref()
+        .map(|c| c.handler_recorded)
+        .unwrap_or(false);
 
     if !handler_recorded && !is_streaming {
         if let Some(ref recorder) = state.traffic_recorder {
@@ -306,7 +309,8 @@ async fn recording_middleware(
             let context_str = rec_ctx.as_ref().and_then(|c| c.context.clone());
             let slm_v = rec_ctx.as_ref().and_then(|c| c.slm_verdict.clone());
             let registered_ctx = crate::cognitive_bridge::get_registered_channel_trust();
-            let context = context_str.as_deref()
+            let context = context_str
+                .as_deref()
                 .or_else(|| registered_ctx.as_ref().and_then(|ct| ct.channel.as_deref()));
 
             recorder(
@@ -491,11 +495,16 @@ async fn forward_request(
         // Parse context cert if present on the request header
         let cert_header = headers.get("x-aegis-channel-cert");
         let cert = cert_header.and_then(|v| crate::channel_trust::parse_channel_cert(v));
-        let cert_verified = cert.as_ref().map(|c| {
-            config.signing_pubkey.as_ref()
-                .map(|pk| crate::channel_trust::verify_cert(c, pk))
-                .unwrap_or(false)
-        }).unwrap_or(false);
+        let cert_verified = cert
+            .as_ref()
+            .map(|c| {
+                config
+                    .signing_pubkey
+                    .as_ref()
+                    .map(|pk| crate::channel_trust::verify_cert(c, pk))
+                    .unwrap_or(false)
+            })
+            .unwrap_or(false);
 
         if !config.channels.is_empty() {
             // Channel-based trust: resolve from source IP.
@@ -580,9 +589,12 @@ async fn forward_request(
                     if state.config.mode == ProxyMode::Enforce =>
                 {
                     warn!(path = %path, reason = %reason, "barrier blocked request");
-                    let mut resp = (StatusCode::FORBIDDEN, format!("blocked: {reason}")).into_response();
+                    let mut resp =
+                        (StatusCode::FORBIDDEN, format!("blocked: {reason}")).into_response();
                     resp.extensions_mut().insert(RecordingContext {
-                        trust_level: Some(format!("{:?}", req_info.channel_trust.trust_level).to_lowercase()),
+                        trust_level: Some(
+                            format!("{:?}", req_info.channel_trust.trust_level).to_lowercase(),
+                        ),
                         context: req_info.channel_trust.channel.clone(),
                         ..Default::default()
                     });
@@ -653,17 +665,21 @@ async fn forward_request(
                     }
                 };
                 // Helper: build a 403 response with RecordingContext attached
-                let make_blocked_response = |reason: &str, verdict: &Option<middleware::SlmVerdict>| {
-                    let ctx = RecordingContext {
-                        handler_recorded: false, // middleware should record this
-                        slm_verdict: verdict.clone(),
-                        trust_level: Some(format!("{:?}", req_info.channel_trust.trust_level).to_lowercase()),
-                        context: req_info.channel_trust.channel.clone(),
+                let make_blocked_response =
+                    |reason: &str, verdict: &Option<middleware::SlmVerdict>| {
+                        let ctx = RecordingContext {
+                            handler_recorded: false, // middleware should record this
+                            slm_verdict: verdict.clone(),
+                            trust_level: Some(
+                                format!("{:?}", req_info.channel_trust.trust_level).to_lowercase(),
+                            ),
+                            context: req_info.channel_trust.channel.clone(),
+                        };
+                        let mut resp =
+                            (StatusCode::FORBIDDEN, format!("blocked: {reason}")).into_response();
+                        resp.extensions_mut().insert(ctx);
+                        resp
                     };
-                    let mut resp = (StatusCode::FORBIDDEN, format!("blocked: {reason}")).into_response();
-                    resp.extensions_mut().insert(ctx);
-                    resp
-                };
 
                 let (fast_result, classifier_advisory) = slm.screen_fast(&screen_content).await;
                 if let Some((decision, verdict)) = fast_result {
@@ -1072,7 +1088,9 @@ async fn forward_request(
                     Some(&stream_trust),
                     stream_model.as_deref(),
                     stream_context.as_deref(),
-                    stream_slm_verdict.as_ref().and_then(|v| serde_json::to_value(v).ok()),
+                    stream_slm_verdict
+                        .as_ref()
+                        .and_then(|v| serde_json::to_value(v).ok()),
                 )
             } else {
                 None
@@ -1217,7 +1235,9 @@ async fn forward_request(
             Some(&format!("{:?}", req_info.channel_trust.trust_level).to_lowercase()),
             extract_model_from_body(&body_bytes).as_deref(),
             req_info.channel_trust.channel.as_deref(),
-            slm_verdict.as_ref().and_then(|v| serde_json::to_value(v).ok()),
+            slm_verdict
+                .as_ref()
+                .and_then(|v| serde_json::to_value(v).ok()),
         )
     } else {
         None

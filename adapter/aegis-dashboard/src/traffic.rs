@@ -158,8 +158,14 @@ impl TrafficStore {
             && let Some(entry) = entries.iter_mut().find(|e| e.id == id)
         {
             entry.slm_duration_ms = verdict.get("screening_ms").and_then(|v| v.as_u64());
-            entry.slm_verdict = verdict.get("action").and_then(|v| v.as_str()).map(|s| s.to_string());
-            entry.slm_threat_score = verdict.get("threat_score").and_then(|v| v.as_u64()).map(|v| v as u32);
+            entry.slm_verdict = verdict
+                .get("action")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+            entry.slm_threat_score = verdict
+                .get("threat_score")
+                .and_then(|v| v.as_u64())
+                .map(|v| v as u32);
             entry.slm_detail = Some(verdict.clone());
         }
     }

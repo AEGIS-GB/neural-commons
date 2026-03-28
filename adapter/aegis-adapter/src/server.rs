@@ -900,7 +900,12 @@ pub async fn start(config: AdapterConfig, mode_override: Option<Mode>) -> Result
         let contexts: Vec<(String, aegis_schemas::TrustLevel)> = tc
             .contexts
             .iter()
-            .map(|cp| (cp.pattern.clone(), parse_trust_level(cp.label.as_deref().unwrap_or("unknown"))))
+            .map(|cp| {
+                (
+                    cp.pattern.clone(),
+                    parse_trust_level(cp.label.as_deref().unwrap_or("unknown")),
+                )
+            })
             .collect();
 
         let signing_pubkey = tc

@@ -139,10 +139,7 @@ pub fn verify_cert(cert: &ChannelCert, pubkey_bytes: &[u8]) -> bool {
 ///
 /// This is the primary trust resolution — access control is based on the
 /// Aegis channel (= source IP), not the agent-framework context.
-pub fn resolve_channel_trust(
-    source_ip: &str,
-    config: &TrustConfig,
-) -> TrustLevel {
+pub fn resolve_channel_trust(source_ip: &str, config: &TrustConfig) -> TrustLevel {
     let matched = config
         .channels
         .iter()
@@ -474,7 +471,10 @@ mod tests {
             channels: vec![("localhost".into(), TrustLevel::Trusted)],
             ..Default::default()
         };
-        assert_eq!(resolve_channel_trust("127.0.0.1", &config), TrustLevel::Trusted);
+        assert_eq!(
+            resolve_channel_trust("127.0.0.1", &config),
+            TrustLevel::Trusted
+        );
         assert_eq!(resolve_channel_trust("::1", &config), TrustLevel::Trusted);
     }
 
@@ -484,7 +484,10 @@ mod tests {
             channels: vec![("localhost".into(), TrustLevel::Trusted)],
             ..Default::default()
         };
-        assert_eq!(resolve_channel_trust("85.1.2.3", &config), TrustLevel::Unknown);
+        assert_eq!(
+            resolve_channel_trust("85.1.2.3", &config),
+            TrustLevel::Unknown
+        );
     }
 
     #[test]
@@ -496,9 +499,18 @@ mod tests {
             ],
             ..Default::default()
         };
-        assert_eq!(resolve_channel_trust("192.168.1.50", &config), TrustLevel::Trusted);
-        assert_eq!(resolve_channel_trust("127.0.0.1", &config), TrustLevel::Full);
-        assert_eq!(resolve_channel_trust("10.0.0.1", &config), TrustLevel::Unknown);
+        assert_eq!(
+            resolve_channel_trust("192.168.1.50", &config),
+            TrustLevel::Trusted
+        );
+        assert_eq!(
+            resolve_channel_trust("127.0.0.1", &config),
+            TrustLevel::Full
+        );
+        assert_eq!(
+            resolve_channel_trust("10.0.0.1", &config),
+            TrustLevel::Unknown
+        );
     }
 
     #[test]

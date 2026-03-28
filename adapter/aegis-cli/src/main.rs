@@ -1585,7 +1585,11 @@ fn trust_list_patterns(config: &AdapterConfig) {
         let sep = format!("  {}", "─".repeat(55));
         eprintln!("{sep}");
         for ctx in contexts {
-            eprintln!("  {:<40} {}", ctx.pattern, ctx.label.as_deref().unwrap_or("—"));
+            eprintln!(
+                "  {:<40} {}",
+                ctx.pattern,
+                ctx.label.as_deref().unwrap_or("—")
+            );
         }
     }
 }
