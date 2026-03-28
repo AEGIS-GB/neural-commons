@@ -5,6 +5,10 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+[features]
+default = []
+prompt-guard = ["aegis-slm/prompt-guard"]
+
 [dependencies]
 aegis-crypto = { path = "../../aegis-crypto" }
 aegis-schemas = { path = "../../aegis-schemas" }
