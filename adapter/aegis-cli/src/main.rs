@@ -438,17 +438,21 @@ fn main() {
         Some(Mode::ObserveOnly) | None => "observe-only",
     };
 
-    // Load configuration — resolve relative paths against $HOME
+    // Load configuration — always prefer $HOME/.aegis/config/config.toml
+    // so CLI and systemd service use the same config file.
+    // Only use cwd-relative if --config was explicitly specified.
     let config_path = {
         let p = Path::new(&cli.config);
-        if p.is_absolute() || p.exists() {
+        if p.is_absolute() {
             p.to_path_buf()
         } else if let Some(home) = dirs::home_dir() {
-            let resolved = home.join(p);
-            if resolved.exists() {
-                resolved
-            } else {
+            let home_config = home.join(p);
+            if home_config.exists() {
+                home_config
+            } else if p.exists() {
                 p.to_path_buf()
+            } else {
+                home_config // prefer home even if it doesn't exist yet
             }
         } else {
             p.to_path_buf()
