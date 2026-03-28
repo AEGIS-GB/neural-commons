@@ -430,8 +430,6 @@ fn main() {
         None
     };
 
-    // Note: --observe-only flag is wired to EnforcementConfig after config load (below).
-
     let mode_label = match mode_override {
         Some(Mode::PassThrough) => "pass-through",
         Some(Mode::Enforce) => "enforce",
@@ -476,14 +474,8 @@ fn main() {
         config.proxy.listen_addr = listen.clone();
     }
 
-    // D30: --enforce sets ALL switchable checks to enforce (block on violations).
-    if cli.enforce {
-        config.enforcement = aegis_schemas::config::EnforcementConfig::enforce_default();
-    }
-    // D30: --observe-only sets write_barrier + slm_reject to observe (warn only).
-    if cli.observe_only {
-        config.enforcement.apply_observe_only_flag();
-    }
+    // Mode is set above via mode_override — no per-check enforcement config needed.
+    // observe_only = warn only, enforce = block on violations.
 
     // --no-slm disables SLM screening entirely (no Ollama, no heuristic fallback)
     if cli.no_slm {

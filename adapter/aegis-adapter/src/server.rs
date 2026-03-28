@@ -166,16 +166,15 @@ pub async fn start(config: AdapterConfig, mode_override: Option<Mode>) -> Result
             }
         }),
         observe_mode_checks_fn: Arc::new({
-            let enforcement = config.enforcement.clone();
+            let mode = mode.clone();
             move || {
-                let mut checks = vec![];
-                if enforcement.write_barrier.is_observe() {
-                    checks.push("write_barrier".to_string());
+                // No per-check granularity — mode controls everything.
+                // observe_only = all checks observe, enforce = all checks enforce.
+                if mode == crate::Mode::ObserveOnly {
+                    vec!["write_barrier".to_string(), "slm_reject".to_string()]
+                } else {
+                    vec![]
                 }
-                if enforcement.slm_reject.is_observe() {
-                    checks.push("slm_reject".to_string());
-                }
-                checks
             }
         }),
         start_time,

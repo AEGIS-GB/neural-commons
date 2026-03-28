@@ -10,9 +10,8 @@
 //! Quarantine: never destroy — unauthorized changes moved to quarantine dir.
 //!
 //! Enforcement mode (D30):
-//!   write_barrier is switchable — "observe" (receipt only, no revert) or
-//!   "enforce" (receipt + revert). Default: observe for external wardens.
-//!   Mode read from `EnforcementConfig::write_barrier` at decision time.
+//!   Controlled by the top-level adapter mode (observe_only / enforce).
+//!   observe = receipt only, no revert. enforce = receipt + revert.
 //!   Receipt includes `enforcement_mode` field for TRUSTMARK weighting.
 
 pub mod diff;

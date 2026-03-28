@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
 use crate::Mode;
-use aegis_schemas::config::{EnforcementConfig, RateLimitConfig};
+use aegis_schemas::config::RateLimitConfig;
 
 /// Top-level adapter configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -35,10 +35,6 @@ pub struct AdapterConfig {
     /// Memory monitoring configuration
     #[serde(default)]
     pub memory: MemorySection,
-
-    /// Per-check enforcement posture. See D30.
-    #[serde(default = "default_enforcement")]
-    pub enforcement: EnforcementConfig,
 
     /// Rate limiting config. Keyed by bot identity fingerprint. See D30.
     #[serde(default)]
@@ -313,9 +309,6 @@ fn default_true() -> bool {
 fn default_hash_interval() -> u64 {
     60
 }
-fn default_enforcement() -> EnforcementConfig {
-    EnforcementConfig::observe_default()
-}
 fn default_dashboard_path() -> String {
     "/dashboard".to_string()
 }
@@ -338,7 +331,6 @@ impl Default for AdapterConfig {
             slm: SlmSection::default(),
             vault: VaultSection::default(),
             memory: MemorySection::default(),
-            enforcement: EnforcementConfig::observe_default(),
             rate_limit: RateLimitConfig::default(),
             data_dir: default_data_dir(),
             trust: TrustSection::default(),
@@ -353,12 +345,6 @@ impl AdapterConfig {
             .map_err(|e| format!("failed to read config file {}: {e}", path.display()))?;
         let mut config: Self =
             toml::from_str(&content).map_err(|e| format!("failed to parse config file: {e}"))?;
-
-        // If mode=enforce and no [enforcement] section in config, default all checks to enforce.
-        // The user expects "enforce" to mean "block everything", not "block some things".
-        if matches!(config.mode, AdapterMode::Enforce) && !content.contains("[enforcement]") {
-            config.enforcement = EnforcementConfig::enforce_default();
-        }
 
         // Resolve relative data_dir against the config file's parent directory.
         if config.data_dir.is_relative()
