@@ -7,18 +7,27 @@ use aegis_trustmark::scoring::TrustmarkScore;
 use aegis_trustmark::tiers::resolve_tier;
 
 /// Resolve the Aegis data directory.
+/// Prefers the largest evidence.db (most likely the active one).
 fn resolve_data_dir() -> std::path::PathBuf {
     let candidates = [
         std::path::PathBuf::from(".aegis"),
         dirs::home_dir().map(|h| h.join(".aegis")).unwrap_or_default(),
-        dirs::home_dir().map(|h| h.join(".aegis/data")).unwrap_or_default(),
+        dirs::home_dir().map(|h| h.join("aegis/neural-commons/.aegis")).unwrap_or_default(),
     ];
+
+    // Pick the candidate with the largest evidence.db (most receipts = active instance)
+    let mut best: Option<(std::path::PathBuf, u64)> = None;
     for c in &candidates {
-        if c.join("evidence.db").exists() {
-            return c.clone();
+        let db = c.join("evidence.db");
+        if let Ok(meta) = std::fs::metadata(&db) {
+            let size = meta.len();
+            if best.as_ref().map_or(true, |(_, s)| size > *s) {
+                best = Some((c.clone(), size));
+            }
         }
     }
-    candidates[0].clone()
+
+    best.map(|(p, _)| p).unwrap_or_else(|| candidates[0].clone())
 }
 
 /// Run the trustmark command (current score).
