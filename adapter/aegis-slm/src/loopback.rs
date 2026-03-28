@@ -14,6 +14,10 @@
 
 use tracing::{debug, info, warn};
 
+/// ProtectAI classifier quarantine threshold. Same value must be used in ALL code paths.
+/// A probability above this threshold triggers fast-path quarantine.
+const CLASSIFIER_QUARANTINE_THRESHOLD: f32 = 0.5;
+
 use crate::engine::anthropic::AnthropicEngine;
 use crate::engine::heuristic::HeuristicEngine;
 use crate::engine::ollama::OllamaEngine;
@@ -130,7 +134,7 @@ pub fn screen_fast_layers(config: &LoopbackConfig, content: &str, holster_profil
     let mut classifier_advisory: Option<String> = None;
 
     if let Some((true, prob)) = classifier_signal {
-        if prob > 0.5 {
+        if prob > CLASSIFIER_QUARANTINE_THRESHOLD {
             if classifier_blocking {
                 info!(prob, "ProtectAI classifier: MALICIOUS, fast-path quarantine");
                 return (Some(ScreeningResult {
@@ -328,9 +332,10 @@ pub fn screen_content_rich(config: &LoopbackConfig, content: &str) -> ScreeningR
         None
     };
 
-    // If classifier says MALICIOUS with very high confidence (>95%), fast-path reject
+    // If classifier says MALICIOUS, fast-path quarantine.
+    // Threshold must match screen_fast_layers (0.5) — same classifier, same threshold.
     if let Some((true, prob)) = classifier_signal {
-        if prob > 0.95 {
+        if prob > CLASSIFIER_QUARANTINE_THRESHOLD {
             info!(
                 prob,
                 "Prompt Guard classifier: high-confidence MALICIOUS, fast-path quarantine"
