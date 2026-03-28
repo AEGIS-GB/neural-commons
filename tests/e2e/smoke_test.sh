@@ -185,6 +185,7 @@ fi
 # Config goes at $WORKSPACE/.aegis/config.toml (the default config path is relative to cwd).
 AEGIS_CONFIG="$WORKSPACE/.aegis/config.toml"
 mkdir -p "$WORKSPACE/.aegis"
+SMOKE_TOKEN="aegis_dk_$(openssl rand -hex 16)"
 cat > "$AEGIS_CONFIG" << EOF
 mode = "observe_only"
 
@@ -196,6 +197,9 @@ allow_any_provider = true
 [slm]
 enabled = false
 fallback_to_heuristics = false
+
+[dashboard]
+auth_token = "$SMOKE_TOKEN"
 EOF
 
 # Start aegis with --no-slm (no Ollama needed for smoke test)
@@ -258,14 +262,14 @@ fi
 echo ""
 echo "Step 8: Dashboard accessibility"
 
-DASHBOARD=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:3141/dashboard 2>&1) || true
+DASHBOARD=$(curl -s -o /dev/null -w "%{http_code}" "http://127.0.0.1:3141/dashboard?token=$SMOKE_TOKEN" 2>&1) || true
 if [ "$DASHBOARD" = "200" ]; then
     pass "Dashboard returns 200 at /dashboard"
 else
     fail "Dashboard returned HTTP $DASHBOARD (expected 200)"
 fi
 
-STATUS_API=$(curl -s http://127.0.0.1:3141/dashboard/api/status 2>&1) || true
+STATUS_API=$(curl -s -H "Authorization: Bearer $SMOKE_TOKEN" http://127.0.0.1:3141/dashboard/api/status 2>&1) || true
 if echo "$STATUS_API" | grep -q "mode\|version\|uptime"; then
     pass "Dashboard /api/status returns data"
 else
