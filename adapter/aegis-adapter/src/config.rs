@@ -168,7 +168,21 @@ pub struct SlmSection {
     /// Inject metaprompt hardening rules into upstream system messages (default: true)
     #[serde(default = "default_true")]
     pub metaprompt_hardening: bool,
+    /// ProtectAI classifier model directory (contains model.onnx + tokenizer.json).
+    /// If not set, classifier is disabled.
+    #[serde(default)]
+    pub prompt_guard_model_dir: Option<String>,
+    /// SLM deep screening timeout in seconds (default: 15)
+    #[serde(default = "default_slm_timeout")]
+    pub slm_timeout_secs: u64,
+    /// Max characters of content to send to SLM for screening.
+    /// Should match the SLM model's context window minus prompt overhead.
+    #[serde(default = "default_slm_max_chars")]
+    pub slm_max_content_chars: usize,
 }
+
+fn default_slm_timeout() -> u64 { 15 }
+fn default_slm_max_chars() -> usize { 24_000 }
 
 impl Default for SlmSection {
     fn default() -> Self {
@@ -179,6 +193,9 @@ impl Default for SlmSection {
             model: default_slm_model(),
             fallback_to_heuristics: true,
             metaprompt_hardening: true,
+            prompt_guard_model_dir: None,
+            slm_timeout_secs: default_slm_timeout(),
+            slm_max_content_chars: default_slm_max_chars(),
         }
     }
 }

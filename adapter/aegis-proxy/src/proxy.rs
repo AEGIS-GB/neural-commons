@@ -154,7 +154,7 @@ pub async fn start_with_traffic_full(
     let rate_limiter = if config.mode != ProxyMode::PassThrough {
         Some(Arc::new(crate::rate_limit::RateLimiter::new(
             config.rate_limit_per_minute,
-            50, // burst size
+            config.rate_limit_burst,
         )))
     } else {
         None
@@ -200,12 +200,10 @@ pub async fn start_with_traffic_full(
 /// Extract user-authored content from any JSON request format for SLM screening.
 /// Handles: OpenAI messages format, Responses API input format, plain strings.
 /// Only includes user messages and tool results — skips assistant responses.
-/// Maximum characters of extracted content to send to the SLM.
-/// The SLM screening prompt adds ~500 tokens of template overhead.
-/// With a 32K context SLM, this leaves headroom for the prompt wrapper.
-const SLM_CONTENT_MAX_CHARS: usize = 24_000;
+// max_chars is now configurable via config.toml [slm] slm_max_content_chars.
+// The proxy reads it from ProxyConfig at runtime instead of a hardcoded constant.
 
-fn extract_user_content_from_json(body: &str) -> String {
+fn extract_user_content_from_json(body: &str, max_chars: usize) -> String {
     if let Ok(json) = serde_json::from_str::<serde_json::Value>(body) {
         let mut parts = Vec::new();
 
@@ -248,9 +246,9 @@ fn extract_user_content_from_json(body: &str) -> String {
             let joined = parts.join("\n");
             // Truncate to fit SLM context window. Keep the tail (most recent
             // messages) since that's where injection attacks appear.
-            if joined.len() > SLM_CONTENT_MAX_CHARS {
+            if joined.len() > max_chars {
                 // Find a safe split point (newline boundary) near the truncation point
-                let skip = joined.len() - SLM_CONTENT_MAX_CHARS;
+                let skip = joined.len() - max_chars;
                 let split_at = joined[skip..].find('\n').map(|i| skip + i + 1).unwrap_or(skip);
                 return format!("[...truncated...]\n{}", &joined[split_at..]);
             }
@@ -446,7 +444,7 @@ async fn forward_request(
             } else if let Ok(s) = std::str::from_utf8(&body_bytes) {
                 // Try to extract user messages from any JSON format
                 // (Responses API uses "input" instead of "messages")
-                extract_user_content_from_json(s)
+                extract_user_content_from_json(s, state.config.slm_max_content_chars)
             } else {
                 String::new()
             };

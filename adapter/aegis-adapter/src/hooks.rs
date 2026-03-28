@@ -306,6 +306,8 @@ pub struct SlmHookImpl {
     pub config: aegis_slm::loopback::LoopbackConfig,
     pub recorder: Arc<EvidenceRecorder>,
     pub alert_tx: tokio::sync::broadcast::Sender<aegis_dashboard::DashboardAlert>,
+    /// SLM deep screening timeout in seconds (from config.slm.slm_timeout_secs)
+    pub timeout_secs: u64,
 }
 
 impl SlmHookImpl {
@@ -544,7 +546,7 @@ impl SlmHook for SlmHookImpl {
             // Timeout: don't let a slow SLM block the server indefinitely.
             // 15s is generous — qwen typically responds in 2-3s.
             let result = tokio::time::timeout(
-                std::time::Duration::from_secs(15),
+                std::time::Duration::from_secs(self.timeout_secs),
                 task,
             ).await;
 
@@ -711,6 +713,7 @@ mod tests {
             },
             recorder,
             alert_tx,
+            timeout_secs: 15,
         }
     }
 

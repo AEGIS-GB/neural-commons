@@ -636,7 +636,8 @@ pub async fn start(
     }
 
     // 7. Create middleware hooks
-    let prompt_guard_dir = detect_prompt_guard_model();
+    let prompt_guard_dir = config.slm.prompt_guard_model_dir.clone()
+        .or_else(detect_prompt_guard_model);
     // P0: Cache the ProtectAI classifier at startup (~950ms once, ~5ms per-request)
     aegis_slm::loopback::init_prompt_guard(prompt_guard_dir.as_deref());
     let slm_config = aegis_slm::loopback::LoopbackConfig {
@@ -653,7 +654,7 @@ pub async fn start(
     // usage in tool call results from actual exfiltration. Until then, the scanner
     // flags everything and the warden interprets the results.
     let vault_allowlist: Vec<String> = Vec::new();
-    let hooks = create_middleware_hooks(recorder.clone(), mode, alert_tx.clone(), slm_config, slm_enabled, vault_allowlist);
+    let hooks = create_middleware_hooks(recorder.clone(), mode, alert_tx.clone(), slm_config, slm_enabled, vault_allowlist, config.slm.slm_timeout_secs);
 
     // 7. Build proxy config
     let proxy_config = ProxyConfig {
@@ -671,6 +672,8 @@ pub async fn start(
             .unwrap_or_else(|| aegis_proxy::config::Provider::from_url(&config.proxy.upstream_url)),
         allow_any_provider: config.proxy.allow_any_provider,
         metaprompt_hardening: config.slm.metaprompt_hardening,
+        slm_max_content_chars: config.slm.slm_max_content_chars,
+        rate_limit_burst: 50,
     };
 
     // 8. Warn if upstream is still the default (common misconfiguration)
@@ -796,6 +799,7 @@ fn create_middleware_hooks(
     slm_config: aegis_slm::loopback::LoopbackConfig,
     slm_enabled: bool,
     vault_allowlist: Vec<String>,
+    slm_timeout_secs: u64,
 ) -> MiddlewareHooks {
     match mode {
         Mode::PassThrough => {
@@ -820,6 +824,7 @@ fn create_middleware_hooks(
                     config: slm_config,
                     recorder: recorder.clone(),
                     alert_tx: alert_tx.clone(),
+                    timeout_secs: slm_timeout_secs,
                 }))
             } else {
                 info!("middleware hooks: evidence=yes vault=yes barrier=real slm=disabled");
@@ -940,7 +945,7 @@ mod tests {
         let key = ed25519::generate_keypair();
         let recorder = Arc::new(EvidenceRecorder::new_in_memory(key).unwrap());
         let (alert_tx, _) = tokio::sync::broadcast::channel(32);
-        let hooks = create_middleware_hooks(recorder, Mode::ObserveOnly, alert_tx, test_slm_config(), true, vec![]);
+        let hooks = create_middleware_hooks(recorder, Mode::ObserveOnly, alert_tx, test_slm_config(), true, vec![], 15);
         assert!(hooks.evidence.is_some());
         assert!(hooks.barrier.is_some());
         assert!(hooks.slm.is_some());
@@ -952,7 +957,7 @@ mod tests {
         let key = ed25519::generate_keypair();
         let recorder = Arc::new(EvidenceRecorder::new_in_memory(key).unwrap());
         let (alert_tx, _) = tokio::sync::broadcast::channel(32);
-        let hooks = create_middleware_hooks(recorder, Mode::ObserveOnly, alert_tx, test_slm_config(), false, vec![]);
+        let hooks = create_middleware_hooks(recorder, Mode::ObserveOnly, alert_tx, test_slm_config(), false, vec![], 15);
         assert!(hooks.evidence.is_some());
         assert!(hooks.barrier.is_some());
         assert!(hooks.slm.is_none());
@@ -964,7 +969,7 @@ mod tests {
         let key = ed25519::generate_keypair();
         let recorder = Arc::new(EvidenceRecorder::new_in_memory(key).unwrap());
         let (alert_tx, _) = tokio::sync::broadcast::channel(32);
-        let hooks = create_middleware_hooks(recorder, Mode::PassThrough, alert_tx, test_slm_config(), true, vec![]);
+        let hooks = create_middleware_hooks(recorder, Mode::PassThrough, alert_tx, test_slm_config(), true, vec![], 15);
         assert!(hooks.evidence.is_none());
         assert!(hooks.barrier.is_none());
         assert!(hooks.slm.is_none());
