@@ -10,6 +10,7 @@ serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 aegis-evidence = { path = "../../adapter/aegis-evidence" }
 aegis-schemas = { path = "../../aegis-schemas" }
+aegis-barrier = { path = "../../adapter/aegis-barrier" }
 
 [dev-dependencies]
 tempfile.workspace = true

@@ -58,6 +58,7 @@ fn gather_from_evidence(store: &aegis_evidence::EvidenceStore, signals: &mut Loc
     // Process in batches to avoid loading everything into memory at once
     let batch_size: u64 = 1000;
     let mut vault_detections: u64 = 0;
+    let mut api_call_count: u64 = 0;
     let mut timestamps: Vec<u64> = Vec::new();
     let mut seq: u64 = 1;
 
@@ -76,9 +77,12 @@ fn gather_from_evidence(store: &aegis_evidence::EvidenceStore, signals: &mut Loc
         };
 
         for receipt in &receipts {
-            // Vault detections
+            // Count by type
             if receipt.core.receipt_type == aegis_schemas::ReceiptType::VaultDetection {
                 vault_detections += 1;
+            }
+            if receipt.core.receipt_type == aegis_schemas::ReceiptType::ApiCall {
+                api_call_count += 1;
             }
 
             // Timestamps for temporal consistency (all receipts)
@@ -95,7 +99,8 @@ fn gather_from_evidence(store: &aegis_evidence::EvidenceStore, signals: &mut Loc
     }
 
     signals.vault_leaks_detected = vault_detections;
-    signals.vault_scans_total = receipt_count;
+    // Vault scans happen per API call, not per receipt (other receipt types don't scan)
+    signals.vault_scans_total = api_call_count;
 
     // Sort timestamps for temporal consistency scoring
     timestamps.sort();
@@ -110,17 +115,14 @@ fn gather_from_evidence(store: &aegis_evidence::EvidenceStore, signals: &mut Loc
 /// Read filesystem state for persona integrity signals.
 fn gather_from_filesystem(data_dir: &Path, signals: &mut LocalSignals) {
     // Identity key — check existence and age
-    let key_candidates = [
-        data_dir.join("identity.key"),
-        data_dir.join("data/identity.key"),
-    ];
-    for key_path in &key_candidates {
-        if key_path.exists() {
-            // Aegis is configured with an identity
-            signals.protected_files_total = 9; // standard protected file count
-            signals.protected_files_intact = 9; // if key exists, Aegis verified at startup
-            break;
-        }
+    // Identity key — single authoritative location (no candidate scanning)
+    let key_path = data_dir.join("identity.key");
+    if key_path.exists() {
+        // Count protected files from the default ProtectedFileManager (12 system files)
+        let mgr = aegis_barrier::protected_files::ProtectedFileManager::new();
+        signals.protected_files_total = mgr.system_files.len();
+        // If Aegis is running with a valid key, files were verified at startup
+        signals.protected_files_intact = signals.protected_files_total;
     }
 
     // Manifest — check existence (signature is verified by Aegis at startup)
@@ -136,9 +138,9 @@ fn gather_from_filesystem(data_dir: &Path, signals: &mut LocalSignals) {
 
 /// Get identity key age in hours.
 pub fn get_identity_age_hours(data_dir: &Path) -> f64 {
+    // Single authoritative location — no candidate scanning
     let candidates = [
         data_dir.join("identity.key"),
-        data_dir.join("data/identity.key"),
     ];
     for path in &candidates {
         if let Ok(meta) = std::fs::metadata(path) {
@@ -181,8 +183,8 @@ mod tests {
 
         let signals = gather_local_signals(dir.path());
 
-        assert_eq!(signals.protected_files_total, 9);
-        assert_eq!(signals.protected_files_intact, 9);
+        assert_eq!(signals.protected_files_total, 12);
+        assert_eq!(signals.protected_files_intact, 12);
         assert!(signals.manifest_signature_valid.is_none()); // no manifest yet
     }
 
@@ -194,7 +196,7 @@ mod tests {
 
         let signals = gather_local_signals(dir.path());
 
-        assert_eq!(signals.protected_files_total, 9);
+        assert_eq!(signals.protected_files_total, 12);
         assert_eq!(signals.manifest_signature_valid, Some(true));
         assert_eq!(signals.between_session_tampers, 0);
     }
@@ -231,7 +233,7 @@ mod tests {
         assert_eq!(signals.chain_receipt_count, 7);
         assert_eq!(signals.chain_verified, Some(true));
         assert_eq!(signals.vault_leaks_detected, 2);
-        assert_eq!(signals.vault_scans_total, 7); // all receipts = scans
+        assert_eq!(signals.vault_scans_total, 5); // only ApiCall receipts, not all
         assert_eq!(signals.receipt_timestamps.len(), 7);
         assert!(signals.receipts_last_24h >= 7); // all just created
     }
@@ -264,7 +266,7 @@ mod tests {
 
         assert_eq!(signals.chain_receipt_count, 117);
         assert_eq!(signals.vault_leaks_detected, 17, "must count ALL vault detections, not a window");
-        assert_eq!(signals.vault_scans_total, 117);
+        assert_eq!(signals.vault_scans_total, 100, "scans = ApiCall count, not all receipts");
     }
 
     #[test]

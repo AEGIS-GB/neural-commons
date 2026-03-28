@@ -227,13 +227,8 @@ pub struct BarrierHookImpl {
     pub alert_tx: tokio::sync::broadcast::Sender<crate::state::DashboardAlert>,
 }
 
-/// Protected filenames to scan for in request bodies.
-/// These are the critical identity/behavior files that should never be
-/// referenced in LLM prompts asking for modifications.
-const PROTECTED_FILENAMES: &[&str] = &[
-    "SOUL.md", "AGENTS.md", "IDENTITY.md", "TOOLS.md", "BOOT.md",
-    "MEMORY.md", ".env",
-];
+// No hardcoded PROTECTED_FILENAMES — use ProtectedFileManager.list_all()
+// to stay in sync with the authoritative list (including warden-added files).
 
 impl BarrierHook for BarrierHookImpl {
     fn check_write<'a>(
@@ -256,7 +251,12 @@ impl BarrierHook for BarrierHookImpl {
             // Catches prompts like "write to SOUL.md" or "modify AGENTS.md".
             if let Some(ref body_text) = req_info.body_text {
                 let body_upper = body_text.to_uppercase();
-                for filename in PROTECTED_FILENAMES {
+                let filenames: Vec<String> = if let Ok(mgr) = self.protected_files.lock() {
+                    mgr.list_all().iter().map(|e| e.pattern.clone()).collect()
+                } else {
+                    vec![]
+                };
+                for filename in &filenames {
                     let upper_name = filename.to_uppercase();
                     if body_upper.contains(&upper_name) {
                         let reason = format!(
