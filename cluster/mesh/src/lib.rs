@@ -5,10 +5,10 @@
 //! Trust-weighted routing: exclude TRUSTMARK < 0.3, weight = TRUSTMARK^2 (D21)
 //! Dead-drop: 72h TTL (D25)
 
-pub mod relay;
-pub mod sanitization;
-pub mod routing;
 pub mod dead_drop;
+pub mod relay;
+pub mod routing;
+pub mod sanitization;
 
 // TODO(D21): Confirm mesh trust-weight routing function
 // TODO(D25): Confirm dead drop TTL

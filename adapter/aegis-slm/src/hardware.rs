@@ -122,11 +122,17 @@ pub fn recommend(hw: &HardwareInfo) -> SlmRecommendation {
             expected_detection: "100% with 2-pass screening".to_string(),
             expected_latency: "3-8s per query (2 passes)".to_string(),
             notes: vec![
-                "Best detection rate. MoE architecture keeps inference fast despite 30B params.".to_string(),
+                "Best detection rate. MoE architecture keeps inference fast despite 30B params."
+                    .to_string(),
                 "Use LM Studio (lmstudio.ai) to serve the model on localhost:1234.".to_string(),
-                format!("Detected: {}MB VRAM{}.",
+                format!(
+                    "Detected: {}MB VRAM{}.",
                     if is_apple_silicon { hw.ram_mb } else { vram },
-                    if is_apple_silicon { " (Apple Silicon unified memory)" } else { "" }
+                    if is_apple_silicon {
+                        " (Apple Silicon unified memory)"
+                    } else {
+                        ""
+                    }
                 ),
             ],
         }
@@ -140,10 +146,14 @@ pub fn recommend(hw: &HardwareInfo) -> SlmRecommendation {
             expected_detection: "~70% with 2-pass screening".to_string(),
             expected_latency: "4-10s per query (2 passes)".to_string(),
             notes: vec![
-                "Good detection for most common attacks. Misses some subtle social engineering.".to_string(),
+                "Good detection for most common attacks. Misses some subtle social engineering."
+                    .to_string(),
                 "Heuristic + ProtectAI classifier still catch ~65% without SLM.".to_string(),
                 "Use LM Studio (lmstudio.ai) to serve the model on localhost:1234.".to_string(),
-                format!("Detected: {}MB VRAM.", if is_apple_silicon { hw.ram_mb } else { vram }),
+                format!(
+                    "Detected: {}MB VRAM.",
+                    if is_apple_silicon { hw.ram_mb } else { vram }
+                ),
             ],
         }
     } else if effective_vram >= 3_000 {
@@ -158,7 +168,10 @@ pub fn recommend(hw: &HardwareInfo) -> SlmRecommendation {
             notes: vec![
                 "Limited SLM detection. Heuristic + classifier do most of the work.".to_string(),
                 "Consider upgrading GPU or using API-based SLM for better detection.".to_string(),
-                format!("Detected: {}MB VRAM.", if is_apple_silicon { hw.ram_mb } else { vram }),
+                format!(
+                    "Detected: {}MB VRAM.",
+                    if is_apple_silicon { hw.ram_mb } else { vram }
+                ),
             ],
         }
     } else {
@@ -217,11 +230,11 @@ fn detect_gpus(warnings: &mut Vec<String>) -> Vec<GpuInfo> {
                         gpu.vram_detected = true;
                     }
                 }
-            } else if gpu.vendor == "amd" {
-                if let Some(enriched) = detect_amd() {
-                    gpu.name = enriched.name;
-                    // sysfs vram is authoritative for AMD, don't override
-                }
+            } else if gpu.vendor == "amd"
+                && let Some(enriched) = detect_amd()
+            {
+                gpu.name = enriched.name;
+                // sysfs vram is authoritative for AMD, don't override
             }
         }
 
@@ -235,24 +248,25 @@ fn detect_gpus(warnings: &mut Vec<String>) -> Vec<GpuInfo> {
                 };
                 warnings.push(format!(
                     "{} GPU found but VRAM unknown (driver not loaded). {}",
-                    gpu.vendor.to_uppercase(), hint
+                    gpu.vendor.to_uppercase(),
+                    hint
                 ));
             }
         }
     }
 
     // macOS: use system_profiler
-    if std::env::consts::OS == "macos" {
-        if let Some(gpu) = detect_apple_gpu() {
-            gpus.push(gpu);
-        }
+    if std::env::consts::OS == "macos"
+        && let Some(gpu) = detect_apple_gpu()
+    {
+        gpus.push(gpu);
     }
 
     // Windows: WMIC / PowerShell
-    if std::env::consts::OS == "windows" {
-        if let Some(gpu) = detect_gpu_windows(warnings) {
-            gpus.push(gpu);
-        }
+    if std::env::consts::OS == "windows"
+        && let Some(gpu) = detect_gpu_windows(warnings)
+    {
+        gpus.push(gpu);
     }
 
     gpus
@@ -281,7 +295,8 @@ fn detect_gpus_from_sysfs() -> Vec<GpuInfo> {
         let slot = std::fs::read_to_string(device_dir.join("uevent"))
             .ok()
             .and_then(|uevent| {
-                uevent.lines()
+                uevent
+                    .lines()
                     .find(|l| l.starts_with("PCI_SLOT_NAME="))
                     .map(|l| l.trim_start_matches("PCI_SLOT_NAME=").to_string())
             })
@@ -320,14 +335,25 @@ fn detect_gpus_from_sysfs() -> Vec<GpuInfo> {
         let driver = std::fs::read_to_string(device_dir.join("uevent"))
             .ok()
             .and_then(|uevent| {
-                uevent.lines()
+                uevent
+                    .lines()
                     .find(|l| l.starts_with("DRIVER="))
                     .map(|l| l.trim_start_matches("DRIVER=").to_string())
             })
             .unwrap_or_default();
 
         let gpu_name = if !device_id.is_empty() {
-            format!("{} [{}:{}] ({})", default_name, vendor_id, device_id, if driver.is_empty() { "no driver" } else { &driver })
+            format!(
+                "{} [{}:{}] ({})",
+                default_name,
+                vendor_id,
+                device_id,
+                if driver.is_empty() {
+                    "no driver"
+                } else {
+                    &driver
+                }
+            )
         } else {
             default_name.to_string()
         };
@@ -345,7 +371,10 @@ fn detect_gpus_from_sysfs() -> Vec<GpuInfo> {
 
 fn detect_nvidia() -> Option<GpuInfo> {
     let output = Command::new("nvidia-smi")
-        .args(["--query-gpu=name,memory.total", "--format=csv,noheader,nounits"])
+        .args([
+            "--query-gpu=name,memory.total",
+            "--format=csv,noheader,nounits",
+        ])
         .output()
         .ok()?;
 
@@ -388,10 +417,10 @@ fn detect_amd() -> Option<GpuInfo> {
     let mut sku = String::new();
     for line in name_text.lines() {
         if line.contains("Card vendor:") {
-            vendor_str = line.split(':').last().unwrap_or("").trim().to_string();
+            vendor_str = line.split(':').next_back().unwrap_or("").trim().to_string();
         }
         if line.contains("Card SKU:") {
-            sku = line.split(':').last().unwrap_or("").trim().to_string();
+            sku = line.split(':').next_back().unwrap_or("").trim().to_string();
         }
     }
     let name = if !sku.is_empty() && !vendor_str.is_empty() {
@@ -409,17 +438,22 @@ fn detect_amd() -> Option<GpuInfo> {
         .ok();
 
     // Parse: "GPU[0]		: VRAM Total Memory (B): 34359738368"
-    let vram_mb = vram_output.and_then(|o| {
-        if !o.status.success() { return None; }
-        let text = String::from_utf8_lossy(&o.stdout).to_string();
-        text.lines()
-            .find(|l| l.contains("VRAM Total Memory"))
-            .and_then(|l| {
-                l.rsplit(':').next()
-                    .and_then(|s| s.trim().parse::<u64>().ok())
-                    .map(|bytes| bytes / (1024 * 1024))
-            })
-    }).unwrap_or(0);
+    let vram_mb = vram_output
+        .and_then(|o| {
+            if !o.status.success() {
+                return None;
+            }
+            let text = String::from_utf8_lossy(&o.stdout).to_string();
+            text.lines()
+                .find(|l| l.contains("VRAM Total Memory"))
+                .and_then(|l| {
+                    l.rsplit(':')
+                        .next()
+                        .and_then(|s| s.trim().parse::<u64>().ok())
+                        .map(|bytes| bytes / (1024 * 1024))
+                })
+        })
+        .unwrap_or(0);
 
     Some(GpuInfo {
         vendor: "amd".to_string(),
@@ -445,13 +479,15 @@ fn detect_apple_gpu() -> Option<GpuInfo> {
     let displays = json.get("SPDisplaysDataType")?.as_array()?;
     let gpu = displays.first()?;
 
-    let name = gpu.get("sppci_model")
+    let name = gpu
+        .get("sppci_model")
         .or_else(|| gpu.get("_name"))
         .and_then(|v| v.as_str())
         .unwrap_or("Apple GPU")
         .to_string();
 
-    let vram_str = gpu.get("sppci_vram")
+    let vram_str = gpu
+        .get("sppci_vram")
         .or_else(|| gpu.get("spdisplays_vram"))
         .and_then(|v| v.as_str())
         .unwrap_or("0");
@@ -470,30 +506,47 @@ fn detect_apple_gpu() -> Option<GpuInfo> {
 fn detect_gpu_windows(warnings: &mut Vec<String>) -> Option<GpuInfo> {
     // Try WMIC first, then PowerShell
     let output = Command::new("wmic")
-        .args(["path", "win32_VideoController", "get", "Name,AdapterRAM", "/format:csv"])
+        .args([
+            "path",
+            "win32_VideoController",
+            "get",
+            "Name,AdapterRAM",
+            "/format:csv",
+        ])
         .output()
         .ok();
 
-    if let Some(ref o) = output {
-        if o.status.success() {
-            let text = String::from_utf8_lossy(&o.stdout);
-            for line in text.lines().skip(1) {
-                let parts: Vec<&str> = line.split(',').collect();
-                if parts.len() >= 3 {
-                    let name = parts.get(2).unwrap_or(&"GPU").trim().to_string();
-                    let vram_bytes: u64 = parts.get(1).and_then(|s| s.trim().parse().ok()).unwrap_or(0);
-                    let vram_mb = vram_bytes / (1024 * 1024);
-                    if !name.is_empty() {
-                        return Some(GpuInfo {
-                            vendor: if name.to_lowercase().contains("nvidia") { "nvidia" }
-                                    else if name.to_lowercase().contains("amd") || name.to_lowercase().contains("radeon") { "amd" }
-                                    else if name.to_lowercase().contains("intel") { "intel" }
-                                    else { "unknown" }.to_string(),
-                            name,
-                            vram_mb,
-                            vram_detected: vram_mb > 0,
-                        });
-                    }
+    if let Some(ref o) = output
+        && o.status.success()
+    {
+        let text = String::from_utf8_lossy(&o.stdout);
+        for line in text.lines().skip(1) {
+            let parts: Vec<&str> = line.split(',').collect();
+            if parts.len() >= 3 {
+                let name = parts.get(2).unwrap_or(&"GPU").trim().to_string();
+                let vram_bytes: u64 = parts
+                    .get(1)
+                    .and_then(|s| s.trim().parse().ok())
+                    .unwrap_or(0);
+                let vram_mb = vram_bytes / (1024 * 1024);
+                if !name.is_empty() {
+                    return Some(GpuInfo {
+                        vendor: if name.to_lowercase().contains("nvidia") {
+                            "nvidia"
+                        } else if name.to_lowercase().contains("amd")
+                            || name.to_lowercase().contains("radeon")
+                        {
+                            "amd"
+                        } else if name.to_lowercase().contains("intel") {
+                            "intel"
+                        } else {
+                            "unknown"
+                        }
+                        .to_string(),
+                        name,
+                        vram_mb,
+                        vram_detected: vram_mb > 0,
+                    });
                 }
             }
         }
@@ -505,25 +558,44 @@ fn detect_gpu_windows(warnings: &mut Vec<String>) -> Option<GpuInfo> {
         .output()
         .ok();
 
-    if let Some(ref o) = ps_output {
-        if o.status.success() {
-            let text = String::from_utf8_lossy(&o.stdout);
-            if let Ok(json) = serde_json::from_str::<serde_json::Value>(&text) {
-                let entries = if json.is_array() { json.as_array().cloned().unwrap_or_default() } else { vec![json] };
-                for entry in entries {
-                    let name = entry.get("Name").and_then(|v| v.as_str()).unwrap_or("GPU").to_string();
-                    let vram_bytes = entry.get("AdapterRAM").and_then(|v| v.as_u64()).unwrap_or(0);
-                    let vram_mb = vram_bytes / (1024 * 1024);
-                    return Some(GpuInfo {
-                        vendor: if name.to_lowercase().contains("nvidia") { "nvidia" }
-                                else if name.to_lowercase().contains("amd") || name.to_lowercase().contains("radeon") { "amd" }
-                                else if name.to_lowercase().contains("intel") { "intel" }
-                                else { "unknown" }.to_string(),
-                        name,
-                        vram_mb,
-                        vram_detected: vram_mb > 0,
-                    });
-                }
+    if let Some(ref o) = ps_output
+        && o.status.success()
+    {
+        let text = String::from_utf8_lossy(&o.stdout);
+        if let Ok(json) = serde_json::from_str::<serde_json::Value>(&text) {
+            let entries = if json.is_array() {
+                json.as_array().cloned().unwrap_or_default()
+            } else {
+                vec![json]
+            };
+            if let Some(entry) = entries.into_iter().next() {
+                let name = entry
+                    .get("Name")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("GPU")
+                    .to_string();
+                let vram_bytes = entry
+                    .get("AdapterRAM")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0);
+                let vram_mb = vram_bytes / (1024 * 1024);
+                return Some(GpuInfo {
+                    vendor: if name.to_lowercase().contains("nvidia") {
+                        "nvidia"
+                    } else if name.to_lowercase().contains("amd")
+                        || name.to_lowercase().contains("radeon")
+                    {
+                        "amd"
+                    } else if name.to_lowercase().contains("intel") {
+                        "intel"
+                    } else {
+                        "unknown"
+                    }
+                    .to_string(),
+                    name,
+                    vram_mb,
+                    vram_detected: vram_mb > 0,
+                });
             }
         }
     }
@@ -619,18 +691,30 @@ fn parse_memory_string(s: &str) -> u64 {
 pub fn format_hardware_info(hw: &HardwareInfo) -> String {
     let mut lines = Vec::new();
     lines.push(format!("  OS:   {} ({})", hw.os, hw.arch));
-    lines.push(format!("  RAM:  {} MB ({:.1} GB)", hw.ram_mb, hw.ram_mb as f64 / 1024.0));
+    lines.push(format!(
+        "  RAM:  {} MB ({:.1} GB)",
+        hw.ram_mb,
+        hw.ram_mb as f64 / 1024.0
+    ));
 
     if hw.gpus.is_empty() {
         lines.push("  GPU:  none detected".to_string());
     } else {
         for gpu in &hw.gpus {
             if gpu.vram_mb > 0 {
-                lines.push(format!("  GPU:  {} ({} MB / {:.0} GB VRAM)", gpu.name, gpu.vram_mb, gpu.vram_mb as f64 / 1024.0));
+                lines.push(format!(
+                    "  GPU:  {} ({} MB / {:.0} GB VRAM)",
+                    gpu.name,
+                    gpu.vram_mb,
+                    gpu.vram_mb as f64 / 1024.0
+                ));
             } else if gpu.vram_detected {
                 lines.push(format!("  GPU:  {} (shared memory)", gpu.name));
             } else {
-                lines.push(format!("  GPU:  {} (VRAM unknown — install drivers)", gpu.name));
+                lines.push(format!(
+                    "  GPU:  {} (VRAM unknown — install drivers)",
+                    gpu.name
+                ));
             }
         }
     }
@@ -648,7 +732,10 @@ pub fn format_hardware_info(hw: &HardwareInfo) -> String {
 /// Format recommendation as a human-readable string.
 pub fn format_recommendation(rec: &SlmRecommendation) -> String {
     let mut lines = Vec::new();
-    lines.push(format!("  Tier:       {} ({})", rec.tier, rec.model_description));
+    lines.push(format!(
+        "  Tier:       {} ({})",
+        rec.tier, rec.model_description
+    ));
     if rec.model != "disabled" {
         lines.push(format!("  Engine:     {}", rec.engine));
         lines.push(format!("  Model:      {}", rec.model));

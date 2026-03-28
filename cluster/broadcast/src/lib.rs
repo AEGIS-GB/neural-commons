@@ -5,6 +5,6 @@
 //! Policy: signed bundles, pull model (Foundation-only)
 //! Uses signed_bundle_verify from aegis-common
 
+pub mod policy;
 pub mod receive;
 pub mod send;
-pub mod policy;

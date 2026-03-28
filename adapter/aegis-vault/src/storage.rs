@@ -9,7 +9,7 @@
 //!           nonce BLOB, created_ms INTEGER, updated_ms INTEGER, source_file TEXT,
 //!           masked_preview TEXT, kdf_version INTEGER DEFAULT 1)
 
-use rusqlite::{params, Connection};
+use rusqlite::{Connection, params};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -454,7 +454,10 @@ mod tests {
             .unwrap();
 
         let entry = storage.get_entry("upd").unwrap();
-        assert_eq!(entry.created_ms, first_created, "created_ms should be preserved");
+        assert_eq!(
+            entry.created_ms, first_created,
+            "created_ms should be preserved"
+        );
         assert_eq!(entry.label, "Updated");
 
         // Verify new value decrypts correctly

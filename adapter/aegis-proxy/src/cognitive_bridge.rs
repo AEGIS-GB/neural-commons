@@ -12,9 +12,12 @@
 //! the catch-all upstream forwarding. The LLM provider can invoke
 //! them as tool calls when registered via MCP or function calling.
 
-use axum::{extract::State, routing::{get, post}, Json, Router};
+use axum::{
+    Json, Router,
+    extract::State,
+    routing::{get, post},
+};
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
 
 /// Build the cognitive bridge sub-router.
 /// Mounted at `/aegis` by the main proxy router.
@@ -154,7 +157,9 @@ pub struct ChannelRegistry {
 
 impl ChannelRegistry {
     const fn new() -> Self {
-        Self { channels: Vec::new() }
+        Self {
+            channels: Vec::new(),
+        }
     }
 }
 
@@ -177,7 +182,9 @@ pub fn get_registered_channel_trust() -> Option<aegis_schemas::ChannelTrust> {
 
 /// Get the full channel registry for the dashboard.
 pub fn get_channel_registry() -> Vec<ChannelRecord> {
-    CHANNEL_REGISTRY.read().ok()
+    CHANNEL_REGISTRY
+        .read()
+        .ok()
         .map(|r| r.channels.clone())
         .unwrap_or_default()
 }
@@ -204,10 +211,16 @@ async fn register_channel_handler(
                 let age_ms = (now - ts).abs();
                 if age_ms > 15_000 {
                     tracing::warn!(channel = %req.channel, age_ms, "channel registration rejected: timestamp too old");
-                    return (axum::http::StatusCode::UNAUTHORIZED, Json(ChannelContextResponse {
-                        channel: None, user: None, trust_level: "rejected".to_string(),
-                        ssrf_allowed: false, registered: false,
-                    }));
+                    return (
+                        axum::http::StatusCode::UNAUTHORIZED,
+                        Json(ChannelContextResponse {
+                            channel: None,
+                            user: None,
+                            trust_level: "rejected".to_string(),
+                            ssrf_allowed: false,
+                            registered: false,
+                        }),
+                    );
                 }
                 // Build signing payload and verify
                 let cert = aegis_schemas::ChannelCert {
@@ -220,20 +233,32 @@ async fn register_channel_handler(
                 let verified = crate::channel_trust::verify_cert(&cert, pubkey_bytes);
                 if !verified {
                     tracing::warn!(channel = %req.channel, "channel registration rejected: invalid signature");
-                    return (axum::http::StatusCode::UNAUTHORIZED, Json(ChannelContextResponse {
-                        channel: None, user: None, trust_level: "rejected".to_string(),
-                        ssrf_allowed: false, registered: false,
-                    }));
+                    return (
+                        axum::http::StatusCode::UNAUTHORIZED,
+                        Json(ChannelContextResponse {
+                            channel: None,
+                            user: None,
+                            trust_level: "rejected".to_string(),
+                            ssrf_allowed: false,
+                            registered: false,
+                        }),
+                    );
                 }
                 true
             }
             _ => {
                 // Signing pubkey configured but no sig provided — reject
                 tracing::warn!(channel = %req.channel, "channel registration rejected: signature required but not provided");
-                return (axum::http::StatusCode::UNAUTHORIZED, Json(ChannelContextResponse {
-                    channel: None, user: None, trust_level: "rejected".to_string(),
-                    ssrf_allowed: false, registered: false,
-                }));
+                return (
+                    axum::http::StatusCode::UNAUTHORIZED,
+                    Json(ChannelContextResponse {
+                        channel: None,
+                        user: None,
+                        trust_level: "rejected".to_string(),
+                        ssrf_allowed: false,
+                        registered: false,
+                    }),
+                );
             }
         }
     } else {
@@ -250,11 +275,7 @@ async fn register_channel_handler(
         sig: req.sig.clone().unwrap_or_default(),
     };
 
-    let trust = crate::channel_trust::resolve_trust(
-        Some(&cert),
-        sig_verified,
-        &trust_config,
-    );
+    let trust = crate::channel_trust::resolve_trust(Some(&cert), sig_verified, &trust_config);
 
     tracing::info!(
         channel = %req.channel,
@@ -279,7 +300,11 @@ async fn register_channel_handler(
     // Update channel registry
     let now_ms = crate::middleware::now_ms();
     if let Ok(mut registry) = CHANNEL_REGISTRY.write() {
-        if let Some(existing) = registry.channels.iter_mut().find(|r| r.channel == req.channel) {
+        if let Some(existing) = registry
+            .channels
+            .iter_mut()
+            .find(|r| r.channel == req.channel)
+        {
             existing.last_seen_ms = now_ms;
             existing.request_count += 1;
             existing.user = req.user.clone().unwrap_or_default();
@@ -308,9 +333,12 @@ async fn unregister_channel_handler(
 ) -> (axum::http::StatusCode, Json<serde_json::Value>) {
     let channel = req.channel.trim().to_string();
     if channel.is_empty() {
-        return (axum::http::StatusCode::BAD_REQUEST, Json(serde_json::json!({
-            "error": "channel is required",
-        })));
+        return (
+            axum::http::StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({
+                "error": "channel is required",
+            })),
+        );
     }
 
     let mut removed = false;
@@ -323,26 +351,31 @@ async fn unregister_channel_handler(
     }
 
     // Clear active channel if it matches
-    if let Ok(mut active) = ACTIVE_CHANNEL.write() {
-        if let Some(ref trust) = *active {
-            if trust.channel.as_deref() == Some(&channel) {
-                *active = None;
-            }
-        }
+    if let Ok(mut active) = ACTIVE_CHANNEL.write()
+        && let Some(ref trust) = *active
+        && trust.channel.as_deref() == Some(&channel)
+    {
+        *active = None;
     }
 
     if removed {
         tracing::info!(channel = %channel, "channel unregistered");
-        (axum::http::StatusCode::OK, Json(serde_json::json!({
-            "channel": channel,
-            "unregistered": true,
-        })))
+        (
+            axum::http::StatusCode::OK,
+            Json(serde_json::json!({
+                "channel": channel,
+                "unregistered": true,
+            })),
+        )
     } else {
-        (axum::http::StatusCode::NOT_FOUND, Json(serde_json::json!({
-            "channel": channel,
-            "unregistered": false,
-            "error": "channel not found in registry",
-        })))
+        (
+            axum::http::StatusCode::NOT_FOUND,
+            Json(serde_json::json!({
+                "channel": channel,
+                "unregistered": false,
+                "error": "channel not found in registry",
+            })),
+        )
     }
 }
 
@@ -351,13 +384,15 @@ async fn channel_context_handler() -> Json<serde_json::Value> {
     let active = ACTIVE_CHANNEL.read().ok().and_then(|c| c.clone());
     let registry = get_channel_registry();
 
-    let active_json = active.map(|trust| serde_json::json!({
-        "channel": trust.channel,
-        "user": trust.user,
-        "trust_level": format!("{:?}", trust.trust_level).to_lowercase(),
-        "ssrf_allowed": trust.ssrf_allowed,
-        "cert_verified": trust.cert_verified,
-    }));
+    let active_json = active.map(|trust| {
+        serde_json::json!({
+            "channel": trust.channel,
+            "user": trust.user,
+            "trust_level": format!("{:?}", trust.trust_level).to_lowercase(),
+            "ssrf_allowed": trust.ssrf_allowed,
+            "cert_verified": trust.cert_verified,
+        })
+    });
 
     Json(serde_json::json!({
         "active": active_json,

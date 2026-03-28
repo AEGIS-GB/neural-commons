@@ -56,11 +56,18 @@ mod tests {
             502
         );
         assert_eq!(
-            ProxyError::RequestTooLarge { size: 100, limit: 50 }.status_code(),
+            ProxyError::RequestTooLarge {
+                size: 100,
+                limit: 50
+            }
+            .status_code(),
             413
         );
         assert_eq!(
-            ProxyError::RateLimitExceeded { client: "1.2.3.4".into() }.status_code(),
+            ProxyError::RateLimitExceeded {
+                client: "1.2.3.4".into()
+            }
+            .status_code(),
             429
         );
         assert_eq!(
@@ -72,7 +79,10 @@ mod tests {
 
     #[test]
     fn error_display() {
-        let err = ProxyError::RequestTooLarge { size: 200, limit: 100 };
+        let err = ProxyError::RequestTooLarge {
+            size: 200,
+            limit: 100,
+        };
         assert_eq!(
             err.to_string(),
             "request too large: 200 bytes exceeds limit 100"

@@ -177,27 +177,42 @@ mod tests {
 
     #[test]
     fn trust_full_maps_to_permissive() {
-        assert_eq!(trust_to_profile(&aegis_schemas::TrustLevel::Full), HolsterProfile::Permissive);
+        assert_eq!(
+            trust_to_profile(&aegis_schemas::TrustLevel::Full),
+            HolsterProfile::Permissive
+        );
     }
 
     #[test]
     fn trust_trusted_maps_to_balanced() {
-        assert_eq!(trust_to_profile(&aegis_schemas::TrustLevel::Trusted), HolsterProfile::Balanced);
+        assert_eq!(
+            trust_to_profile(&aegis_schemas::TrustLevel::Trusted),
+            HolsterProfile::Balanced
+        );
     }
 
     #[test]
     fn trust_public_maps_to_aggressive() {
-        assert_eq!(trust_to_profile(&aegis_schemas::TrustLevel::Public), HolsterProfile::Aggressive);
+        assert_eq!(
+            trust_to_profile(&aegis_schemas::TrustLevel::Public),
+            HolsterProfile::Aggressive
+        );
     }
 
     #[test]
     fn trust_restricted_maps_to_aggressive() {
-        assert_eq!(trust_to_profile(&aegis_schemas::TrustLevel::Restricted), HolsterProfile::Aggressive);
+        assert_eq!(
+            trust_to_profile(&aegis_schemas::TrustLevel::Restricted),
+            HolsterProfile::Aggressive
+        );
     }
 
     #[test]
     fn trust_unknown_maps_to_balanced() {
         // Backward compat: no cert = same as before
-        assert_eq!(trust_to_profile(&aegis_schemas::TrustLevel::Unknown), HolsterProfile::Balanced);
+        assert_eq!(
+            trust_to_profile(&aegis_schemas::TrustLevel::Unknown),
+            HolsterProfile::Balanced
+        );
     }
 }

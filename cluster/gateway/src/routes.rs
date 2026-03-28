@@ -17,8 +17,8 @@
 // use axum::extract::State;
 // use bytes::Bytes;
 // use crate::embedding_pool::EmbeddingPool;
-use axum::response::IntoResponse;
 use axum::http::StatusCode;
+use axum::response::IntoResponse;
 
 // TODO: Implement axum routes
 // - POST /evidence: single receipt, validate signature, publish to NATS evidence.new
@@ -53,8 +53,7 @@ pub const MAX_BATCH_BYTES: usize = 1_048_576;
 /// Option C: when Centaur is added to Nodes 1+3, this handler is replaced
 /// by Scheduler-aware routing. Config change, not code change.
 #[allow(dead_code)]
-async fn handle_embedding(
-    // State(state): State<AppState>,
+async fn handle_embedding(// State(state): State<AppState>,
     // auth: ExtractedAuth,
     // body: Bytes,
 ) -> impl IntoResponse {

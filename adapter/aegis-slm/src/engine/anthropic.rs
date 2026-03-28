@@ -153,8 +153,7 @@ mod tests {
 
     #[test]
     fn url_trailing_slash_trimmed() {
-        let engine =
-            AnthropicEngine::new("https://api.anthropic.com/", "test-model", Some("key"));
+        let engine = AnthropicEngine::new("https://api.anthropic.com/", "test-model", Some("key"));
         assert_eq!(engine.url, "https://api.anthropic.com");
     }
 

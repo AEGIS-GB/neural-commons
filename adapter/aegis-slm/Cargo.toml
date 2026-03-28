@@ -7,6 +7,7 @@ license.workspace = true
 
 [features]
 default = []
+prompt-guard = ["dep:ort", "dep:tokenizers"]
 
 [dependencies]
 aegis-schemas = { path = "../../aegis-schemas" }
@@ -17,5 +18,5 @@ serde_json.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 thiserror.workspace = true
-ort.workspace = true
-tokenizers.workspace = true
+ort = { workspace = true, optional = true }
+tokenizers = { workspace = true, optional = true }

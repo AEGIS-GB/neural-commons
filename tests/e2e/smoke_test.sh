@@ -18,8 +18,9 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 TEST_TMPDIR="$(mktemp -d)"
-export HOME="$TEST_TMPDIR/fakehome"
-mkdir -p "$HOME"
+REAL_HOME="$HOME"
+FAKE_HOME="$TEST_TMPDIR/fakehome"
+mkdir -p "$FAKE_HOME"
 
 AEGIS_PID=""
 MOCK_PID=""
@@ -58,6 +59,9 @@ fi
 
 # Put it on PATH
 export PATH="$(dirname "$AEGIS_BIN"):$PATH"
+
+# Switch to fake HOME so aegis doesn't touch real configs
+export HOME="$FAKE_HOME"
 
 # ── Step 2: Verify CLI commands ────────────────────────────
 

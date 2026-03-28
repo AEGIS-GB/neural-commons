@@ -83,7 +83,8 @@ impl AnomalyDetector {
         for threshold in &self.thresholds {
             if threshold.name == point.name {
                 if point.value > threshold.max_value {
-                    let deviation = ((point.value - threshold.max_value) / threshold.max_value) * 100.0;
+                    let deviation =
+                        ((point.value - threshold.max_value) / threshold.max_value) * 100.0;
                     return Some(AnomalyResult {
                         is_anomaly: true,
                         metric_name: point.name.clone(),

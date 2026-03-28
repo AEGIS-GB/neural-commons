@@ -114,12 +114,14 @@ impl MemoryScreener for HeuristicScreener {
     ) -> ScreenResult {
         let content = match new_content {
             Some(c) => c,
-            None => return ScreenResult {
-                verdict: ScreenVerdict::Clean,
-                confidence_bp: 10000,
-                explanation: "File deleted — no content to screen".to_string(),
-                concerns: Vec::new(),
-            },
+            None => {
+                return ScreenResult {
+                    verdict: ScreenVerdict::Clean,
+                    confidence_bp: 10000,
+                    explanation: "File deleted — no content to screen".to_string(),
+                    concerns: Vec::new(),
+                };
+            }
         };
 
         let mut concerns = Vec::new();
@@ -150,12 +152,7 @@ impl MemoryScreener for HeuristicScreener {
         }
 
         // Check for injection patterns
-        let injection_patterns = [
-            "```system",
-            "<|im_start|>system",
-            "[INST]",
-            "<<SYS>>",
-        ];
+        let injection_patterns = ["```system", "<|im_start|>system", "[INST]", "<<SYS>>"];
 
         for pattern in &injection_patterns {
             if content.contains(pattern) {

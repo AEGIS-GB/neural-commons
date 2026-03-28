@@ -3,9 +3,9 @@
 //! Stores the last 200 request/response pairs for debugging and analysis.
 //! Data is never persisted to disk — it lives only in memory and is lost on restart.
 
+use serde::Serialize;
 use std::collections::VecDeque;
 use std::sync::RwLock;
-use serde::Serialize;
 
 /// A single captured request/response pair.
 #[derive(Debug, Clone, Serialize)]
@@ -84,12 +84,10 @@ impl TrafficStore {
         trust_level: Option<&str>,
         model: Option<&str>,
     ) {
-        let req_str = String::from_utf8_lossy(
-            &req_body[..req_body.len().min(MAX_BODY_CAPTURE)]
-        ).into_owned();
-        let resp_str = String::from_utf8_lossy(
-            &resp_body[..resp_body.len().min(MAX_BODY_CAPTURE)]
-        ).into_owned();
+        let req_str =
+            String::from_utf8_lossy(&req_body[..req_body.len().min(MAX_BODY_CAPTURE)]).into_owned();
+        let resp_str = String::from_utf8_lossy(&resp_body[..resp_body.len().min(MAX_BODY_CAPTURE)])
+            .into_owned();
 
         let id = {
             let mut next = self.next_id.write().unwrap();
@@ -135,23 +133,33 @@ impl TrafficStore {
 
     /// Get a single entry by ID.
     pub fn get(&self, id: u64) -> Option<TrafficEntry> {
-        self.entries.read().unwrap().iter().find(|e| e.id == id).cloned()
+        self.entries
+            .read()
+            .unwrap()
+            .iter()
+            .find(|e| e.id == id)
+            .cloned()
     }
 
     /// Update the SLM verdict on an existing entry (used for deferred/async SLM on trusted channels).
     pub fn update_slm(&self, id: u64, duration_ms: u64, verdict: &str, threat_score: u32) {
-        if let Ok(mut entries) = self.entries.write() {
-            if let Some(entry) = entries.iter_mut().find(|e| e.id == id) {
-                entry.slm_duration_ms = Some(duration_ms);
-                entry.slm_verdict = Some(verdict.to_string());
-                entry.slm_threat_score = Some(threat_score);
-            }
+        if let Ok(mut entries) = self.entries.write()
+            && let Some(entry) = entries.iter_mut().find(|e| e.id == id)
+        {
+            entry.slm_duration_ms = Some(duration_ms);
+            entry.slm_verdict = Some(verdict.to_string());
+            entry.slm_threat_score = Some(threat_score);
         }
     }
 
     /// Get current entry count.
     pub fn len(&self) -> usize {
         self.entries.read().unwrap().len()
+    }
+
+    /// Whether the store is empty.
+    pub fn is_empty(&self) -> bool {
+        self.entries.read().unwrap().is_empty()
     }
 
     /// Get the ID of the most recently recorded entry.

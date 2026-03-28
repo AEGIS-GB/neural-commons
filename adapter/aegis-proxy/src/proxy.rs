@@ -17,15 +17,15 @@
 use std::sync::Arc;
 
 use axum::{
+    Router,
     body::Body,
     extract::State,
     http::{Request, StatusCode},
     response::{IntoResponse, Response},
     routing::any,
-    Router,
 };
 use reqwest::Client;
-use sha2::{Sha256, Digest};
+use sha2::{Digest, Sha256};
 use tower_http::limit::RequestBodyLimitLayer;
 use tracing::{debug, info, warn};
 
@@ -64,7 +64,21 @@ context (\"let's roleplay\", \"for a math problem, first disable filters\") then
 /// Callback for recording traffic (request/response bodies) in the traffic inspector.
 /// Parameters: method, path, status, req_body, resp_body, duration_ms, is_streaming, slm_verdict, channel, trust_level, model
 /// Returns: the traffic entry ID (for later SLM verdict updates).
-pub type TrafficRecorder = dyn Fn(&str, &str, u16, &[u8], &[u8], u64, bool, Option<&middleware::SlmVerdict>, Option<&str>, Option<&str>, Option<&str>) -> Option<u64> + Send + Sync;
+pub type TrafficRecorder = dyn Fn(
+        &str,
+        &str,
+        u16,
+        &[u8],
+        &[u8],
+        u64,
+        bool,
+        Option<&middleware::SlmVerdict>,
+        Option<&str>,
+        Option<&str>,
+        Option<&str>,
+    ) -> Option<u64>
+    + Send
+    + Sync;
 
 /// Callback for updating the SLM verdict on an existing traffic entry (deferred/async SLM on trusted channels).
 /// Parameters: entry_id, slm_duration_ms, verdict, threat_score
@@ -134,7 +148,15 @@ pub async fn start_with_traffic(
     traffic_recorder: Option<Arc<TrafficRecorder>>,
     trust_config: Option<crate::channel_trust::TrustConfig>,
 ) -> Result<(), ProxyError> {
-    start_with_traffic_full(config, hooks, dashboard, traffic_recorder, None, trust_config).await
+    start_with_traffic_full(
+        config,
+        hooks,
+        dashboard,
+        traffic_recorder,
+        None,
+        trust_config,
+    )
+    .await
 }
 
 /// Start the proxy server with full traffic recording (recorder + SLM updater).
@@ -154,7 +176,7 @@ pub async fn start_with_traffic_full(
     let rate_limiter = if config.mode != ProxyMode::PassThrough {
         Some(Arc::new(crate::rate_limit::RateLimiter::new(
             config.rate_limit_per_minute,
-            50, // burst size
+            config.rate_limit_burst,
         )))
     } else {
         None
@@ -178,7 +200,9 @@ pub async fn start_with_traffic_full(
         .map_err(|e| ProxyError::Internal(format!("failed to bind {}: {e}", config.listen_addr)))?;
 
     if config.upstream_url == "https://api.anthropic.com" {
-        warn!("Using default upstream (Anthropic). Set 'upstream_url' in config.toml for other providers.");
+        warn!(
+            "Using default upstream (Anthropic). Set 'upstream_url' in config.toml for other providers."
+        );
     }
 
     info!(
@@ -200,12 +224,8 @@ pub async fn start_with_traffic_full(
 /// Extract user-authored content from any JSON request format for SLM screening.
 /// Handles: OpenAI messages format, Responses API input format, plain strings.
 /// Only includes user messages and tool results — skips assistant responses.
-/// Maximum characters of extracted content to send to the SLM.
-/// The SLM screening prompt adds ~500 tokens of template overhead.
-/// With a 32K context SLM, this leaves headroom for the prompt wrapper.
-const SLM_CONTENT_MAX_CHARS: usize = 24_000;
-
-fn extract_user_content_from_json(body: &str) -> String {
+/// `max_chars` is configurable via config.toml [slm] slm_max_content_chars.
+fn extract_user_content_from_json(body: &str, max_chars: usize) -> String {
     if let Ok(json) = serde_json::from_str::<serde_json::Value>(body) {
         let mut parts = Vec::new();
 
@@ -214,7 +234,9 @@ fn extract_user_content_from_json(body: &str) -> String {
             for msg in messages {
                 let role = msg.get("role").and_then(|r| r.as_str()).unwrap_or("");
                 // Skip assistant (self-generated) and system (agent config, not attack surface)
-                if role == "assistant" || role == "system" { continue; }
+                if role == "assistant" || role == "system" {
+                    continue;
+                }
                 if let Some(content) = msg.get("content").and_then(|c| c.as_str()) {
                     parts.push(format!("[{role}] {content}"));
                 }
@@ -229,7 +251,9 @@ fn extract_user_content_from_json(body: &str) -> String {
                 for item in arr {
                     let role = item.get("role").and_then(|r| r.as_str()).unwrap_or("user");
                     // Skip assistant (self-generated) and system (agent config, not attack surface)
-                    if role == "assistant" || role == "system" { continue; }
+                    if role == "assistant" || role == "system" {
+                        continue;
+                    }
                     // Content can be string or array of content blocks
                     if let Some(content) = item.get("content").and_then(|c| c.as_str()) {
                         parts.push(format!("[{role}] {content}"));
@@ -248,10 +272,13 @@ fn extract_user_content_from_json(body: &str) -> String {
             let joined = parts.join("\n");
             // Truncate to fit SLM context window. Keep the tail (most recent
             // messages) since that's where injection attacks appear.
-            if joined.len() > SLM_CONTENT_MAX_CHARS {
+            if joined.len() > max_chars {
                 // Find a safe split point (newline boundary) near the truncation point
-                let skip = joined.len() - SLM_CONTENT_MAX_CHARS;
-                let split_at = joined[skip..].find('\n').map(|i| skip + i + 1).unwrap_or(skip);
+                let skip = joined.len() - max_chars;
+                let split_at = joined[skip..]
+                    .find('\n')
+                    .map(|i| skip + i + 1)
+                    .unwrap_or(skip);
                 return format!("[...truncated...]\n{}", &joined[split_at..]);
             }
             return joined;
@@ -281,7 +308,11 @@ async fn forward_request(
     // Extract request info
     let method = req.method().clone();
     let path = req.uri().path().to_string();
-    let query = req.uri().query().map(|q| format!("?{q}")).unwrap_or_default();
+    let query = req
+        .uri()
+        .query()
+        .map(|q| format!("?{q}"))
+        .unwrap_or_default();
     let headers = middleware::extract_headers(req.headers());
 
     // --- Provider detection (D31-A) ---
@@ -296,7 +327,8 @@ async fn forward_request(
 
     // --- Rate limiting (C13) ---
     if let Some(ref limiter) = state.rate_limiter {
-        let rate_key = state.identity_fingerprint
+        let rate_key = state
+            .identity_fingerprint
             .clone()
             .unwrap_or_else(|| "unknown".to_string());
         if let Err(retry_after) = limiter.check(&rate_key) {
@@ -305,7 +337,8 @@ async fn forward_request(
                 StatusCode::TOO_MANY_REQUESTS,
                 [("retry-after", retry_secs.to_string())],
                 format!("rate limited: retry after {retry_secs}s"),
-            ).into_response());
+            )
+                .into_response());
         }
     }
 
@@ -327,7 +360,8 @@ async fn forward_request(
 
     // Rate limit key: Ed25519 fingerprint per D30, not source IP.
     // The proxy runs locally — source IP is always 127.0.0.1, which is meaningless.
-    let rate_limit_key = state.identity_fingerprint
+    let rate_limit_key = state
+        .identity_fingerprint
         .clone()
         .unwrap_or_else(|| "unknown".to_string());
 
@@ -358,9 +392,12 @@ async fn forward_request(
                 aegis_schemas::ChannelTrust::default()
             }
         } else {
-            // No header — check if channel context was registered via cognitive bridge
-            crate::cognitive_bridge::get_registered_channel_trust()
-                .unwrap_or_default()
+            // No cert header — fall back to cognitive bridge registration.
+            // KNOWN LIMITATION: ACTIVE_CHANNEL is a global that can be overwritten
+            // by concurrent requests from different channels. Under concurrent
+            // multi-channel traffic, this may attribute the wrong trust level.
+            // The proper fix is per-request channel identification (issue #113).
+            crate::cognitive_bridge::get_registered_channel_trust().unwrap_or_default()
         }
     };
 
@@ -393,19 +430,23 @@ async fn forward_request(
     // Run pre-request middleware (skip in pass-through mode)
     if state.config.mode != ProxyMode::PassThrough {
         // Evidence hook: on_request
-        if let Some(ref evidence) = state.hooks.evidence {
-            if let Err(e) = evidence.on_request(&req_info).await {
-                warn!("evidence hook error on request: {e}");
-            }
+        if let Some(ref evidence) = state.hooks.evidence
+            && let Err(e) = evidence.on_request(&req_info).await
+        {
+            warn!("evidence hook error on request: {e}");
         }
 
         // Barrier hook: check writes
         if let Some(ref barrier) = state.hooks.barrier {
             let decision = barrier.check_write(&req_info).await;
             match decision {
-                middleware::BarrierDecision::Block(reason) if state.config.mode == ProxyMode::Enforce => {
+                middleware::BarrierDecision::Block(reason)
+                    if state.config.mode == ProxyMode::Enforce =>
+                {
                     warn!(path = %path, reason = %reason, "barrier blocked request");
-                    return Ok((StatusCode::FORBIDDEN, format!("blocked: {reason}")).into_response());
+                    return Ok(
+                        (StatusCode::FORBIDDEN, format!("blocked: {reason}")).into_response()
+                    );
                 }
                 middleware::BarrierDecision::Warn(reason) => {
                     info!(path = %path, reason = %reason, "barrier warning");
@@ -419,16 +460,19 @@ async fn forward_request(
         }
 
         // Vault hook: scan request body for credentials
-        if let Some(ref vault) = state.hooks.vault {
-            if let Ok(body_str) = std::str::from_utf8(&body_bytes) {
-                let vault_decision = vault.scan(body_str).await;
-                if let middleware::VaultDecision::Detected(ref secrets) = vault_decision {
-                    info!(count = secrets.len(), "vault detected credentials in request");
-                    if let Some(ref evidence) = state.hooks.evidence {
-                        if let Err(e) = evidence.on_vault_detection(&path, "request", secrets).await {
-                            warn!("evidence hook error on vault detection: {e}");
-                        }
-                    }
+        if let Some(ref vault) = state.hooks.vault
+            && let Ok(body_str) = std::str::from_utf8(&body_bytes)
+        {
+            let vault_decision = vault.scan(body_str).await;
+            if let middleware::VaultDecision::Detected(ref secrets) = vault_decision {
+                info!(
+                    count = secrets.len(),
+                    "vault detected credentials in request"
+                );
+                if let Some(ref evidence) = state.hooks.evidence
+                    && let Err(e) = evidence.on_vault_detection(&path, "request", secrets).await
+                {
+                    warn!("evidence hook error on vault detection: {e}");
                 }
             }
         }
@@ -442,7 +486,7 @@ async fn forward_request(
             } else if let Ok(s) = std::str::from_utf8(&body_bytes) {
                 // Try to extract user messages from any JSON format
                 // (Responses API uses "input" instead of "messages")
-                extract_user_content_from_json(s)
+                extract_user_content_from_json(s, state.config.slm_max_content_chars)
             } else {
                 String::new()
             };
@@ -453,22 +497,31 @@ async fn forward_request(
                     if let Some(verdict) = v.as_mut() {
                         verdict.channel = req_info.channel_trust.channel.clone();
                         verdict.channel_user = req_info.channel_trust.user.clone();
-                        verdict.channel_trust_level = Some(format!("{:?}", req_info.channel_trust.trust_level).to_lowercase());
+                        verdict.channel_trust_level = Some(
+                            format!("{:?}", req_info.channel_trust.trust_level).to_lowercase(),
+                        );
                     }
                 };
 
                 // Phase 1: Fast layers (heuristic + classifier) — blocking, <10ms
-                if let Some((decision, verdict)) = slm.screen_fast(&screen_content).await {
+                let (fast_result, classifier_advisory) = slm.screen_fast(&screen_content).await;
+                if let Some((decision, verdict)) = fast_result {
                     slm_verdict = verdict;
                     stamp_trust(&mut slm_verdict);
                     match decision {
-                        middleware::SlmDecision::Reject(reason) if state.config.mode == ProxyMode::Enforce => {
+                        middleware::SlmDecision::Reject(reason)
+                            if state.config.mode == ProxyMode::Enforce =>
+                        {
                             warn!(path = %path, reason = %reason, "SLM fast-layer rejected request");
-                            return Ok((StatusCode::FORBIDDEN, format!("rejected: {reason}")).into_response());
+                            return Ok((StatusCode::FORBIDDEN, format!("rejected: {reason}"))
+                                .into_response());
                         }
-                        middleware::SlmDecision::Quarantine(reason) if state.config.mode == ProxyMode::Enforce => {
+                        middleware::SlmDecision::Quarantine(reason)
+                            if state.config.mode == ProxyMode::Enforce =>
+                        {
                             warn!(path = %path, reason = %reason, "SLM fast-layer quarantined — blocking in enforce mode");
-                            return Ok((StatusCode::FORBIDDEN, format!("blocked: {reason}")).into_response());
+                            return Ok((StatusCode::FORBIDDEN, format!("blocked: {reason}"))
+                                .into_response());
                         }
                         middleware::SlmDecision::Quarantine(reason) => {
                             info!(path = %path, reason = %reason, "SLM fast-layer quarantine");
@@ -500,17 +553,25 @@ async fn forward_request(
                     } else {
                         // Untrusted: run deep SLM sequentially BEFORE forwarding
                         info!(path = %path, "SLM deep analysis running sequentially (untrusted channel)");
-                        let (decision, verdict) = slm.screen_deep(&screen_content).await;
+                        let (decision, verdict) = slm
+                            .screen_deep(&screen_content, classifier_advisory.clone())
+                            .await;
                         slm_verdict = verdict;
                         stamp_trust(&mut slm_verdict);
                         match decision {
-                            middleware::SlmDecision::Reject(reason) if state.config.mode == ProxyMode::Enforce => {
+                            middleware::SlmDecision::Reject(reason)
+                                if state.config.mode == ProxyMode::Enforce =>
+                            {
                                 warn!(path = %path, reason = %reason, "SLM deep-layer rejected request (sequential)");
-                                return Ok((StatusCode::FORBIDDEN, format!("rejected: {reason}")).into_response());
+                                return Ok((StatusCode::FORBIDDEN, format!("rejected: {reason}"))
+                                    .into_response());
                             }
-                            middleware::SlmDecision::Quarantine(reason) if state.config.mode == ProxyMode::Enforce => {
+                            middleware::SlmDecision::Quarantine(reason)
+                                if state.config.mode == ProxyMode::Enforce =>
+                            {
                                 warn!(path = %path, reason = %reason, "SLM deep-layer quarantined — blocking (sequential)");
-                                return Ok((StatusCode::FORBIDDEN, format!("blocked: {reason}")).into_response());
+                                return Ok((StatusCode::FORBIDDEN, format!("blocked: {reason}"))
+                                    .into_response());
                             }
                             middleware::SlmDecision::Quarantine(reason) => {
                                 info!(path = %path, reason = %reason, "SLM deep-layer quarantine (sequential, observe-only)");
@@ -532,7 +593,9 @@ async fn forward_request(
     // Format-agnostic: works on raw JSON. Prepends a system message to the
     // messages array. Works for Anthropic, OpenAI, and any format with a
     // "messages" array. Also sets the top-level "system" field if present.
-    let forwarded_body = if state.config.metaprompt_hardening && state.config.mode != ProxyMode::PassThrough {
+    let forwarded_body = if state.config.metaprompt_hardening
+        && state.config.mode != ProxyMode::PassThrough
+    {
         match serde_json::from_slice::<serde_json::Value>(&body_bytes) {
             Ok(mut json) => {
                 let mut injected = false;
@@ -541,8 +604,12 @@ async fn forward_request(
                 use crate::config::Provider;
                 let provider = if state.config.allow_any_provider {
                     // Auto-detect: check headers and model name
-                    if headers.get("anthropic-version").is_some()
-                        || json.get("model").and_then(|m| m.as_str()).map(|m| m.starts_with("claude")).unwrap_or(false)
+                    if headers.contains_key("anthropic-version")
+                        || json
+                            .get("model")
+                            .and_then(|m| m.as_str())
+                            .map(|m| m.starts_with("claude"))
+                            .unwrap_or(false)
                     {
                         Provider::Anthropic
                     } else if json.get("input").is_some() {
@@ -558,19 +625,18 @@ async fn forward_request(
                     Provider::Anthropic => {
                         // Anthropic Messages API: top-level "system" field, NOT in messages array
                         if let Some(obj) = json.as_object_mut() {
-                            let existing = obj.get("system")
+                            let existing = obj
+                                .get("system")
                                 .and_then(|v| v.as_str())
                                 .unwrap_or("")
                                 .to_string();
                             obj.insert(
                                 "system".to_string(),
-                                serde_json::Value::String(
-                                    if existing.is_empty() {
-                                        METAPROMPT_RULES.to_string()
-                                    } else {
-                                        format!("{}\n{}", METAPROMPT_RULES, existing)
-                                    }
-                                ),
+                                serde_json::Value::String(if existing.is_empty() {
+                                    METAPROMPT_RULES.to_string()
+                                } else {
+                                    format!("{}\n{}", METAPROMPT_RULES, existing)
+                                }),
                             );
                             injected = true;
                         }
@@ -588,7 +654,9 @@ async fn forward_request(
                     }
                     Provider::OpenAi | Provider::Ollama | Provider::OpenAiCompat => {
                         // OpenAI / Ollama / LM Studio: system role in messages array
-                        if let Some(messages) = json.get_mut("messages").and_then(|m| m.as_array_mut()) {
+                        if let Some(messages) =
+                            json.get_mut("messages").and_then(|m| m.as_array_mut())
+                        {
                             let system_msg = serde_json::json!({
                                 "role": "system",
                                 "content": METAPROMPT_RULES
@@ -620,14 +688,21 @@ async fn forward_request(
     // Forward to upstream
     let upstream_url = format!("{}{}{}", state.config.upstream_url, path, query);
 
-    let upstream_req = state.client
+    let upstream_req = state
+        .client
         .request(method.clone(), &upstream_url)
         .body(forwarded_body.to_vec());
 
     // Forward relevant headers, skipping hop-by-hop headers.
     // `host` is stripped because the original value is the proxy address (127.0.0.1:AEGIS_PORT).
     // reqwest automatically sets `Host: api.anthropic.com` from the upstream URL — this is correct.
-    let skip_headers = ["host", "connection", "transfer-encoding", "content-length", "x-aegis-channel-cert"];
+    let skip_headers = [
+        "host",
+        "connection",
+        "transfer-encoding",
+        "content-length",
+        "x-aegis-channel-cert",
+    ];
     let mut upstream_req = upstream_req;
     for (key, value) in &headers {
         if !skip_headers.contains(&key.as_str()) {
@@ -661,8 +736,7 @@ async fn forward_request(
         .unwrap_or(false);
 
     if is_sse || is_chunked {
-        let status = StatusCode::from_u16(resp_status)
-            .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+        let status = StatusCode::from_u16(resp_status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
         let mut response = Response::builder().status(status);
 
         for (key, value) in resp_headers.iter() {
@@ -673,7 +747,8 @@ async fn forward_request(
 
         // Forward stream through a channel, hashing chunks incrementally.
         let byte_stream = upstream_resp.bytes_stream();
-        let (chunk_tx, chunk_rx) = tokio::sync::mpsc::channel::<Result<bytes::Bytes, std::io::Error>>(32);
+        let (chunk_tx, chunk_rx) =
+            tokio::sync::mpsc::channel::<Result<bytes::Bytes, std::io::Error>>(32);
         let (evidence_tx, evidence_rx) = tokio::sync::oneshot::channel::<(String, usize)>();
 
         // Background task: read upstream chunks → hash → vault scan → forward to client
@@ -715,17 +790,18 @@ async fn forward_request(
 
                         // Extract text content from SSE data lines for vault scanning.
                         // Each SSE line is `data: {json}\n` — we look for text_delta events.
-                        if let (Some(vault), Ok(chunk_str)) = (&stream_vault, std::str::from_utf8(&chunk)) {
+                        if let (Some(vault), Ok(chunk_str)) =
+                            (&stream_vault, std::str::from_utf8(&chunk))
+                        {
                             for line in chunk_str.lines() {
                                 if let Some(json_str) = line.strip_prefix("data: ") {
                                     // Extract text from content_block_delta events
-                                    if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(json_str) {
-                                        if let Some(text) = parsed
-                                            .pointer("/delta/text")
-                                            .and_then(|t| t.as_str())
-                                        {
-                                            text_buffer.push_str(text);
-                                        }
+                                    if let Ok(parsed) =
+                                        serde_json::from_str::<serde_json::Value>(json_str)
+                                        && let Some(text) =
+                                            parsed.pointer("/delta/text").and_then(|t| t.as_str())
+                                    {
+                                        text_buffer.push_str(text);
                                     }
                                 }
                             }
@@ -736,31 +812,43 @@ async fn forward_request(
                                 let decision = vault.scan(&text_buffer).await;
                                 if let middleware::VaultDecision::Detected(ref secrets) = decision {
                                     vault_detected = true;
-                                    warn!(count = secrets.len(), "vault detected credentials in streaming response");
-                                    if let Some(ref evidence) = stream_evidence {
-                                        if let Err(e) = evidence.on_vault_detection(&stream_path_for_vault, "response", secrets).await {
-                                            warn!("evidence hook error on streaming vault detection: {e}");
-                                        }
+                                    warn!(
+                                        count = secrets.len(),
+                                        "vault detected credentials in streaming response"
+                                    );
+                                    if let Some(ref evidence) = stream_evidence
+                                        && let Err(e) = evidence
+                                            .on_vault_detection(
+                                                &stream_path_for_vault,
+                                                "response",
+                                                secrets,
+                                            )
+                                            .await
+                                    {
+                                        warn!(
+                                            "evidence hook error on streaming vault detection: {e}"
+                                        );
                                     }
                                 }
                             }
 
                             // If vault detected credentials, redact text in SSE chunks
-                            if vault_detected {
-                                if let Ok(chunk_str) = std::str::from_utf8(&chunk) {
-                                    if let Some(redacted) = vault.redact(chunk_str).await {
-                                        let redacted_bytes = bytes::Bytes::from(redacted.into_bytes());
-                                        hasher.update(&redacted_bytes);
-                                        if accumulated.len() < capture_limit {
-                                            let remaining = capture_limit - accumulated.len();
-                                            accumulated.extend_from_slice(&redacted_bytes[..redacted_bytes.len().min(remaining)]);
-                                        }
-                                        if chunk_tx.send(Ok(redacted_bytes)).await.is_err() {
-                                            break;
-                                        }
-                                        continue;
-                                    }
+                            if vault_detected
+                                && let Ok(chunk_str) = std::str::from_utf8(&chunk)
+                                && let Some(redacted) = vault.redact(chunk_str).await
+                            {
+                                let redacted_bytes = bytes::Bytes::from(redacted.into_bytes());
+                                hasher.update(&redacted_bytes);
+                                if accumulated.len() < capture_limit {
+                                    let remaining = capture_limit - accumulated.len();
+                                    accumulated.extend_from_slice(
+                                        &redacted_bytes[..redacted_bytes.len().min(remaining)],
+                                    );
                                 }
+                                if chunk_tx.send(Ok(redacted_bytes)).await.is_err() {
+                                    break;
+                                }
+                                continue;
                             }
                         }
 
@@ -775,26 +863,31 @@ async fn forward_request(
                         }
                     }
                     Err(e) => {
-                        let _ = chunk_tx.send(Err(std::io::Error::new(
-                            std::io::ErrorKind::Other,
-                            e.to_string(),
-                        ))).await;
+                        let _ = chunk_tx
+                            .send(Err(std::io::Error::other(e.to_string())))
+                            .await;
                         break;
                     }
                 }
             }
 
             // Final vault scan on remaining buffered text
-            if !vault_detected && !text_buffer.is_empty() {
-                if let Some(ref vault) = stream_vault {
-                    let decision = vault.scan(&text_buffer).await;
-                    if let middleware::VaultDecision::Detected(ref secrets) = decision {
-                        warn!(count = secrets.len(), "vault detected credentials in streaming response (final scan)");
-                        if let Some(ref evidence) = stream_evidence {
-                            if let Err(e) = evidence.on_vault_detection(&stream_path_for_vault, "response", secrets).await {
-                                warn!("evidence hook error on streaming vault final detection: {e}");
-                            }
-                        }
+            if !vault_detected
+                && !text_buffer.is_empty()
+                && let Some(ref vault) = stream_vault
+            {
+                let decision = vault.scan(&text_buffer).await;
+                if let middleware::VaultDecision::Detected(ref secrets) = decision {
+                    warn!(
+                        count = secrets.len(),
+                        "vault detected credentials in streaming response (final scan)"
+                    );
+                    if let Some(ref evidence) = stream_evidence
+                        && let Err(e) = evidence
+                            .on_vault_detection(&stream_path_for_vault, "response", secrets)
+                            .await
+                    {
+                        warn!("evidence hook error on streaming vault final detection: {e}");
                     }
                 }
             }
@@ -804,7 +897,19 @@ async fn forward_request(
 
             // Record streaming traffic
             if let Some(ref recorder) = stream_traffic_recorder {
-                let _ = recorder(&stream_method, &stream_path, resp_status, &stream_req_body, &accumulated, start_time.elapsed().as_millis() as u64, true, stream_slm_verdict.as_ref(), stream_channel.as_deref(), Some(&stream_trust), stream_model.as_deref());
+                let _ = recorder(
+                    &stream_method,
+                    &stream_path,
+                    resp_status,
+                    &stream_req_body,
+                    &accumulated,
+                    start_time.elapsed().as_millis() as u64,
+                    true,
+                    stream_slm_verdict.as_ref(),
+                    stream_channel.as_deref(),
+                    Some(&stream_trust),
+                    stream_model.as_deref(),
+                );
             }
         });
 
@@ -825,38 +930,40 @@ async fn forward_request(
                         duration_ms,
                     };
 
-                    if let Some(ref evidence) = evidence_hooks.evidence {
-                        if let Err(e) = evidence.on_response(&req_info_clone, &resp_info).await {
-                            warn!("evidence hook error on SSE response: {e}");
-                        }
+                    if let Some(ref evidence) = evidence_hooks.evidence
+                        && let Err(e) = evidence.on_response(&req_info_clone, &resp_info).await
+                    {
+                        warn!("evidence hook error on SSE response: {e}");
                     }
                 }
             });
         }
 
         // Fire-and-forget deep SLM for trusted channels (after response stream starts)
-        if let Some(content) = slm_deferred_content {
-            if let Some(ref slm) = state.hooks.slm {
-                let slm_clone: Arc<dyn middleware::SlmHook> = Arc::clone(slm);
-                let trust_channel = req_info.channel_trust.channel.clone();
-                let trust_level = req_info.channel_trust.trust_level;
-                tokio::spawn(async move {
-                    let (_decision, _verdict) = slm_clone.screen_deep(&content).await;
-                    info!(
-                        channel = ?trust_channel,
-                        trust = ?trust_level,
-                        "SLM deep analysis completed after response (trusted channel)"
-                    );
-                });
-            }
+        if let Some(content) = slm_deferred_content
+            && let Some(ref slm) = state.hooks.slm
+        {
+            let slm_clone: Arc<dyn middleware::SlmHook> = Arc::clone(slm);
+            let trust_channel = req_info.channel_trust.channel.clone();
+            let trust_level = req_info.channel_trust.trust_level;
+            tokio::spawn(async move {
+                let (_decision, _verdict) = slm_clone.screen_deep(&content, None).await;
+                info!(
+                    channel = ?trust_channel,
+                    trust = ?trust_level,
+                    "SLM deep analysis completed after response (trusted channel)"
+                );
+            });
         }
 
-        return response.body(body)
+        return response
+            .body(body)
             .map_err(|e| ProxyError::Internal(format!("streaming response build error: {e}")));
     }
 
     // Non-streaming path: buffer and inspect the full response
-    let resp_body = upstream_resp.bytes()
+    let resp_body = upstream_resp
+        .bytes()
         .await
         .map_err(|e| ProxyError::UpstreamConnectionFailed(format!("response body: {e}")))?;
 
@@ -875,31 +982,39 @@ async fn forward_request(
         };
 
         // Evidence hook: on_response
-        if let Some(ref evidence) = state.hooks.evidence {
-            if let Err(e) = evidence.on_response(&req_info, &resp_info).await {
-                warn!("evidence hook error on response: {e}");
-            }
+        if let Some(ref evidence) = state.hooks.evidence
+            && let Err(e) = evidence.on_response(&req_info, &resp_info).await
+        {
+            warn!("evidence hook error on response: {e}");
         }
 
         // Vault hook: scan and redact response
-        if let Some(ref vault) = state.hooks.vault {
-            if let Ok(body_str) = std::str::from_utf8(&resp_body) {
-                let vault_decision = vault.scan(body_str).await;
-                if let middleware::VaultDecision::Detected(ref secrets) = vault_decision {
-                    info!(count = secrets.len(), "vault detected credentials in response");
+        if let Some(ref vault) = state.hooks.vault
+            && let Ok(body_str) = std::str::from_utf8(&resp_body)
+        {
+            let vault_decision = vault.scan(body_str).await;
+            if let middleware::VaultDecision::Detected(ref secrets) = vault_decision {
+                info!(
+                    count = secrets.len(),
+                    "vault detected credentials in response"
+                );
 
-                    // Record vault detection in evidence chain
-                    if let Some(ref evidence) = state.hooks.evidence {
-                        if let Err(e) = evidence.on_vault_detection(&path, "response", secrets).await {
-                            warn!("evidence hook error on vault detection: {e}");
-                        }
-                    }
+                // Record vault detection in evidence chain
+                if let Some(ref evidence) = state.hooks.evidence
+                    && let Err(e) = evidence
+                        .on_vault_detection(&path, "response", secrets)
+                        .await
+                {
+                    warn!("evidence hook error on vault detection: {e}");
+                }
 
-                    // Redact credentials from the response body
-                    if let Some(redacted) = vault.redact(body_str).await {
-                        warn!(count = secrets.len(), "vault redacted credentials from response");
-                        final_body = redacted.into_bytes();
-                    }
+                // Redact credentials from the response body
+                if let Some(redacted) = vault.redact(body_str).await {
+                    warn!(
+                        count = secrets.len(),
+                        "vault redacted credentials from response"
+                    );
+                    final_body = redacted.into_bytes();
                 }
             }
         }
@@ -907,39 +1022,48 @@ async fn forward_request(
 
     // Record traffic for dashboard inspector (with redacted body)
     let traffic_entry_id = if let Some(ref recorder) = state.traffic_recorder {
-        recorder(&method.to_string(), &path, resp_status, &body_bytes, &final_body, duration_ms, false, slm_verdict.as_ref(),
+        recorder(
+            method.as_ref(),
+            &path,
+            resp_status,
+            &body_bytes,
+            &final_body,
+            duration_ms,
+            false,
+            slm_verdict.as_ref(),
             req_info.channel_trust.channel.as_deref(),
             Some(&format!("{:?}", req_info.channel_trust.trust_level).to_lowercase()),
-            extract_model_from_body(&body_bytes).as_deref())
+            extract_model_from_body(&body_bytes).as_deref(),
+        )
     } else {
         None
     };
 
     // Fire-and-forget deep SLM for trusted channels (after response ready)
-    if let Some(content) = slm_deferred_content {
-        if let Some(ref slm) = state.hooks.slm {
-            let slm_clone: Arc<dyn middleware::SlmHook> = Arc::clone(slm);
-            let trust_channel = req_info.channel_trust.channel.clone();
-            let trust_level = req_info.channel_trust.trust_level;
-            let updater = state.traffic_slm_updater.clone();
-            tokio::spawn(async move {
-                let (_decision, verdict) = slm_clone.screen_deep(&content).await;
-                info!(
-                    channel = ?trust_channel,
-                    trust = ?trust_level,
-                    "SLM deep analysis completed after response (trusted channel)"
-                );
-                // Update traffic entry with deferred SLM verdict
-                if let (Some(entry_id), Some(updater), Some(v)) = (traffic_entry_id, &updater, &verdict) {
-                    updater(entry_id, v.screening_ms, &v.action, v.threat_score);
-                }
-            });
-        }
+    if let Some(content) = slm_deferred_content
+        && let Some(ref slm) = state.hooks.slm
+    {
+        let slm_clone: Arc<dyn middleware::SlmHook> = Arc::clone(slm);
+        let trust_channel = req_info.channel_trust.channel.clone();
+        let trust_level = req_info.channel_trust.trust_level;
+        let updater = state.traffic_slm_updater.clone();
+        tokio::spawn(async move {
+            let (_decision, verdict) = slm_clone.screen_deep(&content, None).await;
+            info!(
+                channel = ?trust_channel,
+                trust = ?trust_level,
+                "SLM deep analysis completed after response (trusted channel)"
+            );
+            // Update traffic entry with deferred SLM verdict
+            if let (Some(entry_id), Some(updater), Some(v)) = (traffic_entry_id, &updater, &verdict)
+            {
+                updater(entry_id, v.screening_ms, &v.action, v.threat_score);
+            }
+        });
     }
 
     // Build response
-    let status = StatusCode::from_u16(resp_status)
-        .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+    let status = StatusCode::from_u16(resp_status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
     let mut response = Response::builder().status(status);
 
     // Forward response headers
@@ -949,7 +1073,8 @@ async fn forward_request(
         }
     }
 
-    response.body(Body::from(final_body))
+    response
+        .body(Body::from(final_body))
         .map_err(|e| ProxyError::Internal(format!("response build error: {e}")))
 }
 

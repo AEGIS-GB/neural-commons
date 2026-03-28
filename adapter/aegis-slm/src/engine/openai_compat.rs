@@ -121,14 +121,12 @@ impl SlmEngine for OpenAiCompatEngine {
         if !resp.status().is_success() {
             let status = resp.status();
             let body = resp.text().unwrap_or_default();
-            return Err(format!(
-                "SLM server returned {status}: {body}"
-            ));
+            return Err(format!("SLM server returned {status}: {body}"));
         }
 
-        let chat_resp: ChatCompletionResponse = resp.json().map_err(|e| {
-            format!("failed to parse SLM response: {e}")
-        })?;
+        let chat_resp: ChatCompletionResponse = resp
+            .json()
+            .map_err(|e| format!("failed to parse SLM response: {e}"))?;
 
         chat_resp
             .choices

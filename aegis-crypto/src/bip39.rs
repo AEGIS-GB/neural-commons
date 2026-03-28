@@ -39,10 +39,25 @@ impl KeyPurpose {
     /// Returns the SLIP-0010 derivation path segments (all hardened)
     pub fn path_segments(&self) -> &[u32] {
         match self {
-            KeyPurpose::Signing => &[44 | 0x80000000, 784 | 0x80000000, 0 | 0x80000000, 0 | 0x80000000],
-            KeyPurpose::MeshEncryption => &[44 | 0x80000000, 784 | 0x80000000, 1 | 0x80000000, 0 | 0x80000000],
-            KeyPurpose::VaultKdf => &[44 | 0x80000000, 784 | 0x80000000, 2 | 0x80000000, 0 | 0x80000000],
-            KeyPurpose::TransportAuth => &[44 | 0x80000000, 784 | 0x80000000, 3 | 0x80000000, 0 | 0x80000000],
+            KeyPurpose::Signing => &[44 | 0x80000000, 784 | 0x80000000, 0x80000000, 0x80000000],
+            KeyPurpose::MeshEncryption => &[
+                44 | 0x80000000,
+                784 | 0x80000000,
+                1 | 0x80000000,
+                0x80000000,
+            ],
+            KeyPurpose::VaultKdf => &[
+                44 | 0x80000000,
+                784 | 0x80000000,
+                2 | 0x80000000,
+                0x80000000,
+            ],
+            KeyPurpose::TransportAuth => &[
+                44 | 0x80000000,
+                784 | 0x80000000,
+                3 | 0x80000000,
+                0x80000000,
+            ],
         }
     }
 
@@ -186,10 +201,7 @@ pub fn slip0010_derive(seed: &[u8; 64], path: &[u32]) -> Result<[u8; 32], Bip39E
 }
 
 /// Derive an Ed25519 signing key for a specific purpose from a BIP-39 seed.
-pub fn derive_signing_key(
-    seed: &[u8; 64],
-    purpose: KeyPurpose,
-) -> Result<SigningKey, Bip39Error> {
+pub fn derive_signing_key(seed: &[u8; 64], purpose: KeyPurpose) -> Result<SigningKey, Bip39Error> {
     let key_bytes = slip0010_derive(seed, purpose.path_segments())?;
     Ok(SigningKey::from_bytes(&key_bytes))
 }

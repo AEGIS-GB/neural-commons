@@ -5,6 +5,10 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+[features]
+default = []
+prompt-guard = ["aegis-slm/prompt-guard"]
+
 [dependencies]
 aegis-crypto = { path = "../../aegis-crypto" }
 aegis-schemas = { path = "../../aegis-schemas" }
@@ -16,6 +20,7 @@ aegis-slm = { path = "../aegis-slm" }
 aegis-vault = { path = "../aegis-vault" }
 aegis-failure = { path = "../aegis-failure" }
 aegis-dashboard = { path = "../aegis-dashboard" }
+aegis-trustmark = { path = "../../cluster/trustmark" }
 tokio.workspace = true
 tracing.workspace = true
 serde.workspace = true
