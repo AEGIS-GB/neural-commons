@@ -308,10 +308,8 @@ async fn recording_middleware(
             let trust = rec_ctx.as_ref().and_then(|c| c.trust_level.clone());
             let context_str = rec_ctx.as_ref().and_then(|c| c.context.clone());
             let slm_v = rec_ctx.as_ref().and_then(|c| c.slm_verdict.clone());
-            let registered_ctx = crate::cognitive_bridge::get_registered_channel_trust();
-            let context = context_str
-                .as_deref()
-                .or_else(|| registered_ctx.as_ref().and_then(|ct| ct.channel.as_deref()));
+            // No global fallback — context comes from RecordingContext only
+            let context = context_str.as_deref();
 
             recorder(
                 &method,
@@ -343,10 +341,13 @@ fn extract_user_content_from_json(body: &str, max_chars: usize) -> String {
         let mut parts = Vec::new();
 
         // Try "messages" array (OpenAI/Anthropic chat format)
+        // Screen ALL roles except assistant (self-generated, not an attack vector).
+        // System, tool, developer messages are attack surfaces — an attacker who
+        // controls any of them controls what the LLM processes.
         if let Some(messages) = json.get("messages").and_then(|m| m.as_array()) {
             for msg in messages {
                 let role = msg.get("role").and_then(|r| r.as_str()).unwrap_or("");
-                if role == "assistant" || role == "system" {
+                if role == "assistant" {
                     continue;
                 }
                 // Content can be a plain string or array of content blocks
@@ -369,8 +370,7 @@ fn extract_user_content_from_json(body: &str, max_chars: usize) -> String {
             } else if let Some(arr) = input.as_array() {
                 for item in arr {
                     let role = item.get("role").and_then(|r| r.as_str()).unwrap_or("user");
-                    // Skip assistant (self-generated) and system (agent config, not attack surface)
-                    if role == "assistant" || role == "system" {
+                    if role == "assistant" {
                         continue;
                     }
                     // Content can be string or array of content blocks
@@ -513,30 +513,15 @@ async fn forward_request(
             .unwrap_or(false);
 
         if !config.channels.is_empty() {
-            // Channel-based trust: resolve from source IP.
-            // If no cert header, use the registered context from the cognitive bridge
-            // as METADATA ONLY (the trust level still comes from source IP, not context).
-            let effective_cert = cert.as_ref().cloned().or_else(|| {
-                // Build a synthetic cert from the last registered context (observability only)
-                let registered = crate::cognitive_bridge::get_registered_channel_trust();
-                registered.and_then(|ctx| {
-                    ctx.channel.map(|ch| aegis_schemas::ChannelCert {
-                        channel: ch,
-                        user: ctx.user.unwrap_or_default(),
-                        trust: String::new(),
-                        ts: crate::middleware::now_ms(),
-                        sig: String::new(),
-                    })
-                })
-            });
+            // Channel-based trust from source IP. Context from cert header only.
+            // No fallback to global registry — if no cert header, no context.
             crate::channel_trust::build_trust_context(
                 &source_ip,
-                effective_cert.as_ref(),
+                cert.as_ref(),
                 cert_verified,
                 &config,
             )
         } else {
-            // No channels configured — fall back to legacy context-based trust
             crate::channel_trust::resolve_trust(cert.as_ref(), cert_verified, &config)
         }
     };
@@ -663,10 +648,34 @@ async fn forward_request(
 
                 // Phase 1: Fast layers (heuristic + classifier) — blocking, <10ms
                 // Acquire SLM semaphore — limits concurrent screenings to prevent GPU exhaustion.
+                // Untrusted: fail-closed (reject if semaphore full).
+                // Trusted: fail-open (skip SLM, deferred anyway).
+                let is_trusted_channel = matches!(
+                    req_info.channel_trust.trust_level,
+                    aegis_schemas::TrustLevel::Full | aegis_schemas::TrustLevel::Trusted
+                );
                 let _slm_permit = match state.slm_semaphore.try_acquire() {
                     Ok(permit) => Some(permit),
                     Err(_) => {
-                        warn!(path = %path, "SLM semaphore full — too many concurrent screenings, skipping");
+                        if !is_trusted_channel && state.config.mode == ProxyMode::Enforce {
+                            warn!(path = %path, "SLM semaphore full — rejecting untrusted request (fail-closed)");
+                            let mut resp = (
+                                StatusCode::SERVICE_UNAVAILABLE,
+                                "server busy — screening unavailable, try again",
+                            )
+                                .into_response();
+                            resp.extensions_mut().insert(RecordingContext {
+                                handler_recorded: false,
+                                trust_level: Some(
+                                    format!("{:?}", req_info.channel_trust.trust_level)
+                                        .to_lowercase(),
+                                ),
+                                context: req_info.channel_trust.channel.clone(),
+                                ..Default::default()
+                            });
+                            return Ok(resp);
+                        }
+                        warn!(path = %path, "SLM semaphore full — skipping (trusted channel)");
                         None
                     }
                 };

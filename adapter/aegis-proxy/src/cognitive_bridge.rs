@@ -21,15 +21,115 @@ use serde::{Deserialize, Serialize};
 
 /// Build the cognitive bridge sub-router.
 /// Mounted at `/aegis` by the main proxy router.
+///
+/// `/status` is public (health checks). All other endpoints require
+/// a trusted channel (source IP matches [[trust.channels]]).
 pub fn routes() -> Router<crate::proxy::AppState> {
     Router::new()
-        .route("/scan", post(scan_handler))
+        // Public: health check only
         .route("/status", get(status_handler))
-        .route("/evidence", get(evidence_handler))
-        .route("/register-channel", post(register_channel_handler))
-        .route("/unregister-channel", post(unregister_channel_handler))
-        .route("/channel-context", get(channel_context_handler))
+        // Protected: require trusted source IP
+        .route("/scan", post(protected_scan_handler))
+        .route("/evidence", get(protected_evidence_handler))
+        .route("/register-channel", post(protected_register_handler))
+        .route("/unregister-channel", post(protected_unregister_handler))
+        .route("/channel-context", get(protected_context_handler))
 }
+
+/// Check if the request comes from a trusted source IP.
+fn is_trusted_source(
+    connect_info: &axum::extract::ConnectInfo<std::net::SocketAddr>,
+    state: &crate::proxy::AppState,
+) -> bool {
+    let source_ip = connect_info.0.ip().to_string();
+    let config = state.trust_config.as_ref().cloned().unwrap_or_default();
+    if config.channels.is_empty() {
+        // No channels configured — allow from localhost by default
+        return source_ip == "127.0.0.1" || source_ip == "::1";
+    }
+    let level = crate::channel_trust::resolve_channel_trust(&source_ip, &config);
+    matches!(
+        level,
+        aegis_schemas::TrustLevel::Full | aegis_schemas::TrustLevel::Trusted
+    )
+}
+
+// Protected wrappers — check source trust before calling the real handler
+async fn protected_scan_handler(
+    State(state): State<crate::proxy::AppState>,
+    connect_info: axum::extract::ConnectInfo<std::net::SocketAddr>,
+) -> axum::response::Response {
+    if !is_trusted_source(&connect_info, &state) {
+        return (
+            axum::http::StatusCode::FORBIDDEN,
+            "cognitive bridge requires trusted channel",
+        )
+            .into_response();
+    }
+    scan_handler().await.into_response()
+}
+
+async fn protected_evidence_handler(
+    State(state): State<crate::proxy::AppState>,
+    connect_info: axum::extract::ConnectInfo<std::net::SocketAddr>,
+) -> axum::response::Response {
+    if !is_trusted_source(&connect_info, &state) {
+        return (
+            axum::http::StatusCode::FORBIDDEN,
+            "cognitive bridge requires trusted channel",
+        )
+            .into_response();
+    }
+    evidence_handler().await.into_response()
+}
+
+async fn protected_register_handler(
+    State(state): State<crate::proxy::AppState>,
+    connect_info: axum::extract::ConnectInfo<std::net::SocketAddr>,
+    body: Json<RegisterChannelRequest>,
+) -> axum::response::Response {
+    if !is_trusted_source(&connect_info, &state) {
+        return (
+            axum::http::StatusCode::FORBIDDEN,
+            "cognitive bridge requires trusted channel",
+        )
+            .into_response();
+    }
+    let (status, json) = register_channel_handler(State(state), body).await;
+    (status, json).into_response()
+}
+
+async fn protected_unregister_handler(
+    State(state): State<crate::proxy::AppState>,
+    connect_info: axum::extract::ConnectInfo<std::net::SocketAddr>,
+    body: Json<UnregisterChannelRequest>,
+) -> axum::response::Response {
+    if !is_trusted_source(&connect_info, &state) {
+        return (
+            axum::http::StatusCode::FORBIDDEN,
+            "cognitive bridge requires trusted channel",
+        )
+            .into_response();
+    }
+    let (status, json) = unregister_channel_handler(body).await;
+    (status, json).into_response()
+}
+
+async fn protected_context_handler(
+    State(state): State<crate::proxy::AppState>,
+    connect_info: axum::extract::ConnectInfo<std::net::SocketAddr>,
+) -> axum::response::Response {
+    if !is_trusted_source(&connect_info, &state) {
+        return (
+            axum::http::StatusCode::FORBIDDEN,
+            "cognitive bridge requires trusted channel",
+        )
+            .into_response();
+    }
+    channel_context_handler().await.into_response()
+}
+
+use axum::response::IntoResponse;
 
 // ---- Request / Response types ----
 
@@ -147,7 +247,11 @@ static CHANNEL_REGISTRY: std::sync::RwLock<ChannelRegistry> =
 static ACTIVE_CHANNEL: std::sync::RwLock<Option<aegis_schemas::ChannelTrust>> =
     std::sync::RwLock::new(None);
 
-/// Registry of all channels that have registered with Aegis.
+/// Maximum number of context entries in the registry.
+/// Prevents memory exhaustion from registration flooding.
+const MAX_REGISTRY_ENTRIES: usize = 100;
+
+/// Registry of all contexts that have registered with Aegis.
 #[derive(Debug, Clone, Serialize)]
 pub struct ChannelRegistry {
     pub channels: Vec<ChannelRecord>,
@@ -311,6 +415,10 @@ async fn register_channel_handler(
             existing.user = req.user.clone().unwrap_or_default();
             existing.trust_level = response.trust_level.clone();
         } else {
+            // Cap registry size — evict oldest entry on overflow
+            if registry.channels.len() >= MAX_REGISTRY_ENTRIES {
+                registry.channels.remove(0);
+            }
             registry.channels.push(ChannelRecord {
                 channel: req.channel.clone(),
                 user: req.user.clone().unwrap_or_default(),
