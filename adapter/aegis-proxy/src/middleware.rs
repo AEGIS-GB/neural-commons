@@ -247,10 +247,12 @@ pub trait SlmHook: Send + Sync {
 
     /// Deep SLM screening: runs the 30B model (~2-3s).
     /// `classifier_advisory` comes from screen_fast — threaded through, not global state.
+    /// `trust_context` is injected into the SLM prompt so the model considers trust level.
     fn screen_deep<'a>(
         &'a self,
         content: &'a str,
         classifier_advisory: Option<String>,
+        trust_context: Option<String>,
     ) -> Pin<Box<dyn Future<Output = (SlmDecision, Option<SlmVerdict>)> + Send + 'a>>;
 
     /// Full screening: fast + deep combined (legacy, blocking).
@@ -384,6 +386,7 @@ impl SlmHook for NoopSlmHook {
         &'a self,
         _content: &'a str,
         _classifier_advisory: Option<String>,
+        _trust_context: Option<String>,
     ) -> Pin<Box<dyn Future<Output = (SlmDecision, Option<SlmVerdict>)> + Send + 'a>> {
         Box::pin(async { (SlmDecision::Admit, None) })
     }

@@ -600,12 +600,19 @@ impl SlmHook for SlmHookImpl {
         &'a self,
         content: &'a str,
         classifier_advisory: Option<String>,
+        trust_context: Option<String>,
     ) -> Pin<Box<dyn Future<Output = (SlmDecision, Option<SlmVerdict>)> + Send + 'a>> {
         Box::pin(async move {
             let config_clone = self.config.clone();
             let content_owned = content.to_string();
+            let trust_ctx = trust_context.clone();
             let task = tokio::task::spawn_blocking(move || {
-                aegis_slm::loopback::screen_deep_slm(&config_clone, &content_owned, None)
+                aegis_slm::loopback::screen_deep_slm(
+                    &config_clone,
+                    &content_owned,
+                    None,
+                    trust_ctx.as_deref(),
+                )
             });
 
             // Timeout: don't let a slow SLM block the server indefinitely.

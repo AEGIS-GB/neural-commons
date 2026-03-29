@@ -247,15 +247,19 @@ pub fn screen_fast_layers(
 }
 
 /// Run only the deep SLM layer (2-3s). Call only after screen_fast_layers returns None.
+///
+/// `trust_context` is an optional string like "trust=unknown, source=85.1.2.3"
+/// that gets injected into the SLM prompt so the model considers trust level.
 pub fn screen_deep_slm(
     config: &LoopbackConfig,
     content: &str,
     holster_profile: Option<&HolsterProfile>,
+    trust_context: Option<&str>,
 ) -> ScreeningResult {
     use std::time::Instant;
     let pipeline_start = Instant::now();
 
-    let prompt = screening_prompt_combined(content);
+    let prompt = crate::prompt::screening_prompt_combined_with_trust(content, trust_context);
 
     let engine = build_engine(config);
 

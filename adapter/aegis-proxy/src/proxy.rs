@@ -408,6 +408,49 @@ fn extract_user_content_from_json(body: &str, max_chars: usize) -> String {
     body.chars().take(4096).collect()
 }
 
+/// Strip system/developer messages from untrusted request bodies.
+/// Returns Some(new_body) if messages were stripped, None if nothing to strip.
+fn strip_privileged_roles(body: &[u8]) -> Option<Vec<u8>> {
+    let mut json: serde_json::Value = serde_json::from_slice(body).ok()?;
+    let mut stripped = false;
+
+    // Strip from "messages" array (OpenAI/Anthropic format)
+    if let Some(messages) = json.get_mut("messages").and_then(|m| m.as_array_mut()) {
+        let before = messages.len();
+        messages.retain(|msg| {
+            let role = msg.get("role").and_then(|r| r.as_str()).unwrap_or("");
+            role != "system" && role != "developer"
+        });
+        if messages.len() < before {
+            stripped = true;
+        }
+    }
+
+    // Strip from "input" array (Responses API format)
+    if let Some(input) = json.get_mut("input").and_then(|m| m.as_array_mut()) {
+        let before = input.len();
+        input.retain(|item| {
+            let role = item.get("role").and_then(|r| r.as_str()).unwrap_or("");
+            role != "system" && role != "developer"
+        });
+        if input.len() < before {
+            stripped = true;
+        }
+    }
+
+    // Strip top-level "system" field (Anthropic Messages API format)
+    if json.get("system").is_some() {
+        json.as_object_mut()?.remove("system");
+        stripped = true;
+    }
+
+    if stripped {
+        serde_json::to_vec(&json).ok()
+    } else {
+        None
+    }
+}
+
 /// Extract the model name from a request body (JSON "model" field).
 fn extract_model_from_body(body: &[u8]) -> Option<String> {
     let s = std::str::from_utf8(body).ok()?;
@@ -549,9 +592,30 @@ async fn forward_request(
         return Ok((StatusCode::UNAUTHORIZED, reason).into_response());
     }
 
-    // --- Parse Anthropic request for SLM screening (BUG 5 fix) ---
-    // The SLM needs actual message content, not the raw API payload
-    // (which includes model name, max_tokens, etc. that waste SLM tokens).
+    // --- Hard rule: strip system/developer messages from untrusted sources ---
+    // An untrusted source has no business setting the system prompt. Strip these
+    // messages before forwarding AND screening. Trusted sources keep them.
+    let is_trusted = matches!(
+        req_info.channel_trust.trust_level,
+        aegis_schemas::TrustLevel::Full | aegis_schemas::TrustLevel::Trusted
+    );
+    let body_bytes =
+        if !is_trusted && state.config.mode != ProxyMode::PassThrough && !body_bytes.is_empty() {
+            match strip_privileged_roles(&body_bytes) {
+                Some(stripped) => {
+                    info!(
+                        path = %path,
+                        "stripped system/developer messages from untrusted source"
+                    );
+                    stripped.into()
+                }
+                None => body_bytes,
+            }
+        } else {
+            body_bytes
+        };
+
+    // --- Parse Anthropic request for SLM screening ---
     let anthropic_req = if !body_bytes.is_empty() {
         anthropic::parse_request(&body_bytes).ok()
     } else {
@@ -743,8 +807,13 @@ async fn forward_request(
                     } else {
                         // Untrusted: run deep SLM sequentially BEFORE forwarding
                         info!(path = %path, "SLM deep analysis running sequentially (untrusted channel)");
+                        let trust_ctx = Some(format!(
+                            "trust={}, source={}",
+                            format!("{:?}", req_info.channel_trust.trust_level).to_lowercase(),
+                            source_ip
+                        ));
                         let (decision, verdict) = slm
-                            .screen_deep(&screen_content, classifier_advisory.clone())
+                            .screen_deep(&screen_content, classifier_advisory.clone(), trust_ctx)
                             .await;
                         slm_verdict = verdict;
                         stamp_trust(&mut slm_verdict);
@@ -1146,9 +1215,14 @@ async fn forward_request(
             let slm_clone: Arc<dyn middleware::SlmHook> = Arc::clone(slm);
             let trust_channel = req_info.channel_trust.channel.clone();
             let trust_level = req_info.channel_trust.trust_level;
+            let trust_ctx = Some(format!(
+                "trust={}, source={}",
+                format!("{:?}", trust_level).to_lowercase(),
+                source_ip
+            ));
             let updater = state.traffic_slm_updater.clone();
             tokio::spawn(async move {
-                let (_decision, verdict) = slm_clone.screen_deep(&content, None).await;
+                let (_decision, verdict) = slm_clone.screen_deep(&content, None, trust_ctx).await;
                 info!(
                     channel = ?trust_channel,
                     trust = ?trust_level,
@@ -1265,9 +1339,14 @@ async fn forward_request(
         let slm_clone: Arc<dyn middleware::SlmHook> = Arc::clone(slm);
         let trust_channel = req_info.channel_trust.channel.clone();
         let trust_level = req_info.channel_trust.trust_level;
+        let trust_ctx = Some(format!(
+            "trust={}, source={}",
+            format!("{:?}", trust_level).to_lowercase(),
+            source_ip
+        ));
         let updater = state.traffic_slm_updater.clone();
         tokio::spawn(async move {
-            let (_decision, verdict) = slm_clone.screen_deep(&content, None).await;
+            let (_decision, verdict) = slm_clone.screen_deep(&content, None, trust_ctx).await;
             info!(
                 channel = ?trust_channel,
                 trust = ?trust_level,
