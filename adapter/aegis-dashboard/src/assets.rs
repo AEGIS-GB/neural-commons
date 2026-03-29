@@ -1221,39 +1221,40 @@ async function showTraceDetail(id){
     // Flow timeline
     h+='<div style="padding:0 4px">';
     const blocked=e.status===403;
+    const rs=e.response_screen;
     // Step 1: Request
     h+=flowStep('fd-info','1','Request Received','POST '+e.path+' · '+(e.request_size/1024).toFixed(1)+'KB','+0ms');
     // Step 2: Trust
     const trustCol=trust==='full'||trust==='trusted'?'fd-ok':'fd-warn';
     h+=flowStep(trustCol,'2','Channel: '+channel+' ('+trust+')',ctx!=='—'?'Context: '+ctx:'No OpenClaw context','+0ms');
     // Step 3: SLM Screening Pipeline
-    // The pipeline short-circuits: classifier → heuristic → deep SLM.
-    // Only the catching layer runs; subsequent layers are skipped.
+    // Pipeline: heuristic (1) → classifier (2) → deep SLM (3). Short-circuits on catch.
     const slmCol=slm==='admit'?'fd-ok':slm==='reject'||slm==='quarantine'?'fd-err':'fd-warn';
     const sd=e.slm_detail||{};
     const classifierMs=sd.classifier_ms;
     const classifierRan=classifierMs!=null;
     const classifierAdvisory=sd.classifier_advisory||null;
+    const heuristicMs=sd.pass_a_ms;
     const engine=sd.engine||'';
     let slmBody='<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:4px">';
-    // Layer 1: Classifier — show actual status from slm_detail
-    const classifierCaught=engine==='prompt-guard'&&(slm==='reject'||slm==='quarantine');
-    if(classifierCaught){
-      slmBody+='<span class="slm-stage" style="min-width:110px"><b style="color:#8b949e;font-size:10px">CLASSIFIER</b><br><span style="color:#f85149;font-weight:600">CAUGHT</span><br><span style="color:#484f58">'+classifierMs+'ms</span></span>';
-    }else if(classifierRan){
-      const clsLabel=classifierAdvisory?'<span style="color:#d29922">advisory</span>':'<span style="color:#3fb950">pass</span>';
-      slmBody+='<span class="slm-stage" style="min-width:110px"><b style="color:#8b949e;font-size:10px">CLASSIFIER</b><br>'+clsLabel+'<br><span style="color:#484f58">'+classifierMs+'ms</span></span>';
-    }else{
-      slmBody+='<span class="slm-stage" style="min-width:110px"><b style="color:#8b949e;font-size:10px">CLASSIFIER</b><br><span style="color:#484f58">disabled</span></span>';
-    }
-    // Layer 2: Heuristic
+    // Layer 1: Heuristic (regex, <1ms) — cheapest, runs first
     const heuristicCaught=engine==='heuristic'&&(slm==='reject'||slm==='quarantine');
     if(heuristicCaught){
-      slmBody+='<span class="slm-stage" style="min-width:100px"><b style="color:#8b949e;font-size:10px">HEURISTIC</b><br><span style="color:#f85149;font-weight:600">CAUGHT</span><br><span style="color:#484f58">'+slmMs+'ms</span></span>';
-    }else if(classifierCaught){
-      slmBody+='<span class="slm-stage" style="min-width:90px"><b style="color:#8b949e;font-size:10px">HEURISTIC</b><br><span style="color:#484f58">skipped</span></span>';
+      slmBody+='<span class="slm-stage" style="min-width:100px"><b style="color:#8b949e;font-size:10px">1. HEURISTIC</b><br><span style="color:#f85149;font-weight:600">CAUGHT</span><br><span style="color:#484f58">'+(heuristicMs||0)+'ms</span></span>';
     }else{
-      slmBody+='<span class="slm-stage" style="min-width:100px"><b style="color:#8b949e;font-size:10px">HEURISTIC</b><br><span style="color:#3fb950">pass</span></span>';
+      slmBody+='<span class="slm-stage" style="min-width:100px"><b style="color:#8b949e;font-size:10px">1. HEURISTIC</b><br><span style="color:#3fb950">pass</span><br><span style="color:#484f58">'+(heuristicMs!=null?heuristicMs+'ms':'')+'</span></span>';
+    }
+    // Layer 2: Classifier (ProtectAI DeBERTa, ~15ms)
+    const classifierCaught=engine==='prompt-guard'&&(slm==='reject'||slm==='quarantine');
+    if(heuristicCaught){
+      slmBody+='<span class="slm-stage" style="min-width:110px"><b style="color:#8b949e;font-size:10px">2. CLASSIFIER</b><br><span style="color:#484f58">skipped</span></span>';
+    }else if(classifierCaught){
+      slmBody+='<span class="slm-stage" style="min-width:110px"><b style="color:#8b949e;font-size:10px">2. CLASSIFIER</b><br><span style="color:#f85149;font-weight:600">CAUGHT</span><br><span style="color:#484f58">'+classifierMs+'ms</span></span>';
+    }else if(classifierRan){
+      const clsLabel=classifierAdvisory?'<span style="color:#d29922">advisory</span>':'<span style="color:#3fb950">pass</span>';
+      slmBody+='<span class="slm-stage" style="min-width:110px"><b style="color:#8b949e;font-size:10px">2. CLASSIFIER</b><br>'+clsLabel+'<br><span style="color:#484f58">'+classifierMs+'ms</span></span>';
+    }else{
+      slmBody+='<span class="slm-stage" style="min-width:110px"><b style="color:#8b949e;font-size:10px">2. CLASSIFIER</b><br><span style="color:#484f58">disabled</span></span>';
     }
     // Layer 3: Deep SLM
     const deepCaught=(engine==='openai'||engine==='ollama')&&(slm==='reject'||slm==='quarantine');
@@ -1276,7 +1277,6 @@ async function showTraceDetail(id){
       // Step 4: Upstream
       h+=flowStep('fd-ok','4','Upstream Response',model+' · '+(e.is_streaming?'streaming':'buffered')+' · '+reqTok+' prompt + '+rspTok+' completion = '+(reqTok+rspTok)+' tokens','+'+(dur>100?dur-100:0)+'ms');
       // Step 5: Response Screening (DLP + vault + tool analysis)
-      const rs=e.response_screen;
       if(rs&&rs.blocked){
         const reason=rs.block_reason||'dangerous operation';
         h+=flowStep('fd-err','5','Response BLOCKED: '+reason,'Upstream response contained unsafe content — blocked before client','+'+dur+'ms');
@@ -1291,7 +1291,7 @@ async function showTraceDetail(id){
     }
     h+='</div>';
     // SLM detail: annotations, explanation, reason (from slm_detail field)
-    const sd=e.slm_detail;
+    // sd already declared above for pipeline display
     if(sd){
       let sdh='';
       // Explanation
@@ -1331,7 +1331,7 @@ async function showTraceDetail(id){
       if(sdh)h+=dsec('SLM Analysis'+(sd.action&&sd.action!=='admit'?' — '+sd.action.toUpperCase():''),sd.action!=='admit',sdh);
     }
     // Collapsible: Response Screening (DLP)
-    const rs=e.response_screen;
+    // rs already declared above for flow timeline
     if(rs&&(rs.screened||rs.blocked)){
       let rsh='';
       if(rs.blocked){
