@@ -234,9 +234,11 @@ pub trait SlmHook: Send + Sync {
     /// Returns: Some((decision, verdict)) if fast layers made a decision,
     /// None if content should go to deep SLM.
     /// The String in the tuple is the classifier advisory (if any) to pass to screen_deep.
+    /// `classifier_blocking`: if false, classifier is advisory only (trusted sources).
     fn screen_fast<'a>(
         &'a self,
         content: &'a str,
+        classifier_blocking: bool,
     ) -> Pin<
         Box<
             dyn Future<Output = (Option<(SlmDecision, Option<SlmVerdict>)>, Option<String>)>
@@ -373,6 +375,7 @@ impl SlmHook for NoopSlmHook {
     fn screen_fast<'a>(
         &'a self,
         _content: &'a str,
+        _classifier_blocking: bool,
     ) -> Pin<
         Box<
             dyn Future<Output = (Option<(SlmDecision, Option<SlmVerdict>)>, Option<String>)>

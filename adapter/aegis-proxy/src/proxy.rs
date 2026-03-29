@@ -816,7 +816,9 @@ async fn forward_request(
                         resp
                     };
 
-                let (fast_result, classifier_advisory) = slm.screen_fast(&screen_content).await;
+                let (fast_result, classifier_advisory) = slm
+                    .screen_fast(&screen_content, !trust_policy.classifier_advisory)
+                    .await;
                 if let Some((decision, verdict)) = fast_result {
                     slm_verdict = verdict;
                     stamp_trust(&mut slm_verdict);

@@ -549,6 +549,7 @@ impl SlmHook for SlmHookImpl {
     fn screen_fast<'a>(
         &'a self,
         content: &'a str,
+        classifier_blocking: bool,
     ) -> Pin<
         Box<
             dyn Future<Output = (Option<(SlmDecision, Option<SlmVerdict>)>, Option<String>)>
@@ -559,14 +560,6 @@ impl SlmHook for SlmHookImpl {
         Box::pin(async move {
             let config_clone = self.config.clone();
             let content_owned = content.to_string();
-            let classifier_blocking = {
-                let trust = aegis_proxy::cognitive_bridge::get_registered_channel_trust();
-                match trust.as_ref().map(|t| &t.trust_level) {
-                    Some(aegis_schemas::TrustLevel::Full)
-                    | Some(aegis_schemas::TrustLevel::Trusted) => false,
-                    _ => true,
-                }
-            };
             let result = tokio::task::spawn_blocking(move || {
                 aegis_slm::loopback::screen_fast_layers(
                     &config_clone,
