@@ -53,6 +53,9 @@ pub struct TrafficEntry {
     /// Full SLM verdict with annotations, explanation, intent (for trace detail view).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub slm_detail: Option<serde_json::Value>,
+    /// Response screening result (DLP redactions, tool blocks).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub response_screen: Option<serde_json::Value>,
 }
 
 const MAX_BODY_CAPTURE: usize = 256 * 1024; // 256KB per body — large enough for streaming responses with tool schemas
@@ -91,6 +94,7 @@ impl TrafficStore {
         model: Option<&str>,
         context: Option<&str>,
         slm_detail: Option<serde_json::Value>,
+        response_screen: Option<serde_json::Value>,
     ) {
         let req_str =
             String::from_utf8_lossy(&req_body[..req_body.len().min(MAX_BODY_CAPTURE)]).into_owned();
@@ -127,6 +131,7 @@ impl TrafficStore {
             model: model.map(|s| s.to_string()),
             context: context.map(|s| s.to_string()),
             slm_detail,
+            response_screen,
         };
 
         let mut entries = self.entries.write().unwrap();

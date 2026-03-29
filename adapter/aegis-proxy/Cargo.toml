@@ -24,3 +24,4 @@ sha2 = "0.10"
 ed25519-dalek.workspace = true
 tokio-stream = "0.1"
 bytes = "1"
+regex = "1"

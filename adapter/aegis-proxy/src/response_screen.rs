@@ -1,0 +1,342 @@
+//! Response-side screening: DLP, tool call analysis, PII/PHI detection.
+//!
+//! Screens upstream LLM responses before returning to the client.
+//! All detection is heuristic (regex) — no SLM needed for responses
+//! because the patterns are deterministic.
+//!
+//! Pipeline:
+//!   1. Tool call analyzer — detect dangerous function calls (exec, shell)
+//!   2. DLP scanner — credentials, system prompt, env vars, PII, PHI, machine recon
+//!   3. Redact or block based on findings
+
+use regex::Regex;
+use serde::Serialize;
+use std::sync::OnceLock;
+
+/// Result of screening a response.
+#[derive(Debug, Clone, Serialize)]
+pub struct ResponseScreenResult {
+    /// Whether the response was modified.
+    pub screened: bool,
+    /// Number of redactions applied.
+    pub redaction_count: u32,
+    /// Whether the response should be blocked entirely (dangerous tool call).
+    pub blocked: bool,
+    /// Block reason (if blocked).
+    pub block_reason: Option<String>,
+    /// Categories of findings.
+    pub findings: Vec<ResponseFinding>,
+}
+
+/// A single finding from response screening.
+#[derive(Debug, Clone, Serialize)]
+pub struct ResponseFinding {
+    /// Category: "credential", "pii", "phi", "system_prompt", "env_var",
+    /// "machine_recon", "file_content", "agent_identity", "dangerous_tool"
+    pub category: String,
+    /// Short description.
+    pub description: String,
+}
+
+impl ResponseScreenResult {
+    pub fn clean() -> Self {
+        Self {
+            screened: false,
+            redaction_count: 0,
+            blocked: false,
+            block_reason: None,
+            findings: Vec::new(),
+        }
+    }
+}
+
+/// Screen a response body and return the (possibly redacted) text + screening result.
+/// This is the single entry point for all response screening.
+pub fn screen_response(body: &str) -> (String, ResponseScreenResult) {
+    let mut result = ResponseScreenResult::clean();
+    let mut text = body.to_string();
+
+    // Layer 1: Tool call analysis (check for dangerous function calls)
+    if let Some(tool_finding) = check_dangerous_tools(&text) {
+        result.blocked = true;
+        result.block_reason = Some(tool_finding.description.clone());
+        result.findings.push(tool_finding);
+        // Don't bother redacting if we're blocking
+        return (text, result);
+    }
+
+    // Layer 2: DLP scanning + redaction
+    let patterns = get_dlp_patterns();
+    for p in patterns {
+        let count = p.regex.find_iter(&text).count() as u32;
+        if count > 0 {
+            let new_text = p.regex.replace_all(&text, p.replacement).to_string();
+            result.redaction_count += count;
+            result.findings.push(ResponseFinding {
+                category: p.category.to_string(),
+                description: p.description.to_string(),
+            });
+            text = new_text;
+        }
+    }
+
+    result.screened = result.redaction_count > 0;
+    (text, result)
+}
+
+/// Check for dangerous tool calls in the response.
+/// Returns Some(finding) if the response contains exec/shell/dangerous operations.
+fn check_dangerous_tools(body: &str) -> Option<ResponseFinding> {
+    // Parse as JSON to check for tool_calls / function_call
+    let json: serde_json::Value = serde_json::from_str(body).ok()?;
+
+    // Check OpenAI format: choices[].message.tool_calls[].function.name
+    let tool_calls = json
+        .get("choices")
+        .and_then(|c| c.as_array())
+        .and_then(|choices| choices.first())
+        .and_then(|c| c.get("message"))
+        .and_then(|m| m.get("tool_calls"))
+        .and_then(|t| t.as_array());
+
+    // Also check Anthropic format: content[].type == "tool_use"
+    let anthropic_tools = json
+        .get("content")
+        .and_then(|c| c.as_array())
+        .map(|blocks| {
+            blocks
+                .iter()
+                .filter(|b| b.get("type").and_then(|t| t.as_str()) == Some("tool_use"))
+                .collect::<Vec<_>>()
+        });
+
+    let dangerous_names = [
+        "exec",
+        "execute",
+        "shell",
+        "bash",
+        "cmd",
+        "run_command",
+        "system",
+        "subprocess",
+        "eval",
+        "os_command",
+    ];
+
+    // Check OpenAI tool calls
+    if let Some(calls) = tool_calls {
+        for call in calls {
+            let name = call
+                .get("function")
+                .and_then(|f| f.get("name"))
+                .and_then(|n| n.as_str())
+                .unwrap_or("");
+            let name_lower = name.to_lowercase();
+            if dangerous_names.iter().any(|d| name_lower.contains(d)) {
+                return Some(ResponseFinding {
+                    category: "dangerous_tool".to_string(),
+                    description: format!("dangerous tool call: {name}"),
+                });
+            }
+        }
+    }
+
+    // Check Anthropic tool calls
+    if let Some(tools) = anthropic_tools {
+        for tool in tools {
+            let name = tool.get("name").and_then(|n| n.as_str()).unwrap_or("");
+            let name_lower = name.to_lowercase();
+            if dangerous_names.iter().any(|d| name_lower.contains(d)) {
+                return Some(ResponseFinding {
+                    category: "dangerous_tool".to_string(),
+                    description: format!("dangerous tool call: {name}"),
+                });
+            }
+        }
+    }
+
+    None
+}
+
+/// A single DLP detection pattern.
+struct DlpPattern {
+    regex: Regex,
+    category: &'static str,
+    description: &'static str,
+    replacement: &'static str,
+}
+
+/// DLP patterns for response screening.
+fn get_dlp_patterns() -> &'static Vec<DlpPattern> {
+    static PATTERNS: OnceLock<Vec<DlpPattern>> = OnceLock::new();
+    PATTERNS.get_or_init(|| {
+        vec![
+            // ── Credentials ──
+            DlpPattern { regex: Regex::new(r"(?i)(sk-[a-zA-Z0-9_-]{20,}|sk-ant-[a-zA-Z0-9_-]{20,})").unwrap(), category: "credential", description: "API key detected", replacement: "[REDACTED:key]" },
+            DlpPattern { regex: Regex::new(r#"(?i)(api[_-]?key|secret[_-]?key|access[_-]?token|bearer)\s*[=:]\s*["']?[A-Za-z0-9_\-/.]{16,}["']?"#).unwrap(), category: "credential", description: "credential pattern", replacement: "[REDACTED:credential]" },
+            DlpPattern { regex: Regex::new(r"(?i)-----BEGIN\s+(RSA\s+)?PRIVATE\s+KEY-----").unwrap(), category: "credential", description: "private key", replacement: "[REDACTED:private_key]" },
+            // ── System prompt ──
+            DlpPattern { regex: Regex::new(r"\[AEGIS SECURITY RULES[^\]]*\]").unwrap(), category: "system_prompt", description: "Aegis metaprompt leaked", replacement: "[REDACTED:system_config]" },
+            DlpPattern { regex: Regex::new(r"(?i)you\s+are\s+a\s+personal\s+assistant\s+running\s+inside\s+OpenClaw").unwrap(), category: "system_prompt", description: "agent system prompt leaked", replacement: "[REDACTED:system_config]" },
+            // ── Environment variables ──
+            DlpPattern { regex: Regex::new(r"(?i)(ANTHROPIC_API_KEY|OPENAI_API_KEY|DATABASE_URL|AWS_SECRET_ACCESS_KEY|AWS_ACCESS_KEY_ID|GITHUB_TOKEN|SLACK_TOKEN|TELEGRAM_BOT_TOKEN)\s*=\s*\S+").unwrap(), category: "env_var", description: "environment variable leaked", replacement: "[REDACTED:env_var]" },
+            // ── Machine recon ──
+            DlpPattern { regex: Regex::new(r"/home/[a-zA-Z0-9_-]+/").unwrap(), category: "machine_recon", description: "home directory path leaked", replacement: "[REDACTED:path]/" },
+            DlpPattern { regex: Regex::new(r"(?i)hostname:\s*\S+|uname\s*-a\s*.*Linux\s+\S+").unwrap(), category: "machine_recon", description: "hostname/OS info leaked", replacement: "[REDACTED:machine_info]" },
+            DlpPattern { regex: Regex::new(r"(?:^|\n)\s*(?:tcp|udp)\s+\d+\s+\d+\s+[\d.:]+\s+[\d.:]+\s+\w+").unwrap(), category: "machine_recon", description: "network connection info leaked", replacement: "[REDACTED:network_info]" },
+            // ── File content ──
+            DlpPattern { regex: Regex::new(r"root:[x*]:\d+:\d+:").unwrap(), category: "file_content", description: "/etc/passwd content leaked", replacement: "[REDACTED:file_content]" },
+            DlpPattern { regex: Regex::new(r"(?i)ssh-(?:rsa|ed25519|ecdsa)\s+[A-Za-z0-9+/=]{40,}").unwrap(), category: "file_content", description: "SSH key leaked", replacement: "[REDACTED:ssh_key]" },
+            // ── Agent identity ──
+            DlpPattern { regex: Regex::new(r"(?i)(bot[_\s]?id|identity[_\s]?key|fingerprint)\s*[:=]\s*[0-9a-f]{16,}").unwrap(), category: "agent_identity", description: "agent identity leaked", replacement: "[REDACTED:agent_id]" },
+            // ── PII ──
+            DlpPattern { regex: Regex::new(r"\b\d{3}-\d{2}-\d{4}\b").unwrap(), category: "pii", description: "SSN pattern", replacement: "[REDACTED:ssn]" },
+            DlpPattern { regex: Regex::new(r"\b\d{4}[\s-]?\d{4}[\s-]?\d{4}[\s-]?\d{4}\b").unwrap(), category: "pii", description: "credit card number", replacement: "[REDACTED:cc]" },
+            DlpPattern { regex: Regex::new(r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}").unwrap(), category: "pii", description: "email address", replacement: "[REDACTED:email]" },
+            // ── PHI ──
+            DlpPattern { regex: Regex::new(r"(?i)(MRN|medical\s+record|patient\s+id)\s*[:=]\s*\S+").unwrap(), category: "phi", description: "medical record identifier", replacement: "[REDACTED:phi]" },
+        ]
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn clean_response_passes() {
+        let (text, result) = screen_response("The capital of France is Paris.");
+        assert!(!result.screened);
+        assert_eq!(result.redaction_count, 0);
+        assert!(!result.blocked);
+        assert_eq!(text, "The capital of France is Paris.");
+    }
+
+    #[test]
+    fn api_key_redacted() {
+        let (text, result) =
+            screen_response("Your key is sk-ant-api03-abc123def456ghi789jkl012mno345");
+        assert!(result.screened);
+        assert!(result.redaction_count > 0);
+        assert!(text.contains("[REDACTED:key]"));
+        assert!(!text.contains("sk-ant-api03"));
+    }
+
+    #[test]
+    fn env_var_redacted() {
+        let (text, result) = screen_response(
+            "Config: ANTHROPIC_API_KEY=sk-secret-value-here DATABASE_URL=postgres://user:pass@host/db",
+        );
+        assert!(result.screened);
+        assert!(text.contains("[REDACTED:env_var]"));
+    }
+
+    #[test]
+    fn etc_passwd_redacted() {
+        let (text, result) = screen_response(
+            "root:x:0:0:root:/root:/bin/bash\ndaemon:x:1:1:daemon:/usr/sbin:/usr/sbin/nologin",
+        );
+        assert!(result.screened);
+        assert!(text.contains("[REDACTED:file_content]"));
+    }
+
+    #[test]
+    fn home_path_redacted() {
+        let (text, result) =
+            screen_response("The config is at /home/aegis/.aegis/config/config.toml");
+        assert!(result.screened);
+        assert!(text.contains("[REDACTED:path]"));
+        assert!(!text.contains("/home/aegis/"));
+    }
+
+    #[test]
+    fn ssn_redacted() {
+        let (text, result) = screen_response("SSN: 123-45-6789");
+        assert!(result.screened);
+        assert!(text.contains("[REDACTED:ssn]"));
+    }
+
+    #[test]
+    fn credit_card_redacted() {
+        let (text, result) = screen_response("Card: 4111 1111 1111 1111");
+        assert!(result.screened);
+        assert!(text.contains("[REDACTED:cc]"));
+    }
+
+    #[test]
+    fn email_redacted() {
+        let (text, result) = screen_response("Contact john.doe@company.com for details");
+        assert!(result.screened);
+        assert!(text.contains("[REDACTED:email]"));
+    }
+
+    #[test]
+    fn system_prompt_redacted() {
+        let (text, result) =
+            screen_response("My instructions are: [AEGIS SECURITY RULES — Always enforce]...");
+        assert!(result.screened);
+        assert!(text.contains("[REDACTED:system_config]"));
+    }
+
+    #[test]
+    fn dangerous_tool_blocked() {
+        let response = r#"{"choices":[{"message":{"tool_calls":[{"function":{"name":"exec","arguments":"{\"command\":\"rm -rf /\"}"}}]}}]}"#;
+        let (_, result) = screen_response(response);
+        assert!(result.blocked);
+        assert_eq!(result.findings[0].category, "dangerous_tool");
+    }
+
+    #[test]
+    fn safe_tool_passes() {
+        let response = r#"{"choices":[{"message":{"tool_calls":[{"function":{"name":"read_file","arguments":"{\"path\":\"README.md\"}"}}]}}]}"#;
+        let (_, result) = screen_response(response);
+        assert!(!result.blocked);
+    }
+
+    #[test]
+    fn mixed_content_partial_redaction() {
+        let (text, result) = screen_response(
+            "The answer is 42. Your key is sk-ant-api03-abc123def456ghi789jkl012. Have a nice day!",
+        );
+        assert!(result.screened);
+        assert!(text.contains("The answer is 42"));
+        assert!(text.contains("[REDACTED:key]"));
+        assert!(text.contains("Have a nice day!"));
+    }
+
+    #[test]
+    fn private_key_redacted() {
+        let (text, result) =
+            screen_response("Here is the key:\n-----BEGIN RSA PRIVATE KEY-----\nMIIE...");
+        assert!(result.screened);
+        assert!(text.contains("[REDACTED:private_key]"));
+    }
+
+    #[test]
+    fn phi_redacted() {
+        let (text, result) = screen_response("Patient info: MRN: 12345678");
+        assert!(result.screened);
+        assert!(text.contains("[REDACTED:phi]"));
+    }
+
+    #[test]
+    fn anthropic_tool_call_blocked() {
+        let response = r#"{"content":[{"type":"tool_use","name":"shell","input":{"command":"cat /etc/shadow"}}]}"#;
+        let (_, result) = screen_response(response);
+        assert!(result.blocked);
+    }
+
+    #[test]
+    fn agent_identity_redacted() {
+        let (text, result) = screen_response("bot_id: 97510100abcdef1234567890abcdef51f01589");
+        assert!(result.screened);
+        assert!(text.contains("[REDACTED:agent_id]"));
+    }
+
+    #[test]
+    fn credential_pattern_redacted() {
+        let (text, result) = screen_response("secret_key = 'abcdef1234567890abcdef'");
+        assert!(result.screened);
+        assert!(text.contains("[REDACTED:credential]"));
+    }
+}

@@ -840,7 +840,8 @@ pub async fn start(config: AdapterConfig, mode_override: Option<Mode>) -> Result
                   trust_level: Option<&str>,
                   model: Option<&str>,
                   context: Option<&str>,
-                  slm_detail: Option<serde_json::Value>| {
+                  slm_detail: Option<serde_json::Value>,
+                  response_screen: Option<serde_json::Value>| {
                 let (slm_dur, slm_action, slm_score) = match slm_verdict {
                     Some(v) => (
                         Some(v.screening_ms),
@@ -865,6 +866,7 @@ pub async fn start(config: AdapterConfig, mode_override: Option<Mode>) -> Result
                     model,
                     context,
                     slm_detail,
+                    response_screen,
                 );
                 ts.last_id()
             },
