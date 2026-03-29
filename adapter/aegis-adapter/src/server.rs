@@ -166,7 +166,6 @@ pub async fn start(config: AdapterConfig, mode_override: Option<Mode>) -> Result
             }
         }),
         observe_mode_checks_fn: Arc::new({
-            let mode = mode.clone();
             move || {
                 // No per-check granularity — mode controls everything.
                 // observe_only = all checks observe, enforce = all checks enforce.
