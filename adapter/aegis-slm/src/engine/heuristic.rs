@@ -113,6 +113,88 @@ const HEURISTIC_RULES: &[(&str, Pattern, &str)] = &[
     ),
 ];
 
+/// Detect and decode encoded content (ROT13, base64, hex).
+/// Returns Some(decoded_text) if any encoding was found and decoded.
+fn decode_encoded_content(content: &str) -> Option<String> {
+    let mut decoded_parts = Vec::new();
+
+    // ROT13: look for ROT13-like content (detect by context clues like "ROT13", "decode")
+    if content.to_lowercase().contains("rot13") {
+        let rot13_decoded: String = content
+            .chars()
+            .map(|c| match c {
+                'a'..='m' | 'A'..='M' => (c as u8 + 13) as char,
+                'n'..='z' | 'N'..='Z' => (c as u8 - 13) as char,
+                _ => c,
+            })
+            .collect();
+        decoded_parts.push(rot13_decoded);
+    }
+
+    // Base64: find base64-like strings (20+ chars, A-Za-z0-9+/=)
+    let b64_re = regex::Regex::new(r"[A-Za-z0-9+/]{20,}={0,3}").ok()?;
+    for m in b64_re.find_iter(content) {
+        if let Some(text) = simple_base64_decode(m.as_str()) {
+            if text
+                .chars()
+                .all(|c| c.is_ascii_graphic() || c.is_ascii_whitespace())
+            {
+                decoded_parts.push(text);
+            }
+        }
+    }
+
+    // Hex: find hex-like strings (40+ hex chars, even length)
+    let hex_re = regex::Regex::new(r"[0-9a-fA-F]{40,}").ok()?;
+    for m in hex_re.find_iter(content) {
+        let hex_str = m.as_str();
+        if hex_str.len() % 2 == 0 {
+            let bytes: Option<Vec<u8>> = (0..hex_str.len())
+                .step_by(2)
+                .map(|i| u8::from_str_radix(&hex_str[i..i + 2], 16).ok())
+                .collect();
+            if let Some(bytes) = bytes {
+                if let Ok(text) = String::from_utf8(bytes) {
+                    if text
+                        .chars()
+                        .all(|c| c.is_ascii_graphic() || c.is_ascii_whitespace())
+                    {
+                        decoded_parts.push(text);
+                    }
+                }
+            }
+        }
+    }
+
+    if decoded_parts.is_empty() {
+        None
+    } else {
+        Some(decoded_parts.join("\n"))
+    }
+}
+
+/// Simple base64 decoder (no external crate needed).
+fn simple_base64_decode(input: &str) -> Option<String> {
+    let table = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut buf = Vec::new();
+    let mut acc: u32 = 0;
+    let mut bits: u32 = 0;
+    for &byte in input.trim().as_bytes() {
+        if byte == b'=' {
+            break;
+        }
+        let val = table.iter().position(|&b| b == byte)? as u32;
+        acc = (acc << 6) | val;
+        bits += 6;
+        if bits >= 8 {
+            bits -= 8;
+            buf.push((acc >> bits) as u8);
+            acc &= (1 << bits) - 1;
+        }
+    }
+    String::from_utf8(buf).ok()
+}
+
 /// Normalize leet-speak and common character substitutions.
 ///
 /// Converts common obfuscation characters back to ASCII letters so that
@@ -161,9 +243,18 @@ impl SlmEngine for HeuristicEngine {
     /// Analyze raw content (NOT the screening prompt) for injection patterns.
     /// Returns SlmOutput JSON as a string.
     fn generate(&self, content: &str) -> Result<String, String> {
-        // Match against both original and leet-normalized text
-        let normalized = normalize_leet(content);
-        let original_matches = self.regex_set.matches(content);
+        // Decode any encoded content and scan the decoded version too.
+        // Attackers hide payloads in ROT13, base64, hex — decode first.
+        let decoded = decode_encoded_content(content);
+        let scan_target = if let Some(ref decoded_text) = decoded {
+            format!("{content}\n{decoded_text}")
+        } else {
+            content.to_string()
+        };
+
+        // Match against original, leet-normalized, AND decoded text
+        let normalized = normalize_leet(&scan_target);
+        let original_matches = self.regex_set.matches(&scan_target);
         let normalized_matches = self.regex_set.matches(&normalized);
         let matches: Vec<usize> = original_matches
             .into_iter()
