@@ -46,10 +46,7 @@ jobs:
             target: x86_64-unknown-linux-gnu
             artifact_name: aegis-linux-x86_64
             binary: aegis
-          - os: macos-latest
-            target: x86_64-apple-darwin
-            artifact_name: aegis-darwin-x86_64
-            binary: aegis
+          # x86_64-apple-darwin removed: ONNX Runtime has no prebuilt binaries for Intel Macs
           - os: macos-latest
             target: aarch64-apple-darwin
             artifact_name: aegis-darwin-aarch64
