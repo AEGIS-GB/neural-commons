@@ -651,28 +651,27 @@ async fn forward_request(
         return Ok((StatusCode::UNAUTHORIZED, reason).into_response());
     }
 
-    // --- Hard rule: strip system/developer messages from untrusted sources ---
-    // An untrusted source has no business setting the system prompt. Strip these
-    // messages before forwarding AND screening. Trusted sources keep them.
-    let is_trusted = matches!(
-        req_info.channel_trust.trust_level,
-        aegis_schemas::TrustLevel::Full | aegis_schemas::TrustLevel::Trusted
-    );
-    let body_bytes =
-        if !is_trusted && state.config.mode != ProxyMode::PassThrough && !body_bytes.is_empty() {
-            match strip_privileged_roles(&body_bytes) {
-                Some(stripped) => {
-                    info!(
-                        path = %path,
-                        "stripped system/developer messages from untrusted source"
-                    );
-                    stripped.into()
-                }
-                None => body_bytes,
+    // Trust policy — single source of truth for all trust-aware decisions
+    let trust_policy = crate::trust_policy::policy_for(req_info.channel_trust.trust_level);
+
+    // --- Strip system/developer messages from sources that don't allow them ---
+    let body_bytes = if !trust_policy.system_messages_allowed
+        && state.config.mode != ProxyMode::PassThrough
+        && !body_bytes.is_empty()
+    {
+        match strip_privileged_roles(&body_bytes) {
+            Some(stripped) => {
+                info!(
+                    path = %path,
+                    "stripped system/developer messages from untrusted source"
+                );
+                stripped.into()
             }
-        } else {
-            body_bytes
-        };
+            None => body_bytes,
+        }
+    } else {
+        body_bytes
+    };
 
     // --- Parse Anthropic request for SLM screening ---
     let anthropic_req = if !body_bytes.is_empty() {
@@ -773,14 +772,12 @@ async fn forward_request(
                 // Acquire SLM semaphore — limits concurrent screenings to prevent GPU exhaustion.
                 // Untrusted: fail-closed (reject if semaphore full).
                 // Trusted: fail-open (skip SLM, deferred anyway).
-                let is_trusted_channel = matches!(
-                    req_info.channel_trust.trust_level,
-                    aegis_schemas::TrustLevel::Full | aegis_schemas::TrustLevel::Trusted
-                );
                 let _slm_permit = match state.slm_semaphore.try_acquire() {
                     Ok(permit) => Some(permit),
                     Err(_) => {
-                        if !is_trusted_channel && state.config.mode == ProxyMode::Enforce {
+                        if trust_policy.fail_closed_on_busy
+                            && state.config.mode == ProxyMode::Enforce
+                        {
                             warn!(path = %path, "SLM semaphore full — rejecting untrusted request (fail-closed)");
                             let mut resp = (
                                 StatusCode::SERVICE_UNAVAILABLE,
@@ -854,12 +851,7 @@ async fn forward_request(
                     // Public/Unknown/Restricted: run deep SLM BEFORE forwarding (sequential).
                     //   Reason: we may need to block in enforce mode. Sequential avoids
                     //   GPU contention and gives us the verdict before sending anything.
-                    let is_trusted = matches!(
-                        req_info.channel_trust.trust_level,
-                        aegis_schemas::TrustLevel::Full | aegis_schemas::TrustLevel::Trusted
-                    );
-
-                    if is_trusted {
+                    if trust_policy.slm_deferred {
                         // Trusted: defer deep SLM to after response
                         slm_deferred_content = Some(screen_content.clone());
                         debug!(path = %path, "SLM deep analysis deferred (trusted channel — will run after response)");
@@ -1079,6 +1071,7 @@ async fn forward_request(
         let stream_channel_ip = Some(source_ip.clone());
         let stream_context = req_info.channel_trust.channel.clone();
         let stream_trust = format!("{:?}", req_info.channel_trust.trust_level).to_lowercase();
+        let stream_trust_policy = trust_policy.clone();
         let stream_model = extract_model_from_body(&body_bytes);
         let stream_vault = if state.config.mode != ProxyMode::PassThrough {
             state.hooks.vault.clone()
@@ -1246,7 +1239,10 @@ async fn forward_request(
                             } else {
                                 extracted
                             };
-                            crate::response_screen::screen_response(&target)
+                            crate::response_screen::screen_response_with_policy(
+                                &target,
+                                &stream_trust_policy,
+                            )
                         })
                         .and_then(|(_, r)| {
                             if r.screened || r.blocked {
@@ -1392,7 +1388,8 @@ async fn forward_request(
     let mut response_screen_result = None;
     if state.config.mode != ProxyMode::PassThrough {
         if let Ok(body_str) = std::str::from_utf8(&final_body) {
-            let (screened_text, screen_result) = crate::response_screen::screen_response(body_str);
+            let (screened_text, screen_result) =
+                crate::response_screen::screen_response_with_policy(body_str, &trust_policy);
 
             if screen_result.blocked {
                 // Dangerous tool call — block entire response

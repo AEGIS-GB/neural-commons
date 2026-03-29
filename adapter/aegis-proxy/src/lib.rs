@@ -18,3 +18,4 @@ pub mod middleware;
 pub mod proxy;
 pub mod rate_limit;
 pub mod response_screen;
+pub mod trust_policy;

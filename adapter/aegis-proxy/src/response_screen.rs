@@ -54,18 +54,29 @@ impl ResponseScreenResult {
     }
 }
 
-/// Screen a response body and return the (possibly redacted) text + screening result.
-/// This is the single entry point for all response screening.
+/// Screen a response body WITHOUT trust policy (backward compat).
 pub fn screen_response(body: &str) -> (String, ResponseScreenResult) {
+    // Default: use Unknown policy (strictest)
+    screen_response_with_policy(
+        body,
+        &crate::trust_policy::policy_for(aegis_schemas::TrustLevel::Unknown),
+    )
+}
+
+/// Screen a response body with trust-aware policy.
+/// This is the single entry point for all response screening.
+pub fn screen_response_with_policy(
+    body: &str,
+    policy: &crate::trust_policy::TrustPolicy,
+) -> (String, ResponseScreenResult) {
     let mut result = ResponseScreenResult::clean();
     let mut text = body.to_string();
 
-    // Layer 1: Tool call analysis (check for dangerous function calls)
-    if let Some(tool_finding) = check_dangerous_tools(&text) {
+    // Layer 1: Tool call analysis — trust-aware
+    if let Some(tool_finding) = check_tools_with_policy(&text, policy) {
         result.blocked = true;
         result.block_reason = Some(tool_finding.description.clone());
         result.findings.push(tool_finding);
-        // Don't bother redacting if we're blocking
         return (text, result);
     }
 
@@ -99,11 +110,104 @@ pub fn screen_response(body: &str) -> (String, ResponseScreenResult) {
     }
 
     result.screened = result.redaction_count > 0;
-    (text, result)
+
+    // Apply DLP mode based on trust policy
+    match policy.dlp_mode {
+        crate::trust_policy::DlpMode::LogOnly => {
+            // Don't redact — return original text but keep findings for logging
+            (body.to_string(), result)
+        }
+        crate::trust_policy::DlpMode::RedactCredentials => {
+            // Only keep redactions for credential categories
+            if result.screened {
+                let cred_cats = ["credential", "env_var", "system_prompt", "agent_identity"];
+                let has_creds = result
+                    .findings
+                    .iter()
+                    .any(|f| cred_cats.contains(&f.category.as_str()));
+                if has_creds {
+                    (text, result)
+                } else {
+                    // Non-credential findings: log but don't redact
+                    (body.to_string(), result)
+                }
+            } else {
+                (text, result)
+            }
+        }
+        crate::trust_policy::DlpMode::RedactAll => {
+            // Redact everything found
+            (text, result)
+        }
+        crate::trust_policy::DlpMode::BlockOnFinding => {
+            // Block the entire response if anything was found
+            if result.screened {
+                result.blocked = true;
+                result.block_reason =
+                    Some("response contained sensitive data (unknown trust)".to_string());
+            }
+            (text, result)
+        }
+    }
 }
 
-/// Check for dangerous tool calls in the response.
-/// Returns Some(finding) if the response contains exec/shell/dangerous operations.
+/// Check tool calls against trust policy.
+fn check_tools_with_policy(
+    body: &str,
+    policy: &crate::trust_policy::TrustPolicy,
+) -> Option<ResponseFinding> {
+    let json: serde_json::Value = serde_json::from_str(body).ok()?;
+
+    // Collect all tool names from the response
+    let mut tool_names = Vec::new();
+
+    // OpenAI format
+    if let Some(calls) = json
+        .get("choices")
+        .and_then(|c| c.as_array())
+        .and_then(|a| a.first())
+        .and_then(|c| c.get("message"))
+        .and_then(|m| m.get("tool_calls"))
+        .and_then(|t| t.as_array())
+    {
+        for call in calls {
+            if let Some(name) = call
+                .get("function")
+                .and_then(|f| f.get("name"))
+                .and_then(|n| n.as_str())
+            {
+                tool_names.push(name.to_string());
+            }
+        }
+    }
+
+    // Anthropic format
+    if let Some(blocks) = json.get("content").and_then(|c| c.as_array()) {
+        for block in blocks {
+            if block.get("type").and_then(|t| t.as_str()) == Some("tool_use") {
+                if let Some(name) = block.get("name").and_then(|n| n.as_str()) {
+                    tool_names.push(name.to_string());
+                }
+            }
+        }
+    }
+
+    // Check each tool against policy
+    for name in &tool_names {
+        if let Some(reason) = crate::trust_policy::check_tool_allowed(name, policy) {
+            return Some(ResponseFinding {
+                category: "blocked_tool".to_string(),
+                description: reason,
+                matched_values: vec![name.clone()],
+            });
+        }
+    }
+
+    None
+}
+
+/// Legacy: Check for dangerous tool calls (hardcoded list). Kept for tests.
+#[allow(dead_code)]
 fn check_dangerous_tools(body: &str) -> Option<ResponseFinding> {
     // Parse as JSON to check for tool_calls / function_call
     let json: serde_json::Value = serde_json::from_str(body).ok()?;
@@ -299,17 +403,61 @@ mod tests {
     }
 
     #[test]
-    fn dangerous_tool_blocked() {
+    fn exec_blocked_all_tiers() {
+        use crate::trust_policy::policy_for;
         let response = r#"{"choices":[{"message":{"tool_calls":[{"function":{"name":"exec","arguments":"{\"command\":\"rm -rf /\"}"}}]}}]}"#;
-        let (_, result) = screen_response(response);
-        assert!(result.blocked);
-        assert_eq!(result.findings[0].category, "dangerous_tool");
+        for level in [
+            aegis_schemas::TrustLevel::Full,
+            aegis_schemas::TrustLevel::Trusted,
+            aegis_schemas::TrustLevel::Unknown,
+        ] {
+            let (_, result) = screen_response_with_policy(response, &policy_for(level));
+            assert!(result.blocked, "exec should be blocked for {:?}", level);
+        }
     }
 
     #[test]
-    fn safe_tool_passes() {
+    fn read_tool_trusted_allowed() {
+        use crate::trust_policy::policy_for;
         let response = r#"{"choices":[{"message":{"tool_calls":[{"function":{"name":"read_file","arguments":"{\"path\":\"README.md\"}"}}]}}]}"#;
-        let (_, result) = screen_response(response);
+        let (_, result) =
+            screen_response_with_policy(response, &policy_for(aegis_schemas::TrustLevel::Trusted));
+        assert!(!result.blocked);
+    }
+
+    #[test]
+    fn read_tool_unknown_blocked() {
+        use crate::trust_policy::policy_for;
+        let response = r#"{"choices":[{"message":{"tool_calls":[{"function":{"name":"read_file","arguments":"{\"path\":\"README.md\"}"}}]}}]}"#;
+        let (_, result) =
+            screen_response_with_policy(response, &policy_for(aegis_schemas::TrustLevel::Unknown));
+        assert!(result.blocked);
+    }
+
+    #[test]
+    fn write_tool_public_blocked() {
+        use crate::trust_policy::policy_for;
+        let response = r#"{"choices":[{"message":{"tool_calls":[{"function":{"name":"write","arguments":"{}"}}]}}]}"#;
+        let (_, result) =
+            screen_response_with_policy(response, &policy_for(aegis_schemas::TrustLevel::Public));
+        assert!(result.blocked);
+    }
+
+    #[test]
+    fn shell_trusted_blocked() {
+        use crate::trust_policy::policy_for;
+        let response = r#"{"choices":[{"message":{"tool_calls":[{"function":{"name":"shell","arguments":"{}"}}]}}]}"#;
+        let (_, result) =
+            screen_response_with_policy(response, &policy_for(aegis_schemas::TrustLevel::Trusted));
+        assert!(result.blocked);
+    }
+
+    #[test]
+    fn shell_full_allowed() {
+        use crate::trust_policy::policy_for;
+        let response = r#"{"choices":[{"message":{"tool_calls":[{"function":{"name":"shell","arguments":"{}"}}]}}]}"#;
+        let (_, result) =
+            screen_response_with_policy(response, &policy_for(aegis_schemas::TrustLevel::Full));
         assert!(!result.blocked);
     }
 
