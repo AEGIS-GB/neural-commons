@@ -888,6 +888,7 @@ async fn api_traffic(State(state): State<Arc<DashboardSharedState>>) -> Json<ser
                 "trust_level": e.trust_level,
                 "model": e.model,
                 "context": e.context,
+                "response_screen": e.response_screen,
             })
         })
         .collect();

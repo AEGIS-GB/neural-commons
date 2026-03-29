@@ -32,6 +32,7 @@ struct TrafficSummary {
     trust_level: Option<String>,
     model: Option<String>,
     context: Option<String>,
+    response_screen: Option<serde_json::Value>,
 }
 
 #[derive(Deserialize, Debug)]
@@ -60,6 +61,7 @@ struct TrafficDetailEntry {
     trust_level: Option<String>,
     model: Option<String>,
     context: Option<String>,
+    response_screen: Option<serde_json::Value>,
 }
 
 #[derive(Deserialize, Debug)]
@@ -425,6 +427,47 @@ fn show_detail(base: &str, id: u64, show_body: bool) {
         );
     } else {
         println!("  (SLM screening not recorded for this entry)");
+    }
+
+    // Response Screening (DLP)
+    if let Some(ref rs) = e.response_screen {
+        let screened = rs
+            .get("screened")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        let blocked = rs.get("blocked").and_then(|v| v.as_bool()).unwrap_or(false);
+        let redactions = rs
+            .get("redaction_count")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
+
+        if blocked {
+            let reason = rs
+                .get("block_reason")
+                .and_then(|v| v.as_str())
+                .unwrap_or("dangerous operation");
+            println!();
+            println!("  ── Response Screening ── \x1b[31mBLOCKED\x1b[0m ─────────────────────────");
+            println!("  Reason     {}", reason);
+        } else if screened {
+            println!();
+            println!(
+                "  ── Response Screening ── \x1b[33m{} redaction{}\x1b[0m ─────────────────────",
+                redactions,
+                if redactions > 1 { "s" } else { "" }
+            );
+        } else {
+            println!();
+            println!("  ── Response Screening ── \x1b[32mclean\x1b[0m ───────────────────────────");
+        }
+
+        if let Some(findings) = rs.get("findings").and_then(|v| v.as_array()) {
+            for f in findings {
+                let cat = f.get("category").and_then(|v| v.as_str()).unwrap_or("?");
+                let desc = f.get("description").and_then(|v| v.as_str()).unwrap_or("");
+                println!("  \x1b[33m{:<20}\x1b[0m {}", cat, desc);
+            }
+        }
     }
 
     // Last user message

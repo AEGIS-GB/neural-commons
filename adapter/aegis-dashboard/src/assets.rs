@@ -1155,8 +1155,8 @@ function renderTrace(data,status){
   if(fTrust)entries=entries.filter(e=>e.trust_level===fTrust);
   if(fSlm)entries=entries.filter(e=>e.slm_verdict===fSlm);
   if(fSearch)entries=entries.filter(e=>JSON.stringify(e).toLowerCase().includes(fSearch));
-  let h='<table class="dtable"><tr><th>#</th><th>Time</th><th>Channel</th><th>Trust</th><th>Context</th><th>Model</th><th>Status</th><th>SLM</th><th>Duration</th></tr>';
-  if(entries.length===0){h+='<tr><td colspan="9" style="text-align:center;color:#8b949e;padding:20px">No matching entries</td></tr>';}
+  let h='<table class="dtable"><tr><th>#</th><th>Time</th><th>Channel</th><th>Trust</th><th>Context</th><th>Model</th><th>Status</th><th>SLM</th><th>DLP</th><th>Duration</th></tr>';
+  if(entries.length===0){h+='<tr><td colspan="10" style="text-align:center;color:#8b949e;padding:20px">No matching entries</td></tr>';}
   for(const e of entries){
     const t=new Date(e.ts_ms).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit',second:'2-digit'});
     const ch=e.channel||'—';
@@ -1169,6 +1169,8 @@ function renderTrace(data,status){
     const dur=e.duration_ms>1000?(e.duration_ms/1000).toFixed(1)+'s':e.duration_ms+'ms';
     const rowCls=slm==='reject'?'trace-row rejected':slm==='quarantine'?'trace-row quarantined':'trace-row';
     const sCls=e.status===200?'status-ok':e.status>=400?'status-error':'';
+    const rs=e.response_screen;
+    const dlp=rs?rs.blocked?'<span style="color:#f85149;font-weight:600">BLOCK</span>':rs.screened?'<span style="color:#d29922">'+rs.redaction_count+'</span>':'<span style="color:#3fb950">clean</span>':'<span style="color:#30363d;font-size:11px">—</span>';
     h+='<tr class="'+rowCls+'" onclick="showTraceDetail('+e.id+')">';
     h+='<td>'+e.id+'</td><td>'+t+'</td>';
     h+='<td><span class="ch">'+ch+'</span></td>';
@@ -1177,6 +1179,7 @@ function renderTrace(data,status){
     h+='<td>'+model+'</td>';
     h+='<td><span class="'+sCls+'">'+e.status+'</span></td>';
     h+='<td>'+(slmCls?'<span class="'+slmCls+'">'+slm+'</span>':slm)+'</td>';
+    h+='<td>'+dlp+'</td>';
     h+='<td>'+dur+'</td></tr>';
   }
   h+='</table>';
@@ -1266,8 +1269,17 @@ async function showTraceDetail(id){
     }else{
       // Step 4: Upstream
       h+=flowStep('fd-ok','4','Upstream Response',model+' · '+(e.is_streaming?'streaming':'buffered')+' · '+reqTok+' prompt + '+rspTok+' completion = '+(reqTok+rspTok)+' tokens','+'+(dur>100?dur-100:0)+'ms');
-      // Step 5: Vault
-      h+=flowStep('fd-ok','5','Vault scan: clean','No credentials detected in response','+'+dur+'ms');
+      // Step 5: Response Screening (DLP + vault + tool analysis)
+      const rs=e.response_screen;
+      if(rs&&rs.blocked){
+        const reason=rs.block_reason||'dangerous operation';
+        h+=flowStep('fd-err','5','Response BLOCKED: '+reason,'Upstream response contained unsafe content — blocked before client','+'+dur+'ms');
+      }else if(rs&&rs.screened){
+        const cats=rs.findings?rs.findings.map(f=>f.category).filter((v,i,a)=>a.indexOf(v)===i).join(', '):'';
+        h+=flowStep('fd-warn','5','Response Screened: '+rs.redaction_count+' redaction'+(rs.redaction_count>1?'s':''),cats||'sensitive data redacted','+'+dur+'ms');
+      }else{
+        h+=flowStep('fd-ok','5','Response clean','No sensitive data detected in response','+'+dur+'ms');
+      }
       // Step 6: Evidence
       h+=flowStepLast('fd-info','✓','Evidence receipt recorded','Chain intact','+'+dur+'ms');
     }
@@ -1311,6 +1323,29 @@ async function showTraceDetail(id){
         sdh+='<div><span style="font-size:11px;color:#8b949e">SCREENED TEXT</span><div class="body-pre" style="max-height:120px;margin-top:4px;font-size:12px">'+stxt+'</div></div>';
       }
       if(sdh)h+=dsec('SLM Analysis'+(sd.action&&sd.action!=='admit'?' — '+sd.action.toUpperCase():''),sd.action!=='admit',sdh);
+    }
+    // Collapsible: Response Screening (DLP)
+    const rs=e.response_screen;
+    if(rs&&(rs.screened||rs.blocked)){
+      let rsh='';
+      if(rs.blocked){
+        rsh+='<div style="padding:10px 14px;background:rgba(248,81,73,0.1);border:1px solid #f85149;border-radius:6px;margin-bottom:10px">';
+        rsh+='<div style="font-size:12px;font-weight:600;color:#f85149">RESPONSE BLOCKED</div>';
+        rsh+='<div style="font-size:13px;color:#e1e4e8;margin-top:4px">'+escHtml(rs.block_reason||'dangerous operation detected')+'</div>';
+        rsh+='</div>';
+      }else{
+        rsh+='<div style="margin-bottom:10px"><span style="font-size:11px;color:#8b949e">REDACTIONS: '+rs.redaction_count+'</span></div>';
+      }
+      if(rs.findings&&rs.findings.length>0){
+        rsh+='<table class="dtable"><tr><th>Category</th><th>Description</th></tr>';
+        for(const f of rs.findings){
+          const catCol=f.category==='credential'||f.category==='dangerous_tool'?'#f85149':f.category==='pii'||f.category==='phi'?'#d29922':'#8b949e';
+          rsh+='<tr><td><span style="color:'+catCol+';font-weight:600">'+escHtml(f.category)+'</span></td>';
+          rsh+='<td style="font-size:12px;color:#8b949e">'+escHtml(f.description)+'</td></tr>';
+        }
+        rsh+='</table>';
+      }
+      h+=dsec('Response Screening — '+(rs.blocked?'BLOCKED':rs.redaction_count+' redaction'+(rs.redaction_count>1?'s':'')),true,rsh);
     }
     // Collapsible: Last user message
     const lastUser=chat.filter(m=>m.role==='user').pop();
