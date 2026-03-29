@@ -116,8 +116,8 @@ pub struct AppState {
     pub traffic_recorder: Option<Arc<TrafficRecorder>>,
     /// Optional callback to update SLM verdict on a traffic entry after deferred screening.
     pub traffic_slm_updater: Option<Arc<TrafficSlmUpdater>>,
-    /// Channel trust configuration for resolving X-Aegis-Channel-Cert.
-    pub trust_config: Option<crate::channel_trust::TrustConfig>,
+    /// Channel trust configuration — shared for hot-reload via API.
+    pub trust_config: Arc<std::sync::RwLock<crate::channel_trust::TrustConfig>>,
     /// Semaphore limiting concurrent SLM screenings (prevents GPU exhaustion via DDoS).
     pub slm_semaphore: Arc<tokio::sync::Semaphore>,
 }
@@ -160,7 +160,14 @@ pub async fn start(
     hooks: MiddlewareHooks,
     dashboard: Option<(String, Router)>,
 ) -> Result<(), ProxyError> {
-    start_with_traffic(config, hooks, dashboard, None, None).await
+    start_with_traffic(
+        config,
+        hooks,
+        dashboard,
+        None,
+        crate::channel_trust::TrustConfig::default(),
+    )
+    .await
 }
 
 /// Start the proxy server with an optional traffic recorder for the dashboard inspector.
@@ -169,7 +176,7 @@ pub async fn start_with_traffic(
     hooks: MiddlewareHooks,
     dashboard: Option<(String, Router)>,
     traffic_recorder: Option<Arc<TrafficRecorder>>,
-    trust_config: Option<crate::channel_trust::TrustConfig>,
+    trust_config: crate::channel_trust::TrustConfig,
 ) -> Result<(), ProxyError> {
     start_with_traffic_full(
         config,
@@ -189,7 +196,7 @@ pub async fn start_with_traffic_full(
     dashboard: Option<(String, Router)>,
     traffic_recorder: Option<Arc<TrafficRecorder>>,
     traffic_slm_updater: Option<Arc<TrafficSlmUpdater>>,
-    trust_config: Option<crate::channel_trust::TrustConfig>,
+    trust_config: crate::channel_trust::TrustConfig,
 ) -> Result<(), ProxyError> {
     let client = Client::builder()
         .timeout(std::time::Duration::from_secs(300)) // 5 min for long LLM responses
@@ -213,8 +220,8 @@ pub async fn start_with_traffic_full(
         rate_limiter,
         traffic_recorder,
         traffic_slm_updater,
-        trust_config,
-        slm_semaphore: Arc::new(tokio::sync::Semaphore::new(4)), // max 4 concurrent SLM screenings
+        trust_config: Arc::new(std::sync::RwLock::new(trust_config)),
+        slm_semaphore: Arc::new(tokio::sync::Semaphore::new(4)),
     };
 
     let app = build_router(state, dashboard);
@@ -598,7 +605,7 @@ async fn forward_request(
     // Access control is based on the Aegis channel (source IP address).
     // Context is OpenClaw observability metadata (telegram, cli, web).
     let channel_trust = {
-        let config = state.trust_config.as_ref().cloned().unwrap_or_default();
+        let config = state.trust_config.read().unwrap().clone();
 
         // Parse context cert if present on the request header
         let cert_header = headers.get("x-aegis-channel-cert");
@@ -1521,7 +1528,9 @@ mod tests {
             rate_limiter: None,
             traffic_recorder: None,
             traffic_slm_updater: None,
-            trust_config: None,
+            trust_config: Arc::new(std::sync::RwLock::new(
+                crate::channel_trust::TrustConfig::default(),
+            )),
             slm_semaphore: Arc::new(tokio::sync::Semaphore::new(4)),
         };
         let _router = build_router(state, None);
@@ -1538,7 +1547,9 @@ mod tests {
             rate_limiter: None,
             traffic_recorder: None,
             traffic_slm_updater: None,
-            trust_config: None,
+            trust_config: Arc::new(std::sync::RwLock::new(
+                crate::channel_trust::TrustConfig::default(),
+            )),
             slm_semaphore: Arc::new(tokio::sync::Semaphore::new(4)),
         };
         assert_eq!(state.identity_fingerprint.as_deref(), Some("abc123def456"));

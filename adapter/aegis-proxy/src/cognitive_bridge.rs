@@ -34,6 +34,7 @@ pub fn routes() -> Router<crate::proxy::AppState> {
         .route("/register-channel", post(protected_register_handler))
         .route("/unregister-channel", post(protected_unregister_handler))
         .route("/channel-context", get(protected_context_handler))
+        .route("/trust/set", post(protected_trust_set_handler))
 }
 
 /// Check if the request comes from a trusted source IP.
@@ -42,7 +43,7 @@ fn is_trusted_source(
     state: &crate::proxy::AppState,
 ) -> bool {
     let source_ip = connect_info.0.ip().to_string();
-    let config = state.trust_config.as_ref().cloned().unwrap_or_default();
+    let config = state.trust_config.read().unwrap().clone();
     if config.channels.is_empty() {
         // No channels configured — allow from localhost by default
         return source_ip == "127.0.0.1" || source_ip == "::1";
@@ -127,6 +128,80 @@ async fn protected_context_handler(
             .into_response();
     }
     channel_context_handler().await.into_response()
+}
+
+/// Request body for POST /aegis/trust/set
+#[derive(Debug, Deserialize)]
+struct TrustSetRequest {
+    identity: String,
+    level: String,
+}
+
+async fn protected_trust_set_handler(
+    State(state): State<crate::proxy::AppState>,
+    connect_info: axum::extract::ConnectInfo<std::net::SocketAddr>,
+    Json(req): Json<TrustSetRequest>,
+) -> axum::response::Response {
+    // Trust management always allows localhost — the warden on their own machine
+    // can always manage trust, even if they accidentally set localhost to unknown.
+    let source_ip = connect_info.0.ip().to_string();
+    let is_local = source_ip == "127.0.0.1" || source_ip == "::1";
+    if !is_local && !is_trusted_source(&connect_info, &state) {
+        return (
+            axum::http::StatusCode::FORBIDDEN,
+            "trust management requires local access",
+        )
+            .into_response();
+    }
+    trust_set_handler(State(state), Json(req))
+        .await
+        .into_response()
+}
+
+/// POST /aegis/trust/set — hot-reload a trust channel mapping.
+///
+/// Updates the in-memory trust config without restart. Changes are
+/// ephemeral — they don't persist to config.toml. Use the CLI
+/// `aegis trust add` for persistent changes.
+async fn trust_set_handler(
+    State(state): State<crate::proxy::AppState>,
+    Json(req): Json<TrustSetRequest>,
+) -> (axum::http::StatusCode, Json<serde_json::Value>) {
+    let level = crate::channel_trust::parse_trust_level(&req.level);
+
+    if let Ok(mut config) = state.trust_config.write() {
+        // Update existing or add new
+        let existing = config
+            .channels
+            .iter_mut()
+            .find(|(pattern, _)| *pattern == req.identity);
+        if let Some((_, lvl)) = existing {
+            *lvl = level;
+        } else {
+            config.channels.push((req.identity.clone(), level));
+        }
+
+        tracing::info!(
+            identity = %req.identity,
+            level = %req.level,
+            "trust channel updated (hot-reload)"
+        );
+
+        (
+            axum::http::StatusCode::OK,
+            Json(serde_json::json!({
+                "ok": true,
+                "identity": req.identity,
+                "level": req.level,
+                "note": "ephemeral — use 'aegis trust add' to persist"
+            })),
+        )
+    } else {
+        (
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": "failed to acquire trust config lock"})),
+        )
+    }
 }
 
 use axum::response::IntoResponse;
@@ -304,7 +379,7 @@ async fn register_channel_handler(
     State(state): State<crate::proxy::AppState>,
     Json(req): Json<RegisterChannelRequest>,
 ) -> (axum::http::StatusCode, Json<ChannelContextResponse>) {
-    let trust_config = state.trust_config.as_ref().cloned().unwrap_or_default();
+    let trust_config = state.trust_config.read().unwrap().clone();
 
     // Verify signature if signing_pubkey is configured
     let sig_verified = if let Some(ref pubkey_bytes) = trust_config.signing_pubkey {

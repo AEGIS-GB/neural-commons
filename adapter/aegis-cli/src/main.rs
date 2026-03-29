@@ -406,6 +406,20 @@ enum TrustCommands {
     },
     /// List all configured channel trust patterns
     List,
+    /// Hot-reload a trust tier on the running server (ephemeral, no restart)
+    ///
+    /// Examples:
+    ///   aegis trust set localhost full
+    ///   aegis trust set "192.168.*" public
+    Set {
+        /// Channel identity (IP, hostname, or pattern)
+        identity: String,
+        /// Trust level: full, trusted, public, restricted, unknown
+        level: String,
+        /// Aegis proxy URL (default: http://127.0.0.1:3141)
+        #[arg(long, default_value = "http://127.0.0.1:3141")]
+        aegis_url: String,
+    },
 }
 
 fn main() {
@@ -1001,6 +1015,13 @@ fn main() {
             TrustCommands::List => {
                 trust_list_patterns(&config);
             }
+            TrustCommands::Set {
+                identity,
+                level,
+                aegis_url,
+            } => {
+                trust_set_live(&aegis_url, &identity, &level);
+            }
         },
 
         Some(Commands::Start) => {
@@ -1550,6 +1571,45 @@ fn trust_remove_pattern(config_path: &std::path::Path, pattern: &str) {
 
     eprintln!("  \x1b[32m✓\x1b[0m Removed channel: {pattern}");
     eprintln!("  Restart Aegis to apply: aegis restart");
+}
+
+/// Hot-reload a trust tier on the running Aegis server.
+fn trust_set_live(aegis_url: &str, identity: &str, level: &str) {
+    let valid_levels = ["full", "trusted", "public", "restricted", "unknown"];
+    if !valid_levels.contains(&level) {
+        eprintln!("error: invalid trust level '{level}'");
+        eprintln!("  valid levels: {}", valid_levels.join(", "));
+        std::process::exit(1);
+    }
+
+    let url = format!("{aegis_url}/aegis/trust/set");
+    let body = serde_json::json!({
+        "identity": identity,
+        "level": level,
+    });
+
+    let client = reqwest::blocking::Client::new();
+    match client
+        .post(&url)
+        .header("Content-Type", "application/json")
+        .json(&body)
+        .timeout(std::time::Duration::from_secs(5))
+        .send()
+    {
+        Ok(resp) => {
+            let status = resp.status();
+            let text = resp.text().unwrap_or_default();
+            if status.is_success() {
+                eprintln!("  \x1b[32m✓\x1b[0m Set {identity} → {level} (live, ephemeral)");
+            } else {
+                eprintln!("  \x1b[31m✗\x1b[0m Failed ({status}): {text}");
+            }
+        }
+        Err(e) => {
+            eprintln!("  \x1b[31m✗\x1b[0m Connection failed: {e}");
+            eprintln!("  Is Aegis running at {aegis_url}?");
+        }
+    }
 }
 
 /// List all configured channel trust patterns.

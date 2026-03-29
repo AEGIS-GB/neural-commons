@@ -934,7 +934,7 @@ pub async fn start(config: AdapterConfig, mode_override: Option<Mode>) -> Result
         Some((dashboard_path, dashboard_router)),
         Some(traffic_recorder),
         Some(traffic_slm_updater),
-        Some(trust_config),
+        trust_config,
     )
     .await
     .map_err(|e| StartupError::Proxy(format!("{e}")))?;
