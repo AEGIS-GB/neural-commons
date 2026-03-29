@@ -143,8 +143,7 @@ pub fn screen_fast_layers(
         );
     }
 
-    // Decode any encoded content (ROT13, base64, hex) BEFORE all screening layers.
-    // This ensures both the classifier and heuristic see decoded plaintext.
+    // Step 0: Decode encoded content (ROT13, base64, hex) before all layers.
     let decoded = crate::engine::heuristic::decode_encoded_content(content);
     let scan_content = if let Some(ref decoded_text) = decoded {
         format!("{content}\n{decoded_text}")
@@ -152,66 +151,20 @@ pub fn screen_fast_layers(
         content.to_string()
     };
 
-    // Classifier pre-filter — runs on original + decoded content
-    let classifier_start = Instant::now();
-    let classifier_signal = run_prompt_guard(config, &scan_content);
-    let classifier_ms = if classifier_signal.is_some() {
-        Some(classifier_start.elapsed().as_millis() as u64)
-    } else {
-        None
-    };
-
-    let mut classifier_advisory: Option<String> = None;
-
-    if let Some((true, prob)) = classifier_signal
-        && prob > CLASSIFIER_QUARANTINE_THRESHOLD
-    {
-        if classifier_blocking {
-            info!(
-                prob,
-                "ProtectAI classifier: MALICIOUS, fast-path quarantine"
-            );
-            return (
-                Some(ScreeningResult {
-                    decision: ScreeningDecision::Quarantine(format!(
-                        "prompt_guard: MALICIOUS (prob={prob:.4})"
-                    )),
-                    enriched: None,
-                    holster: None,
-                    timing: ScreeningTiming {
-                        total_ms: pipeline_start.elapsed().as_millis() as u64,
-                        classifier_ms,
-                        engine: "prompt-guard".to_string(),
-                        ..Default::default()
-                    },
-                }),
-                None,
-            );
-        } else {
-            // Advisory mode: classifier flagged it but trust level says don't block.
-            // Log and let the SLM make the final decision.
-            info!(
-                prob,
-                "ProtectAI classifier: suspicious (advisory, trusted channel — forwarding to SLM)"
-            );
-            classifier_advisory = Some(format!(
-                "prompt_guard: MALICIOUS (prob={prob:.4}) — advisory, trusted channel"
-            ));
-        }
-    }
-
-    // Heuristic pre-filter
+    // Step 1: Heuristic pre-filter (<1ms) — regex patterns, cheapest layer first.
+    let mut heuristic_ms: Option<u64> = None;
     if config.fallback_to_heuristics {
         let heuristic = HeuristicEngine::new();
         let heuristic_start = Instant::now();
-        if let Ok(output) = heuristic.generate(content) {
-            let heuristic_ms = heuristic_start.elapsed().as_millis() as u64;
+        if let Ok(output) = heuristic.generate(&scan_content) {
+            heuristic_ms = Some(heuristic_start.elapsed().as_millis() as u64);
             if let Ok(slm_output) = parse_slm_output(&output, &EngineProfile::Loopback)
                 && !slm_output.annotations.is_empty()
             {
                 info!(
                     patterns = slm_output.annotations.len(),
-                    "heuristic pre-filter: threat detected"
+                    ms = heuristic_ms,
+                    "Layer 1 HEURISTIC: threat detected"
                 );
                 let enriched = enrich(&slm_output, content.as_bytes());
                 let holster_result = apply_holster(
@@ -239,19 +192,67 @@ pub fn screen_fast_layers(
                         holster: Some(holster_result),
                         timing: ScreeningTiming {
                             total_ms: pipeline_start.elapsed().as_millis() as u64,
-                            pass_a_ms: Some(heuristic_ms),
-                            classifier_ms,
+                            pass_a_ms: heuristic_ms,
+                            classifier_ms: None,
                             engine: "heuristic".to_string(),
                             ..Default::default()
                         },
                     }),
-                    classifier_advisory,
+                    None,
                 );
             }
         }
     }
 
-    // Fast layers clean (or advisory only) — needs deep SLM analysis
+    // Step 2: Classifier (~15ms) — ProtectAI DeBERTa ML model.
+    let classifier_start = Instant::now();
+    let classifier_signal = run_prompt_guard(config, &scan_content);
+    let classifier_ms = if classifier_signal.is_some() {
+        Some(classifier_start.elapsed().as_millis() as u64)
+    } else {
+        None
+    };
+
+    let mut classifier_advisory: Option<String> = None;
+
+    if let Some((true, prob)) = classifier_signal
+        && prob > CLASSIFIER_QUARANTINE_THRESHOLD
+    {
+        if classifier_blocking {
+            info!(
+                prob,
+                ms = classifier_ms,
+                "Layer 2 CLASSIFIER: MALICIOUS, quarantine"
+            );
+            return (
+                Some(ScreeningResult {
+                    decision: ScreeningDecision::Quarantine(format!(
+                        "prompt_guard: MALICIOUS (prob={prob:.4})"
+                    )),
+                    enriched: None,
+                    holster: None,
+                    timing: ScreeningTiming {
+                        total_ms: pipeline_start.elapsed().as_millis() as u64,
+                        pass_a_ms: heuristic_ms,
+                        classifier_ms,
+                        engine: "prompt-guard".to_string(),
+                        ..Default::default()
+                    },
+                }),
+                None,
+            );
+        } else {
+            info!(
+                prob,
+                "Layer 2 CLASSIFIER: suspicious (advisory, trusted channel)"
+            );
+            classifier_advisory = Some(format!(
+                "prompt_guard: MALICIOUS (prob={prob:.4}) — advisory, trusted channel"
+            ));
+        }
+    }
+
+    // Fast layers clean (or advisory only) — needs deep SLM analysis (Layer 3)
     (None, classifier_advisory)
 }
 
