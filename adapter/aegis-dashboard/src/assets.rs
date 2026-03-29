@@ -1230,36 +1230,42 @@ async function showTraceDetail(id){
     // The pipeline short-circuits: classifier → heuristic → deep SLM.
     // Only the catching layer runs; subsequent layers are skipped.
     const slmCol=slm==='admit'?'fd-ok':slm==='reject'||slm==='quarantine'?'fd-err':'fd-warn';
+    const sd=e.slm_detail||{};
+    const classifierMs=sd.classifier_ms;
+    const classifierRan=classifierMs!=null;
+    const classifierAdvisory=sd.classifier_advisory||null;
+    const engine=sd.engine||'';
     let slmBody='<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:4px">';
-    // Determine which layer caught it (fast = heuristic/classifier <100ms, deep = SLM >100ms)
-    const isFastCatch=blocked&&slmMs<100;
-    const isDeepCatch=blocked&&slmMs>=100;
-    const isClean=slm==='admit';
-    // Layer 1: Classifier
-    if(isFastCatch&&slmMs<50){
-      slmBody+='<span class="slm-stage" style="min-width:100px"><b style="color:#8b949e;font-size:10px">CLASSIFIER</b><br><span style="color:#f85149;font-weight:600">CAUGHT</span><br><span style="color:#484f58">'+slmMs+'ms</span></span>';
-      slmBody+='<span class="slm-stage" style="min-width:90px"><b style="color:#8b949e;font-size:10px">HEURISTIC</b><br><span style="color:#484f58">skipped</span></span>';
-      slmBody+='<span class="slm-stage" style="min-width:90px"><b style="color:#8b949e;font-size:10px">DEEP SLM</b><br><span style="color:#484f58">skipped</span></span>';
-    }else if(isFastCatch){
-      slmBody+='<span class="slm-stage" style="min-width:100px"><b style="color:#8b949e;font-size:10px">CLASSIFIER</b><br><span style="color:#3fb950">pass</span></span>';
-      slmBody+='<span class="slm-stage" style="min-width:100px"><b style="color:#8b949e;font-size:10px">HEURISTIC</b><br><span style="color:#f85149;font-weight:600">CAUGHT</span><br><span style="color:#484f58">'+slmMs+'ms</span></span>';
-      slmBody+='<span class="slm-stage" style="min-width:90px"><b style="color:#8b949e;font-size:10px">DEEP SLM</b><br><span style="color:#484f58">skipped</span></span>';
-    }else if(isDeepCatch){
-      slmBody+='<span class="slm-stage" style="min-width:100px"><b style="color:#8b949e;font-size:10px">CLASSIFIER</b><br><span style="color:#3fb950">pass</span></span>';
-      slmBody+='<span class="slm-stage" style="min-width:100px"><b style="color:#8b949e;font-size:10px">HEURISTIC</b><br><span style="color:#3fb950">pass</span></span>';
-      const deepVerdict=slm==='reject'?'REJECT':'QUARANTINE';
-      slmBody+='<span class="slm-stage" style="min-width:130px"><b style="color:#8b949e;font-size:10px">DEEP SLM (Qwen3)</b><br><span style="color:'+(slm==='reject'?'#f85149':'#d29922')+';font-weight:600">'+deepVerdict+'</span> · '+threat+'/10000<br><span style="color:#484f58">'+slmMs+'ms</span></span>';
-    }else if(isClean){
-      // All layers passed
-      slmBody+='<span class="slm-stage" style="min-width:100px"><b style="color:#8b949e;font-size:10px">CLASSIFIER</b><br><span style="color:#3fb950">pass</span></span>';
-      slmBody+='<span class="slm-stage" style="min-width:100px"><b style="color:#8b949e;font-size:10px">HEURISTIC</b><br><span style="color:#3fb950">pass</span></span>';
-      if(slmMs>0){
-        slmBody+='<span class="slm-stage" style="min-width:130px"><b style="color:#8b949e;font-size:10px">DEEP SLM (Qwen3)</b><br><span style="color:#3fb950">pass</span> · '+threat+'/10000<br><span style="color:#484f58">'+slmMs+'ms</span></span>';
-      }else{
-        slmBody+='<span class="slm-stage" style="min-width:90px"><b style="color:#8b949e;font-size:10px">DEEP SLM</b><br><span style="color:#484f58">deferred</span></span>';
-      }
+    // Layer 1: Classifier — show actual status from slm_detail
+    const classifierCaught=engine==='prompt-guard'&&(slm==='reject'||slm==='quarantine');
+    if(classifierCaught){
+      slmBody+='<span class="slm-stage" style="min-width:110px"><b style="color:#8b949e;font-size:10px">CLASSIFIER</b><br><span style="color:#f85149;font-weight:600">CAUGHT</span><br><span style="color:#484f58">'+classifierMs+'ms</span></span>';
+    }else if(classifierRan){
+      const clsLabel=classifierAdvisory?'<span style="color:#d29922">advisory</span>':'<span style="color:#3fb950">pass</span>';
+      slmBody+='<span class="slm-stage" style="min-width:110px"><b style="color:#8b949e;font-size:10px">CLASSIFIER</b><br>'+clsLabel+'<br><span style="color:#484f58">'+classifierMs+'ms</span></span>';
     }else{
-      slmBody+='<span style="color:#484f58;font-size:12px">not screened</span>';
+      slmBody+='<span class="slm-stage" style="min-width:110px"><b style="color:#8b949e;font-size:10px">CLASSIFIER</b><br><span style="color:#484f58">disabled</span></span>';
+    }
+    // Layer 2: Heuristic
+    const heuristicCaught=engine==='heuristic'&&(slm==='reject'||slm==='quarantine');
+    if(heuristicCaught){
+      slmBody+='<span class="slm-stage" style="min-width:100px"><b style="color:#8b949e;font-size:10px">HEURISTIC</b><br><span style="color:#f85149;font-weight:600">CAUGHT</span><br><span style="color:#484f58">'+slmMs+'ms</span></span>';
+    }else if(classifierCaught){
+      slmBody+='<span class="slm-stage" style="min-width:90px"><b style="color:#8b949e;font-size:10px">HEURISTIC</b><br><span style="color:#484f58">skipped</span></span>';
+    }else{
+      slmBody+='<span class="slm-stage" style="min-width:100px"><b style="color:#8b949e;font-size:10px">HEURISTIC</b><br><span style="color:#3fb950">pass</span></span>';
+    }
+    // Layer 3: Deep SLM
+    const deepCaught=(engine==='openai'||engine==='ollama')&&(slm==='reject'||slm==='quarantine');
+    if(classifierCaught||heuristicCaught){
+      slmBody+='<span class="slm-stage" style="min-width:90px"><b style="color:#8b949e;font-size:10px">DEEP SLM</b><br><span style="color:#484f58">skipped</span></span>';
+    }else if(deepCaught){
+      const dv=slm==='reject'?'REJECT':'QUARANTINE';
+      slmBody+='<span class="slm-stage" style="min-width:130px"><b style="color:#8b949e;font-size:10px">DEEP SLM (Qwen3)</b><br><span style="color:'+(slm==='reject'?'#f85149':'#d29922')+';font-weight:600">'+dv+'</span> · '+threat+'/10000<br><span style="color:#484f58">'+slmMs+'ms</span></span>';
+    }else if(slmMs>0){
+      slmBody+='<span class="slm-stage" style="min-width:130px"><b style="color:#8b949e;font-size:10px">DEEP SLM (Qwen3)</b><br><span style="color:#3fb950">pass</span> · '+threat+'/10000<br><span style="color:#484f58">'+slmMs+'ms</span></span>';
+    }else if(slm==='admit'||slm==='—'){
+      slmBody+='<span class="slm-stage" style="min-width:90px"><b style="color:#8b949e;font-size:10px">DEEP SLM</b><br><span style="color:#484f58">deferred</span></span>';
     }
     slmBody+='</div>';
     const slmTitle=blocked?'SLM Screening — BLOCKED ('+slm+')':'SLM Screening — '+slm;
@@ -1337,11 +1343,13 @@ async function showTraceDetail(id){
         rsh+='<div style="margin-bottom:10px"><span style="font-size:11px;color:#8b949e">REDACTIONS: '+rs.redaction_count+'</span></div>';
       }
       if(rs.findings&&rs.findings.length>0){
-        rsh+='<table class="dtable"><tr><th>Category</th><th>Description</th></tr>';
+        rsh+='<table class="dtable"><tr><th>Category</th><th>Description</th><th>Original Value</th></tr>';
         for(const f of rs.findings){
           const catCol=f.category==='credential'||f.category==='dangerous_tool'?'#f85149':f.category==='pii'||f.category==='phi'?'#d29922':'#8b949e';
+          const vals=(f.matched_values||[]).map(v=>escHtml(v)).join('<br>');
           rsh+='<tr><td><span style="color:'+catCol+';font-weight:600">'+escHtml(f.category)+'</span></td>';
-          rsh+='<td style="font-size:12px;color:#8b949e">'+escHtml(f.description)+'</td></tr>';
+          rsh+='<td style="font-size:12px;color:#8b949e">'+escHtml(f.description)+'</td>';
+          rsh+='<td style="font-size:11px;color:#e1e4e8;font-family:monospace;word-break:break-all">'+vals+'</td></tr>';
         }
         rsh+='</table>';
       }

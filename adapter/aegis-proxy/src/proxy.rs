@@ -409,6 +409,64 @@ fn extract_user_content_from_json(body: &str, max_chars: usize) -> String {
     body.chars().take(4096).collect()
 }
 
+/// Extract text content from SSE streaming response for DLP screening.
+/// SSE chunks look like: `data: {"choices":[{"delta":{"content":"token"}}]}\n\n`
+/// This reassembles the text so DLP regex can match across chunk boundaries.
+fn extract_text_from_sse(sse: &str) -> String {
+    let mut text = String::new();
+    for line in sse.lines() {
+        let line = line.trim();
+        if !line.starts_with("data: ") {
+            continue;
+        }
+        let json_str = &line[6..];
+        if json_str == "[DONE]" {
+            continue;
+        }
+        if let Ok(json) = serde_json::from_str::<serde_json::Value>(json_str) {
+            // OpenAI format: choices[].delta.content
+            if let Some(content) = json
+                .get("choices")
+                .and_then(|c| c.as_array())
+                .and_then(|a| a.first())
+                .and_then(|c| c.get("delta"))
+                .and_then(|d| d.get("content"))
+                .and_then(|c| c.as_str())
+            {
+                text.push_str(content);
+            }
+            // Also check tool call arguments (may contain sensitive data)
+            if let Some(args) = json
+                .get("choices")
+                .and_then(|c| c.as_array())
+                .and_then(|a| a.first())
+                .and_then(|c| c.get("delta"))
+                .and_then(|d| d.get("tool_calls"))
+                .and_then(|t| t.as_array())
+            {
+                for tc in args {
+                    if let Some(arg) = tc
+                        .get("function")
+                        .and_then(|f| f.get("arguments"))
+                        .and_then(|a| a.as_str())
+                    {
+                        text.push_str(arg);
+                    }
+                }
+            }
+            // Anthropic format: content_block_delta.delta.text
+            if let Some(content) = json
+                .get("delta")
+                .and_then(|d| d.get("text"))
+                .and_then(|t| t.as_str())
+            {
+                text.push_str(content);
+            }
+        }
+    }
+    text
+}
+
 /// Strip system/developer messages from untrusted request bodies.
 /// Returns Some(new_body) if messages were stripped, None if nothing to strip.
 fn strip_privileged_roles(body: &[u8]) -> Option<Vec<u8>> {
@@ -1176,10 +1234,20 @@ async fn forward_request(
                     stream_slm_verdict
                         .as_ref()
                         .and_then(|v| serde_json::to_value(v).ok()),
-                    // Screen the accumulated streaming response
+                    // Screen the accumulated streaming response.
+                    // Extract text content from SSE chunks before DLP scanning,
+                    // because SSE splits text across delta chunks.
                     std::str::from_utf8(&accumulated)
                         .ok()
-                        .map(crate::response_screen::screen_response)
+                        .map(|sse| {
+                            let extracted = extract_text_from_sse(sse);
+                            let target = if extracted.is_empty() {
+                                sse.to_string()
+                            } else {
+                                extracted
+                            };
+                            crate::response_screen::screen_response(&target)
+                        })
                         .and_then(|(_, r)| {
                             if r.screened || r.blocked {
                                 serde_json::to_value(&r).ok()

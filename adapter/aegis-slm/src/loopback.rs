@@ -143,9 +143,18 @@ pub fn screen_fast_layers(
         );
     }
 
-    // Classifier pre-filter
+    // Decode any encoded content (ROT13, base64, hex) BEFORE all screening layers.
+    // This ensures both the classifier and heuristic see decoded plaintext.
+    let decoded = crate::engine::heuristic::decode_encoded_content(content);
+    let scan_content = if let Some(ref decoded_text) = decoded {
+        format!("{content}\n{decoded_text}")
+    } else {
+        content.to_string()
+    };
+
+    // Classifier pre-filter — runs on original + decoded content
     let classifier_start = Instant::now();
-    let classifier_signal = run_prompt_guard(config, content);
+    let classifier_signal = run_prompt_guard(config, &scan_content);
     let classifier_ms = if classifier_signal.is_some() {
         Some(classifier_start.elapsed().as_millis() as u64)
     } else {

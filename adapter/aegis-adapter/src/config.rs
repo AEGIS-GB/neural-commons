@@ -198,8 +198,8 @@ pub struct SlmSection {
     #[serde(default = "default_true")]
     pub metaprompt_hardening: bool,
     /// ProtectAI classifier model directory (contains model.onnx + tokenizer.json).
-    /// If not set, classifier is disabled.
-    #[serde(default)]
+    /// If not set, auto-detects from standard paths.
+    #[serde(default = "default_prompt_guard_dir")]
     pub prompt_guard_model_dir: Option<String>,
     /// SLM deep screening timeout in seconds (default: 15)
     #[serde(default = "default_slm_timeout")]
@@ -226,7 +226,7 @@ impl Default for SlmSection {
             model: default_slm_model(),
             fallback_to_heuristics: true,
             metaprompt_hardening: true,
-            prompt_guard_model_dir: None,
+            prompt_guard_model_dir: default_prompt_guard_dir(),
             slm_timeout_secs: default_slm_timeout(),
             slm_max_content_chars: default_slm_max_chars(),
         }
@@ -320,6 +320,21 @@ fn default_server_url() -> String {
 }
 fn default_slm_model() -> String {
     "llama3.2:1b".to_string()
+}
+fn default_prompt_guard_dir() -> Option<String> {
+    // Auto-detect classifier model from standard paths
+    let candidates = [
+        "models/protectai-v2",
+        "models/prompt-guard-2",
+        "../models/protectai-v2",
+    ];
+    for path in &candidates {
+        let model_path = std::path::Path::new(path).join("model.onnx");
+        if model_path.exists() {
+            return Some(path.to_string());
+        }
+    }
+    None
 }
 
 impl Default for AdapterConfig {

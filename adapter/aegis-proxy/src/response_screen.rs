@@ -36,6 +36,10 @@ pub struct ResponseFinding {
     pub category: String,
     /// Short description.
     pub description: String,
+    /// Original matched text (what was redacted). For warden eyes only —
+    /// never sent to the client.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub matched_values: Vec<String>,
 }
 
 impl ResponseScreenResult {
@@ -68,13 +72,27 @@ pub fn screen_response(body: &str) -> (String, ResponseScreenResult) {
     // Layer 2: DLP scanning + redaction
     let patterns = get_dlp_patterns();
     for p in patterns {
-        let count = p.regex.find_iter(&text).count() as u32;
-        if count > 0 {
+        let matches: Vec<String> = p
+            .regex
+            .find_iter(&text)
+            .map(|m| {
+                // Truncate long matches for storage (max 100 chars each)
+                let s = m.as_str();
+                if s.len() > 100 {
+                    format!("{}...", &s[..97])
+                } else {
+                    s.to_string()
+                }
+            })
+            .collect();
+        if !matches.is_empty() {
+            let count = matches.len() as u32;
             let new_text = p.regex.replace_all(&text, p.replacement).to_string();
             result.redaction_count += count;
             result.findings.push(ResponseFinding {
                 category: p.category.to_string(),
                 description: p.description.to_string(),
+                matched_values: matches,
             });
             text = new_text;
         }
@@ -136,6 +154,7 @@ fn check_dangerous_tools(body: &str) -> Option<ResponseFinding> {
                 return Some(ResponseFinding {
                     category: "dangerous_tool".to_string(),
                     description: format!("dangerous tool call: {name}"),
+                    matched_values: vec![name.to_string()],
                 });
             }
         }
@@ -150,6 +169,7 @@ fn check_dangerous_tools(body: &str) -> Option<ResponseFinding> {
                 return Some(ResponseFinding {
                     category: "dangerous_tool".to_string(),
                     description: format!("dangerous tool call: {name}"),
+                    matched_values: vec![name.to_string()],
                 });
             }
         }

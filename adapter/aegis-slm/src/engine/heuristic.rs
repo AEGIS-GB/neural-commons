@@ -115,7 +115,8 @@ const HEURISTIC_RULES: &[(&str, Pattern, &str)] = &[
 
 /// Detect and decode encoded content (ROT13, base64, hex).
 /// Returns Some(decoded_text) if any encoding was found and decoded.
-fn decode_encoded_content(content: &str) -> Option<String> {
+/// Public so screen_fast_layers can decode before all screening layers.
+pub fn decode_encoded_content(content: &str) -> Option<String> {
     let mut decoded_parts = Vec::new();
 
     // ROT13: look for ROT13-like content (detect by context clues like "ROT13", "decode")
