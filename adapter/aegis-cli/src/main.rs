@@ -36,7 +36,7 @@ use std::path::Path;
 
 use clap::{Parser, Subcommand};
 
-use aegis_adapter::config::AdapterConfig;
+use aegis_adapter::config::{AdapterConfig, AdapterMode};
 
 mod backup;
 mod trace;
@@ -430,11 +430,7 @@ fn main() {
         None
     };
 
-    let mode_label = match mode_override {
-        Some(Mode::PassThrough) => "pass-through",
-        Some(Mode::Enforce) => "enforce",
-        Some(Mode::ObserveOnly) | None => "observe-only",
-    };
+    // mode_label resolved after config load (see below)
 
     // Load configuration — always prefer $HOME/.aegis/config/config.toml
     // so CLI and systemd service use the same config file.
@@ -487,6 +483,18 @@ fn main() {
     if let Some(ref model) = cli.slm_model {
         config.slm.model = model.clone();
     }
+
+    // Resolve mode label from CLI flags OR config file (not just CLI)
+    let mode_label = match mode_override {
+        Some(Mode::PassThrough) => "pass-through",
+        Some(Mode::Enforce) => "enforce",
+        Some(Mode::ObserveOnly) => "observe-only",
+        None => match config.mode {
+            AdapterMode::Enforce => "enforce",
+            AdapterMode::PassThrough => "pass-through",
+            AdapterMode::ObserveOnly => "observe-only",
+        },
+    };
 
     match cli.command {
         None => {
