@@ -6,7 +6,7 @@ edition.workspace = true
 license.workspace = true
 
 [features]
-default = []
+default = ["prompt-guard"]
 prompt-guard = ["dep:ort", "dep:tokenizers"]
 
 [dependencies]
