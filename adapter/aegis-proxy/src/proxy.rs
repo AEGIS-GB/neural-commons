@@ -829,27 +829,40 @@ async fn forward_request(
                 if let Some((decision, verdict)) = fast_result {
                     slm_verdict = verdict;
                     stamp_trust(&mut slm_verdict);
-                    match decision {
-                        middleware::SlmDecision::Reject(reason)
-                            if state.config.mode == ProxyMode::Enforce =>
-                        {
-                            warn!(path = %path, reason = %reason, "SLM fast-layer rejected request");
-                            return Ok(make_blocked_response(&reason, &slm_verdict));
+
+                    // Trust policy: deferred tiers (full/trusted) never block on fast layers.
+                    // The fast-layer result is logged but the request proceeds.
+                    if trust_policy.slm_deferred {
+                        match &decision {
+                            middleware::SlmDecision::Reject(reason)
+                            | middleware::SlmDecision::Quarantine(reason) => {
+                                info!(path = %path, reason = %reason, "SLM fast-layer flagged (advisory — trusted, not blocking)");
+                            }
+                            _ => {}
                         }
-                        middleware::SlmDecision::Quarantine(reason)
-                            if state.config.mode == ProxyMode::Enforce =>
-                        {
-                            warn!(path = %path, reason = %reason, "SLM fast-layer quarantined — blocking in enforce mode");
-                            return Ok(make_blocked_response(&reason, &slm_verdict));
+                    } else {
+                        match decision {
+                            middleware::SlmDecision::Reject(reason)
+                                if state.config.mode == ProxyMode::Enforce =>
+                            {
+                                warn!(path = %path, reason = %reason, "SLM fast-layer rejected request");
+                                return Ok(make_blocked_response(&reason, &slm_verdict));
+                            }
+                            middleware::SlmDecision::Quarantine(reason)
+                                if state.config.mode == ProxyMode::Enforce =>
+                            {
+                                warn!(path = %path, reason = %reason, "SLM fast-layer quarantined — blocking in enforce mode");
+                                return Ok(make_blocked_response(&reason, &slm_verdict));
+                            }
+                            middleware::SlmDecision::Quarantine(reason) => {
+                                info!(path = %path, reason = %reason, "SLM fast-layer quarantine");
+                            }
+                            middleware::SlmDecision::Reject(reason) => {
+                                info!(path = %path, reason = %reason, "SLM fast-layer would reject (observe-only)");
+                            }
+                            middleware::SlmDecision::Admit => {}
                         }
-                        middleware::SlmDecision::Quarantine(reason) => {
-                            info!(path = %path, reason = %reason, "SLM fast-layer quarantine");
-                        }
-                        middleware::SlmDecision::Reject(reason) => {
-                            info!(path = %path, reason = %reason, "SLM fast-layer would reject (observe-only)");
-                        }
-                        middleware::SlmDecision::Admit => {}
-                    }
+                    } // end non-deferred block
                 } else {
                     // Phase 2: Fast layers clean — deep SLM timing depends on trust level.
                     //
