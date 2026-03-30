@@ -621,6 +621,9 @@ pub async fn start(config: AdapterConfig, mode_override: Option<Mode>) -> Result
                         // Trusted/Full → allow change, update manifest (warden or authorized agent)
                         // Public/Unknown/Restricted → potential prompt injection, block/alert
                         // No channel → no active session, treat as suspicious
+                        // Background watcher has no per-request context — read global
+                        // channel trust (best-effort for barrier decisions).
+                        #[allow(deprecated)]
                         let channel_trust =
                             aegis_proxy::cognitive_bridge::get_registered_channel_trust();
                         let is_trusted_channel = channel_trust
