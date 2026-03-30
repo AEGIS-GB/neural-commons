@@ -2,6 +2,7 @@
 //!
 //! All scores in integer basis points. No floats in signed data.
 
+use crate::BasisPoints;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -19,8 +20,8 @@ pub struct Claim {
     /// Bot fingerprint of the attester (lowercase hex)
     pub attester_id: String,
 
-    /// Confidence in basis points (0-10000)
-    pub confidence_bp: u32,
+    /// Confidence in basis points (0-10000), validated at deserialization
+    pub confidence_bp: BasisPoints,
 
     /// Temporal scope of this claim
     pub temporal_scope: TemporalScope,
@@ -33,7 +34,7 @@ pub struct Claim {
 
     /// Computed by quarantine validator, basis points (0-10000)
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub confabulation_score_bp: Option<u32>,
+    pub confabulation_score_bp: Option<BasisPoints>,
 
     /// Computed by quarantine temporal coherence check
     #[serde(skip_serializing_if = "Option::is_none")]
