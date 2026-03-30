@@ -12,6 +12,9 @@ fn default_slm_max_content_chars() -> usize {
 fn default_burst_size() -> u32 {
     50
 }
+fn default_metaprompt_hardening() -> bool {
+    true
+}
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -62,11 +65,11 @@ pub struct ProxyConfig {
     #[serde(default)]
     pub allow_any_provider: bool,
 
-    /// Inject metaprompt hardening rules into upstream system messages (default: false).
+    /// Inject metaprompt hardening rules into upstream system messages (default: true).
     /// When enabled, Aegis prepends security rules to the system prompt of every
     /// forwarded request, instructing the upstream LLM to treat ingested content
     /// as untrusted and refuse social engineering / exfiltration attempts.
-    #[serde(default)]
+    #[serde(default = "default_metaprompt_hardening")]
     pub metaprompt_hardening: bool,
 
     /// Max characters of content to send to SLM for screening (default: 24000).
@@ -137,7 +140,7 @@ impl Default for ProxyConfig {
             mode: ProxyMode::ObserveOnly,
             provider: Provider::Anthropic,
             allow_any_provider: false,
-            metaprompt_hardening: false,
+            metaprompt_hardening: true,
             slm_max_content_chars: default_slm_max_content_chars(),
             rate_limit_burst: default_burst_size(),
         }

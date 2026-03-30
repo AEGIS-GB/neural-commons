@@ -236,6 +236,12 @@ pub async fn start_with_traffic_full(
         );
     }
 
+    if !config.metaprompt_hardening {
+        warn!(
+            "metaprompt hardening is DISABLED — Layer 4 security rules will not be injected into upstream system messages. Set metaprompt_hardening=true in config.toml to enable."
+        );
+    }
+
     info!(
         listen = %config.listen_addr,
         upstream = %config.upstream_url,
