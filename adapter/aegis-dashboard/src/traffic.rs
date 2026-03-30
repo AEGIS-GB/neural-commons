@@ -157,21 +157,57 @@ impl TrafficStore {
     }
 
     /// Update the SLM verdict on an existing entry (used for deferred/async SLM on trusted channels).
-    /// Takes the full verdict JSON — all fields updated atomically, no partial writes.
+    /// Merges with existing data — if the entry already has a fast-layer verdict
+    /// (from heuristic/classifier), keep that data and add the deferred result.
     pub fn update_slm(&self, id: u64, verdict: &serde_json::Value) {
         if let Ok(mut entries) = self.entries.write()
             && let Some(entry) = entries.iter_mut().find(|e| e.id == id)
         {
+            // Only update timing/verdict if the entry doesn't already have one
+            // (fast-layer verdict takes priority over deferred timeout)
+            if entry.slm_verdict.is_none() {
+                entry.slm_verdict = verdict
+                    .get("action")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string());
+            }
+            // Always update duration (deferred SLM adds its own timing)
             entry.slm_duration_ms = verdict.get("screening_ms").and_then(|v| v.as_u64());
-            entry.slm_verdict = verdict
-                .get("action")
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string());
             entry.slm_threat_score = verdict
                 .get("threat_score")
                 .and_then(|v| v.as_u64())
                 .map(|v| v as u32);
-            entry.slm_detail = Some(verdict.clone());
+            // Merge slm_detail: keep fast-layer data, add deferred fields
+            if let Some(existing) = &entry.slm_detail {
+                let mut merged = existing.clone();
+                if let Some(obj) = merged.as_object_mut() {
+                    // Add deferred screening time
+                    obj.insert(
+                        "deferred_ms".to_string(),
+                        verdict
+                            .get("screening_ms")
+                            .cloned()
+                            .unwrap_or(serde_json::Value::Null),
+                    );
+                    obj.insert(
+                        "deferred_action".to_string(),
+                        verdict
+                            .get("action")
+                            .cloned()
+                            .unwrap_or(serde_json::Value::Null),
+                    );
+                    obj.insert(
+                        "deferred_reason".to_string(),
+                        verdict
+                            .get("reason")
+                            .cloned()
+                            .unwrap_or(serde_json::Value::Null),
+                    );
+                }
+                entry.slm_detail = Some(merged);
+            } else {
+                entry.slm_detail = Some(verdict.clone());
+            }
         }
     }
 
