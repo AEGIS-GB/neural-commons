@@ -238,6 +238,26 @@ impl EvidenceRecorder {
     pub fn bot_id(&self) -> &str {
         &self.bot_id
     }
+
+    /// Create a backup of the evidence database at the given path.
+    ///
+    /// Delegates to [`EvidenceStore::backup`].
+    pub fn backup(&self, dest: &Path) -> Result<(), EvidenceError> {
+        let store = self.store.lock().map_err(|_| {
+            EvidenceError::StoreError("store lock poisoned during backup".to_string())
+        })?;
+        store.backup(dest)
+    }
+
+    /// Run SQLite integrity check on the evidence database.
+    ///
+    /// Delegates to [`EvidenceStore::integrity_check`].
+    pub fn integrity_check(&self) -> Result<(), EvidenceError> {
+        let store = self.store.lock().map_err(|_| {
+            EvidenceError::StoreError("store lock poisoned during integrity check".to_string())
+        })?;
+        store.integrity_check()
+    }
 }
 
 #[cfg(test)]
