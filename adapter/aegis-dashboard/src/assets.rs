@@ -1355,31 +1355,119 @@ async function showTraceDetail(id){
       }
       h+=dsec('Response Screening — '+(rs.blocked?'BLOCKED':rs.redaction_count+' redaction'+(rs.redaction_count>1?'s':'')),true,rsh);
     }
-    // Collapsible: Last user message
+    // ── CONVERSATION SUMMARY (primary view) ──
+    // Extract readable user message and LLM response
     const lastUser=chat.filter(m=>m.role==='user').pop();
-    if(lastUser){
-      h+=dsec('Last User Message',true,'<div class="json-body" style="max-height:80px">'+(lastUser.content||'').slice(0,500)+'</div>');
+    // Always extract response from the ACTUAL response body, not from chat history.
+    // Chat history has old assistant messages from previous turns — not this response.
+    let llmResponse='';
+    if(e.response_body){
+      // Try SSE streaming format first
+      for(const line of e.response_body.split('\n')){
+        const l=line.trim();
+        if(!l.startsWith('data: '))continue;
+        const j=l.slice(6);
+        if(j==='[DONE]')continue;
+        try{const d=JSON.parse(j);const c=d.choices?.[0]?.delta?.content;if(c)llmResponse+=c;}catch{}
+      }
+      // Try non-streaming JSON format
+      if(!llmResponse){
+        try{const d=JSON.parse(e.response_body);const c=d.choices?.[0]?.message?.content;if(c)llmResponse=c;}catch{}
+      }
+      // Try Anthropic format
+      if(!llmResponse){
+        try{const d=JSON.parse(e.response_body);const blocks=d.content;if(Array.isArray(blocks)){for(const b of blocks){if(b.type==='text'&&b.text)llmResponse+=b.text;}}}catch{}
+      }
     }
-    // Collapsible: Chat view
+    // Fallback to chat parser only if response body extraction failed
+    if(!llmResponse){
+      // Use the response-sourced chat messages only (not request history)
+      const respMsgs=chat.filter(m=>m.source==='response'&&m.role==='assistant');
+      if(respMsgs.length>0)llmResponse=respMsgs[respMsgs.length-1].content||'';
+    }
+    if(lastUser||llmResponse){
+      let sumH='<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">';
+      // User message
+      sumH+='<div style="padding:12px 14px;background:#0d1117;border:1px solid #30363d;border-radius:6px">';
+      sumH+='<div style="font-size:11px;color:#58a6ff;margin-bottom:6px;font-weight:600">USER MESSAGE</div>';
+      if(lastUser){
+        sumH+='<div style="font-size:13px;color:#e1e4e8;line-height:1.5">'+escHtml((lastUser.content||'').slice(0,500))+'</div>';
+      }else{
+        sumH+='<div style="font-size:12px;color:#484f58">No user message extracted</div>';
+      }
+      sumH+='</div>';
+      // LLM response
+      sumH+='<div style="padding:12px 14px;background:#0d1117;border:1px solid #30363d;border-radius:6px">';
+      sumH+='<div style="font-size:11px;color:#3fb950;margin-bottom:6px;font-weight:600">LLM RESPONSE</div>';
+      if(llmResponse){
+        sumH+='<div style="font-size:13px;color:#e1e4e8;line-height:1.5">'+escHtml(llmResponse.slice(0,500))+(llmResponse.length>500?'...':'')+'</div>';
+      }else if(blocked){
+        sumH+='<div style="font-size:12px;color:#f85149">Request blocked — never forwarded to LLM</div>';
+      }else{
+        sumH+='<div style="font-size:12px;color:#484f58">No response text extracted</div>';
+      }
+      sumH+='</div>';
+      sumH+='</div>';
+      h+=sumH;
+      h+='<div style="height:12px"></div>';
+    }
+    // ── TRUST POLICY APPLIED ──
+    h+='<div style="padding:8px 14px;background:#161b22;border:1px solid #30363d;border-radius:6px;margin-bottom:12px;display:flex;gap:16px;align-items:center;flex-wrap:wrap;font-size:12px">';
+    h+='<span style="color:#8b949e">Trust:</span><span class="trust-badge trust-'+trust+'">'+trust+'</span>';
+    h+='<span style="color:#30363d">|</span>';
+    h+='<span style="color:#8b949e">Channel:</span><span style="color:#e1e4e8">'+channel+'</span>';
+    if(ctx!=='—')h+='<span style="color:#30363d">|</span><span style="color:#8b949e">Context:</span><span style="color:#e1e4e8">'+ctx+'</span>';
+    h+='<span style="color:#30363d">|</span>';
+    h+='<span style="color:#8b949e">Model:</span><span style="color:#e1e4e8">'+model+'</span>';
+    h+='<span style="color:#30363d">|</span>';
+    h+='<span style="color:#8b949e">Duration:</span><span style="color:#e1e4e8">'+dur+'ms</span>';
+    h+='<span style="color:#30363d">|</span>';
+    h+='<span style="color:#8b949e">Tokens:</span><span style="color:#e1e4e8">~'+reqTok+' in / ~'+rspTok+' out</span>';
+    h+='</div>';
+    // ── TOOL CALLS (if any) ──
+    const toolMsgs=chat.filter(m=>m.role==='tool'||m.source==='tool_call');
+    const assistantTools=chat.filter(m=>m.role==='assistant'&&m.tool_calls);
+    if(toolMsgs.length>0||assistantTools.length>0){
+      let toolH='<table class="dtable"><tr><th>Tool</th><th>Input</th><th>Result</th></tr>';
+      // Extract tool calls from assistant messages
+      for(const m of chat){
+        if(m.role==='assistant'&&m.tool_calls){
+          for(const tc of m.tool_calls){
+            const name=tc.function?.name||'?';
+            const args=tc.function?.arguments||'';
+            toolH+='<tr><td style="font-weight:600;color:#58a6ff">'+escHtml(name)+'</td>';
+            toolH+='<td style="font-size:11px;color:#8b949e;font-family:monospace;max-width:200px;overflow:hidden;text-overflow:ellipsis">'+escHtml(args.slice(0,100))+'</td>';
+            toolH+='<td style="font-size:11px;color:#8b949e">—</td></tr>';
+          }
+        }
+        if(m.role==='tool'){
+          toolH+='<tr><td style="color:#8b949e">result</td><td></td>';
+          toolH+='<td style="font-size:11px;color:#e1e4e8;max-width:300px;overflow:hidden;text-overflow:ellipsis">'+escHtml((m.content||'').slice(0,150))+'</td></tr>';
+        }
+      }
+      toolH+='</table>';
+      h+=dsec('Tool Calls ('+toolMsgs.length+' results)',true,toolH);
+    }
+    // ── CHAT VIEW (full conversation, collapsible) ──
     if(chat.length>0){
       let chatH='';
-      for(const m of chat.slice(-10)){
-        const cls=m.role==='system'?'chat-system':m.role==='user'?'chat-user':'chat-assistant';
-        chatH+='<div class="chat-msg '+cls+'"><div class="chat-role">'+m.role+'</div>'+(m.content||'').slice(0,500)+(m.content&&m.content.length>500?'…':'')+'</div>';
+      for(const m of chat.slice(-15)){
+        const cls=m.role==='system'?'chat-system':m.role==='user'?'chat-user':m.role==='tool'?'chat-system':'chat-assistant';
+        const label=m.role==='tool'?'tool result':m.role;
+        chatH+='<div class="chat-msg '+cls+'"><div class="chat-role">'+label+'</div>'+(m.content||'').slice(0,500)+(m.content&&m.content.length>500?'...':'')+'</div>';
       }
-      h+=dsec('Chat View ('+chat.length+' messages)',false,chatH);
+      h+=dsec('Full Conversation ('+chat.length+' messages)',false,chatH);
     }
-    // Collapsible: Request body
+    // ── RAW BODIES (collapsed, for debugging) ──
     if(e.request_body){
       let pretty='';
       try{pretty=JSON.stringify(JSON.parse(e.request_body),null,2);}catch{pretty=e.request_body;}
-      h+=dsec('Request Body ('+(e.request_size/1024).toFixed(1)+'KB)',false,'<div class="json-body">'+escHtml(pretty.slice(0,8000))+'</div>');
+      h+=dsec('Raw Request ('+(e.request_size/1024).toFixed(1)+'KB)',false,'<div class="json-body">'+escHtml(pretty.slice(0,8000))+'</div>');
     }
-    // Collapsible: Response body
     if(e.response_body){
       let pretty='';
       try{pretty=JSON.stringify(JSON.parse(e.response_body),null,2);}catch{pretty=e.response_body;}
-      h+=dsec('Response Body ('+(e.response_size/1024).toFixed(1)+'KB)',false,'<div class="json-body">'+escHtml(pretty.slice(0,8000))+'</div>');
+      h+=dsec('Raw Response ('+(e.response_size/1024).toFixed(1)+'KB)',false,'<div class="json-body">'+escHtml(pretty.slice(0,8000))+'</div>');
     }
     h+='</div>';
     dc.innerHTML=h;
