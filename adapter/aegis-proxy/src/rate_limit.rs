@@ -82,8 +82,16 @@ impl RateLimiter {
     /// Check if a request from the given identity is allowed.
     ///
     /// Returns `Ok(())` if allowed, `Err(retry_after_secs)` if rate limited.
+    /// Fails closed: if the mutex is poisoned, rejects with a large retry-after
+    /// value to prevent bypass via panic-induced lock poisoning.
     pub fn check(&self, identity: &str) -> Result<(), f64> {
-        let mut buckets = self.buckets.lock().unwrap_or_else(|e| e.into_inner());
+        let mut buckets = match self.buckets.lock() {
+            Ok(guard) => guard,
+            Err(_poisoned) => {
+                tracing::error!("rate limiter mutex poisoned — failing closed");
+                return Err(60.0);
+            }
+        };
 
         let bucket = buckets
             .entry(identity.to_string())

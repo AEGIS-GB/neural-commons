@@ -81,13 +81,16 @@ impl AdapterState {
         self.evidence.chain_head().receipt_count
     }
 
-    /// Register a nonce for replay prevention. Returns true if new.
+    /// Register a nonce for replay prevention. Returns true if new (allowed).
+    /// Fails closed: if the mutex is poisoned, returns false (rejected)
+    /// to prevent replay attacks via panic-induced lock poisoning.
     pub fn register_nonce(&self, nonce: &str) -> bool {
-        if let Ok(mut registry) = self.nonce_registry.lock() {
-            registry.register(nonce)
-        } else {
-            // Lock poisoned — allow through (fail open)
-            true
+        match self.nonce_registry.lock() {
+            Ok(mut registry) => registry.register(nonce),
+            Err(_poisoned) => {
+                tracing::error!("nonce registry mutex poisoned — failing closed, rejecting request");
+                false
+            }
         }
     }
 
