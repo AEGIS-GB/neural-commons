@@ -201,6 +201,22 @@ pub fn screen_response_with_policy(
                 continue;
             }
 
+            // Content validation: reject obvious misclassifications
+            match entity.entity_type.as_str() {
+                // EMAIL must contain @
+                "EMAIL" if !entity.text.contains('@') => continue,
+                // TELEPHONENUM must contain digits
+                "TELEPHONENUM" if !entity.text.chars().any(|c| c.is_ascii_digit()) => continue,
+                // CREDITCARDNUMBER must be mostly digits
+                "CREDITCARDNUMBER" => {
+                    let digit_count = entity.text.chars().filter(|c| c.is_ascii_digit()).count();
+                    if digit_count < 12 {
+                        continue;
+                    }
+                }
+                _ => {}
+            }
+
             if !already_caught {
                 result.redaction_count += 1;
                 result.findings.push(ResponseFinding {
