@@ -28,7 +28,7 @@ use crate::config::AdapterConfig;
 use crate::hooks::{BarrierHookImpl, EvidenceHookImpl, SlmHookImpl, VaultHookImpl};
 use crate::mode::ModeController;
 use crate::replay::{MonotonicCounter, NonceRegistry};
-use crate::state::AdapterState;
+use crate::state::{AdapterState, EvidenceState, SecurityState};
 
 /// Auto-detect the ProtectAI classifier model directory.
 /// Searches standard locations for model.onnx + tokenizer.json.
@@ -167,6 +167,8 @@ pub async fn start(config: AdapterConfig, mode_override: Option<Mode>) -> Result
 
     // 5. Create shared state
     let adapter_state = Arc::new(AdapterState {
+        evidence_state: EvidenceState::new(recorder.clone()),
+        security_state: SecurityState::new(),
         evidence: recorder.clone(),
         mode: mode_controller.clone(),
         request_counter: MonotonicCounter::new(),

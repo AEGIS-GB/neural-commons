@@ -2,6 +2,10 @@
 //!
 //! AdapterState is created once at startup and shared via Arc across
 //! the proxy, dashboard, cognitive bridge, memory monitor, and CLI.
+//!
+//! Sub-structs group related fields:
+//! - `SecurityState` — nonce registry for replay prevention
+//! - `EvidenceState` — evidence recorder and chain helper methods
 
 use std::sync::Arc;
 use std::time::Instant;
@@ -14,11 +18,82 @@ pub use aegis_dashboard::DashboardAlert;
 use crate::mode::ModeController;
 use crate::replay::{MonotonicCounter, NonceRegistry};
 
+// ---------------------------------------------------------------------------
+// Sub-structs
+// ---------------------------------------------------------------------------
+
+/// Security-related state: nonce registry for replay prevention.
+pub struct SecurityState {
+    /// Nonce registry for replay prevention.
+    pub nonce_registry: std::sync::Mutex<NonceRegistry>,
+}
+
+impl SecurityState {
+    /// Create a new SecurityState with a fresh nonce registry.
+    pub fn new() -> Self {
+        Self {
+            nonce_registry: std::sync::Mutex::new(NonceRegistry::new()),
+        }
+    }
+
+    /// Register a nonce for replay prevention. Returns true if new (allowed).
+    /// Fails closed: if the mutex is poisoned, returns false (rejected)
+    /// to prevent replay attacks via panic-induced lock poisoning.
+    pub fn register_nonce(&self, nonce: &str) -> bool {
+        match self.nonce_registry.lock() {
+            Ok(mut registry) => registry.register(nonce),
+            Err(_poisoned) => {
+                tracing::error!("nonce registry mutex poisoned — failing closed, rejecting request");
+                false
+            }
+        }
+    }
+}
+
+/// Evidence-related state: recorder and chain helper methods.
+pub struct EvidenceState {
+    /// Evidence recorder (hash-chained receipts).
+    pub evidence: Arc<EvidenceRecorder>,
+}
+
+impl EvidenceState {
+    /// Create a new EvidenceState wrapping the given recorder.
+    pub fn new(evidence: Arc<EvidenceRecorder>) -> Self {
+        Self { evidence }
+    }
+
+    /// Get the current evidence chain head sequence number.
+    pub fn chain_head_seq(&self) -> u64 {
+        self.evidence.chain_head().head_seq
+    }
+
+    /// Get the current evidence chain head hash (hex).
+    pub fn chain_head_hash(&self) -> String {
+        self.evidence.chain_head().head_hash.clone()
+    }
+
+    /// Get the total receipt count.
+    pub fn receipt_count(&self) -> u64 {
+        self.evidence.chain_head().receipt_count
+    }
+}
+
+// ---------------------------------------------------------------------------
+// AdapterState
+// ---------------------------------------------------------------------------
+
 /// Shared state for the entire adapter.
 ///
 /// Created once at startup, wrapped in `Arc`, and passed to all subsystems.
 pub struct AdapterState {
+    /// Evidence-related state (recorder + chain helpers).
+    pub evidence_state: EvidenceState,
+
+    /// Security-related state (nonce registry).
+    pub security_state: SecurityState,
+
     /// Evidence recorder (hash-chained receipts).
+    /// Kept for backward compatibility — delegates to `evidence_state.evidence`.
     pub evidence: Arc<EvidenceRecorder>,
 
     /// Runtime mode controller (observe-only / enforce / pass-through).
@@ -28,6 +103,7 @@ pub struct AdapterState {
     pub request_counter: MonotonicCounter,
 
     /// Nonce registry for replay prevention.
+    /// Kept for backward compatibility — delegates to `security_state.nonce_registry`.
     pub nonce_registry: std::sync::Mutex<NonceRegistry>,
 
     /// Timestamp when the adapter started.
@@ -67,31 +143,29 @@ impl AdapterState {
     }
 
     /// Get the current evidence chain head sequence number.
+    /// Delegates to `evidence_state`.
     pub fn chain_head_seq(&self) -> u64 {
-        self.evidence.chain_head().head_seq
+        self.evidence_state.chain_head_seq()
     }
 
     /// Get the current evidence chain head hash (hex).
+    /// Delegates to `evidence_state`.
     pub fn chain_head_hash(&self) -> String {
-        self.evidence.chain_head().head_hash.clone()
+        self.evidence_state.chain_head_hash()
     }
 
     /// Get the total receipt count.
+    /// Delegates to `evidence_state`.
     pub fn receipt_count(&self) -> u64 {
-        self.evidence.chain_head().receipt_count
+        self.evidence_state.receipt_count()
     }
 
     /// Register a nonce for replay prevention. Returns true if new (allowed).
     /// Fails closed: if the mutex is poisoned, returns false (rejected)
     /// to prevent replay attacks via panic-induced lock poisoning.
+    /// Delegates to `security_state`.
     pub fn register_nonce(&self, nonce: &str) -> bool {
-        match self.nonce_registry.lock() {
-            Ok(mut registry) => registry.register(nonce),
-            Err(_poisoned) => {
-                tracing::error!("nonce registry mutex poisoned — failing closed, rejecting request");
-                false
-            }
-        }
+        self.security_state.register_nonce(nonce)
     }
 
     /// Get the next request sequence number.
@@ -116,6 +190,8 @@ mod tests {
         let recorder = Arc::new(EvidenceRecorder::new_in_memory(key).unwrap());
         let (alert_tx, _) = broadcast::channel(32);
         AdapterState {
+            evidence_state: EvidenceState::new(recorder.clone()),
+            security_state: SecurityState::new(),
             evidence: recorder,
             mode: Arc::new(ModeController::default()),
             request_counter: MonotonicCounter::new(),
@@ -168,5 +244,23 @@ mod tests {
     fn state_dashboard_url() {
         let state = make_state();
         assert_eq!(state.dashboard_url(), "http://127.0.0.1:3141/dashboard");
+    }
+
+    #[test]
+    fn security_state_standalone() {
+        let sec = SecurityState::new();
+        assert!(sec.register_nonce("nonce-a"));
+        assert!(!sec.register_nonce("nonce-a")); // replay rejected
+        assert!(sec.register_nonce("nonce-b"));
+    }
+
+    #[test]
+    fn evidence_state_standalone() {
+        let key = generate_keypair();
+        let recorder = Arc::new(EvidenceRecorder::new_in_memory(key).unwrap());
+        let ev = EvidenceState::new(recorder);
+        assert_eq!(ev.chain_head_seq(), 0);
+        assert_eq!(ev.receipt_count(), 0);
+        assert_eq!(ev.chain_head_hash().len(), 64);
     }
 }
