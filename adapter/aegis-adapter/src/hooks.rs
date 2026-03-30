@@ -42,6 +42,56 @@ fn is_critical(receipt_type: &ReceiptType) -> bool {
 }
 
 // ---------------------------------------------------------------------------
+// Centralized receipt recording helper
+// ---------------------------------------------------------------------------
+
+/// Record a receipt through the evidence chain, with optional SSE alert.
+///
+/// This is the single code path for all hook receipt recording:
+/// 1. Builds a `ReceiptContext` with a fresh blinding nonce
+/// 2. Calls `recorder.record()`
+/// 3. On failure, logs a warning (never panics)
+/// 4. If the receipt type is critical, pushes an alert to the SSE broadcast channel
+fn record_receipt(
+    recorder: &EvidenceRecorder,
+    receipt_type: ReceiptType,
+    action: &str,
+    outcome: &str,
+    detail: Option<serde_json::Value>,
+    alert_tx: Option<&tokio::sync::broadcast::Sender<crate::state::DashboardAlert>>,
+) {
+    let context = aegis_schemas::ReceiptContext {
+        blinding_nonce: aegis_schemas::receipt::generate_blinding_nonce(),
+        enforcement_mode: None,
+        action: Some(action.to_string()),
+        subject: None,
+        trigger: None,
+        outcome: Some(outcome.to_string()),
+        detail,
+        enterprise: None,
+    };
+    if let Err(e) = recorder.record(receipt_type.clone(), context) {
+        tracing::warn!(receipt_type = ?receipt_type, action = %action, "failed to record receipt: {e}");
+    }
+
+    // Push SSE alert for critical receipt types
+    if is_critical(&receipt_type) {
+        if let Some(tx) = alert_tx {
+            let alert = crate::state::DashboardAlert {
+                ts_ms: std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_millis() as u64,
+                kind: format!("{:?}", receipt_type).to_lowercase(),
+                message: format!("{}: {}", action, outcome),
+                receipt_seq: recorder.chain_head().head_seq,
+            };
+            let _ = tx.send(alert);
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Evidence hook → aegis-evidence::EvidenceRecorder
 // ---------------------------------------------------------------------------
 
@@ -71,9 +121,14 @@ impl EvidenceHook for EvidenceHookImpl {
                 &req_info.body_hash[..16]
             );
 
-            self.recorder
-                .record_simple(ReceiptType::ApiCall, &action, &outcome)
-                .map_err(|e| ProxyError::Internal(format!("evidence record error: {e}")))?;
+            record_receipt(
+                &self.recorder,
+                ReceiptType::ApiCall,
+                &action,
+                &outcome,
+                None,
+                Some(&self.alert_tx),
+            );
 
             debug!(
                 method = %req_info.method,
@@ -97,9 +152,14 @@ impl EvidenceHook for EvidenceHookImpl {
                 resp_info.status, resp_info.body_size, resp_info.duration_ms
             );
 
-            self.recorder
-                .record_simple(ReceiptType::ApiCall, &action, &outcome)
-                .map_err(|e| ProxyError::Internal(format!("evidence record error: {e}")))?;
+            record_receipt(
+                &self.recorder,
+                ReceiptType::ApiCall,
+                &action,
+                &outcome,
+                None,
+                Some(&self.alert_tx),
+            );
 
             debug!(
                 path = %req_info.path,
@@ -125,11 +185,16 @@ impl EvidenceHook for EvidenceHookImpl {
                 secrets.join(", ")
             );
 
-            self.recorder
-                .record_simple(ReceiptType::VaultDetection, &action, &outcome)
-                .map_err(|e| ProxyError::Internal(format!("evidence record error: {e}")))?;
+            record_receipt(
+                &self.recorder,
+                ReceiptType::VaultDetection,
+                &action,
+                &outcome,
+                None,
+                Some(&self.alert_tx),
+            );
 
-            // Push alert to dashboard SSE stream
+            // Vault detection also gets an explicit alert (not gated by is_critical)
             let _ = self.alert_tx.send(crate::state::DashboardAlert {
                 ts_ms: std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
@@ -303,21 +368,16 @@ impl BarrierHook for BarrierHookImpl {
 }
 
 impl BarrierHookImpl {
-    fn record_and_alert(&self, method: &str, path: &str, reason: &str, ts_ms: i64) {
-        if let Err(e) = self.recorder.record_simple(
+    fn record_and_alert(&self, method: &str, path: &str, reason: &str, _ts_ms: i64) {
+        let action = format!("{} {}", method, path);
+        record_receipt(
+            &self.recorder,
             ReceiptType::WriteBarrier,
-            &format!("{} {}", method, path),
+            &action,
             reason,
-        ) {
-            info!("failed to record barrier receipt: {e}");
-        }
-        let alert = crate::state::DashboardAlert {
-            ts_ms: ts_ms as u64,
-            kind: "structural_write".to_string(),
-            message: reason.to_string(),
-            receipt_seq: self.recorder.chain_head().head_seq,
-        };
-        let _ = self.alert_tx.send(alert);
+            None,
+            Some(&self.alert_tx),
+        );
     }
 }
 
@@ -494,28 +554,23 @@ impl SlmHookImpl {
     ) -> (SlmDecision, Option<SlmVerdict>) {
         let verdict = Self::build_verdict(screening_result, content, classifier_advisory);
 
-        // Record SlmAnalysis receipt
+        // Record SlmAnalysis receipt via centralized helper
         let detail = serde_json::to_value(&verdict).ok();
         let action_str = format!("slm_screen {}", verdict.engine);
         let outcome_str = format!(
             "action={} threat_score={} intent={}",
             verdict.action, verdict.threat_score, verdict.intent
         );
-        let context = aegis_schemas::ReceiptContext {
-            blinding_nonce: aegis_schemas::receipt::generate_blinding_nonce(),
-            enforcement_mode: None,
-            action: Some(action_str),
-            subject: None,
-            trigger: Some("proxy_request".to_string()),
-            outcome: Some(outcome_str),
+        record_receipt(
+            &self.recorder,
+            ReceiptType::SlmAnalysis,
+            &action_str,
+            &outcome_str,
             detail,
-            enterprise: None,
-        };
-        if let Err(e) = self.recorder.record(ReceiptType::SlmAnalysis, context) {
-            tracing::warn!("failed to record SlmAnalysis receipt: {e}");
-        }
+            Some(&self.alert_tx),
+        );
 
-        // Push alert on quarantine/reject
+        // Push explicit alert on quarantine/reject (SLM alerts always push)
         let decision = match screening_result.decision {
             aegis_slm::loopback::ScreeningDecision::Admit => SlmDecision::Admit,
             aegis_slm::loopback::ScreeningDecision::Quarantine(ref reason) => {
