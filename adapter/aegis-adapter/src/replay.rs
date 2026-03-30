@@ -105,6 +105,12 @@ impl NonceRegistry {
             self.purge_expired(now);
         }
 
+        // Hard eviction: if still over MAX_REGISTRY_SIZE after expiry purge
+        // (e.g. clock misbehaving), evict oldest entries to 75% capacity.
+        if self.nonces.len() >= MAX_REGISTRY_SIZE {
+            self.evict_oldest_to_capacity();
+        }
+
         // Check for duplicate
         if let Some(prev_time) = self.nonces.get(nonce)
             && now.duration_since(*prev_time) < self.window
@@ -140,6 +146,27 @@ impl NonceRegistry {
     fn purge_expired(&mut self, now: Instant) {
         self.nonces
             .retain(|_, t| now.duration_since(*t) < self.window);
+    }
+
+    /// Hard eviction: remove the oldest entries by timestamp to bring
+    /// the registry down to 75% of MAX_REGISTRY_SIZE. This prevents
+    /// unbounded growth if the clock misbehaves and expiry never fires.
+    fn evict_oldest_to_capacity(&mut self) {
+        let target = MAX_REGISTRY_SIZE * 3 / 4;
+        if self.nonces.len() <= target {
+            return;
+        }
+        let to_remove = self.nonces.len() - target;
+        // Collect entries sorted by insertion time (oldest first)
+        let mut entries: Vec<(String, Instant)> = self
+            .nonces
+            .iter()
+            .map(|(k, v)| (k.clone(), *v))
+            .collect();
+        entries.sort_by_key(|(_, t)| *t);
+        for (key, _) in entries.into_iter().take(to_remove) {
+            self.nonces.remove(&key);
+        }
     }
 
     /// Force purge all nonces older than the window.
@@ -262,6 +289,23 @@ mod tests {
         assert!(!reg.is_seen("nonce-1"));
         reg.register("nonce-1");
         assert!(reg.is_seen("nonce-1"));
+    }
+
+    #[test]
+    fn nonce_registry_hard_eviction() {
+        // Use a very long window so nothing expires naturally
+        let mut reg = NonceRegistry::with_window(Duration::from_secs(3600));
+        // Fill to MAX_REGISTRY_SIZE
+        for i in 0..MAX_REGISTRY_SIZE {
+            reg.register(&format!("nonce-{i}"));
+        }
+        assert_eq!(reg.nonces.len(), MAX_REGISTRY_SIZE);
+        // Register one more — should trigger hard eviction to 75%
+        reg.register("overflow-nonce");
+        let target = MAX_REGISTRY_SIZE * 3 / 4 + 1; // 75% + the new one
+        assert_eq!(reg.nonces.len(), target);
+        // The overflow nonce should be present
+        assert!(reg.nonces.contains_key("overflow-nonce"));
     }
 
     #[test]
