@@ -785,32 +785,13 @@ async fn forward_request(
 
                 // Phase 1: Fast layers (heuristic + classifier) — blocking, <10ms
                 // Acquire SLM semaphore — limits concurrent screenings to prevent GPU exhaustion.
-                // Untrusted: fail-closed (reject if semaphore full).
-                // Trusted: fail-open (skip SLM, deferred anyway).
-                let _slm_permit = match state.slm_semaphore.try_acquire() {
+                // Uses acquire().await to apply backpressure instead of rejecting immediately.
+                // If the semaphore is closed (shutdown), skip SLM and log a warning.
+                let _slm_permit = match state.slm_semaphore.acquire().await {
                     Ok(permit) => Some(permit),
                     Err(_) => {
-                        if trust_policy.fail_closed_on_busy
-                            && state.config.mode == ProxyMode::Enforce
-                        {
-                            warn!(path = %path, "SLM semaphore full — rejecting untrusted request (fail-closed)");
-                            let mut resp = (
-                                StatusCode::SERVICE_UNAVAILABLE,
-                                "server busy — screening unavailable, try again",
-                            )
-                                .into_response();
-                            resp.extensions_mut().insert(RecordingContext {
-                                handler_recorded: false,
-                                trust_level: Some(
-                                    format!("{:?}", req_info.channel_trust.trust_level)
-                                        .to_lowercase(),
-                                ),
-                                context: req_info.channel_trust.channel.clone(),
-                                ..Default::default()
-                            });
-                            return Ok(resp);
-                        }
-                        warn!(path = %path, "SLM semaphore full — skipping (trusted channel)");
+                        // Semaphore closed — system is shutting down or SLM disabled at runtime.
+                        warn!(path = %path, "SLM semaphore closed — skipping SLM screening");
                         None
                     }
                 };
