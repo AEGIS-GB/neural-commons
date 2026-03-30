@@ -3,6 +3,7 @@
 //! All scores are integer basis points (0-10000). No floats in signed data.
 //! 8500 = 85.00%.
 
+use crate::BasisPoints;
 use serde::{Deserialize, Serialize};
 
 /// TRUSTMARK score — 6-dimensional weighted sum.
@@ -10,7 +11,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct TrustmarkScore {
     /// Overall score in basis points [0, 10000]
-    pub score_bp: u32,
+    pub score_bp: BasisPoints,
 
     /// Per-dimension breakdown (all in basis points)
     pub dimensions: TrustmarkDimensions,
@@ -27,17 +28,17 @@ pub struct TrustmarkScore {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct TrustmarkDimensions {
     /// Does this bot reliably relay mesh messages? Weight: 0.15
-    pub relay_reliability: u32,
+    pub relay_reliability: BasisPoints,
     /// Is SOUL.md intact, no unauthorized changes? Weight: 0.25
-    pub persona_integrity: u32,
+    pub persona_integrity: BasisPoints,
     /// Is the evidence chain unbroken? Weight: 0.20
-    pub chain_integrity: u32,
+    pub chain_integrity: BasisPoints,
     /// How active is this bot? Weight: 0.10
-    pub contribution_volume: u32,
+    pub contribution_volume: BasisPoints,
     /// Is activity consistent over time? Weight: 0.15
-    pub temporal_consistency: u32,
+    pub temporal_consistency: BasisPoints,
     /// Are credentials properly secured? Weight: 0.15
-    pub vault_hygiene: u32,
+    pub vault_hygiene: BasisPoints,
 }
 
 /// Trust tier (D14)

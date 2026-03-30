@@ -257,6 +257,7 @@ mod receipt_tests {
 mod claim_tests {
     use aegis_crypto::rfc8785;
     use aegis_schemas::claim::{Claim, ClaimType, TemporalScope};
+    use aegis_schemas::BasisPoints;
     use uuid::Uuid;
 
     fn sample_claim() -> Claim {
@@ -265,7 +266,7 @@ mod claim_tests {
             claim_type: ClaimType::Lore,
             namespace: "b/lore".to_string(),
             attester_id: "abc123def456".to_string(),
-            confidence_bp: 8500, // 85.00% in basis points
+            confidence_bp: BasisPoints::new(8500).unwrap(), // 85.00% in basis points
             temporal_scope: TemporalScope {
                 start_ms: 1740000000000,
                 end_ms: None,
@@ -339,39 +340,40 @@ mod claim_tests {
 mod trustmark_tests {
     use aegis_crypto::rfc8785;
     use aegis_schemas::trustmark::{Tier, TrustmarkDimensions, TrustmarkScore};
+    use aegis_schemas::BasisPoints;
 
     #[test]
     fn trustmark_round_trip() {
         let score = TrustmarkScore {
-            score_bp: 7500, // 75.00%
+            score_bp: BasisPoints::new(7500).unwrap(), // 75.00%
             dimensions: TrustmarkDimensions {
-                relay_reliability: 8000,
-                persona_integrity: 9000,
-                chain_integrity: 10000,
-                contribution_volume: 5000,
-                temporal_consistency: 7000,
-                vault_hygiene: 6000,
+                relay_reliability: BasisPoints::new(8000).unwrap(),
+                persona_integrity: BasisPoints::new(9000).unwrap(),
+                chain_integrity: BasisPoints::new(10000).unwrap(),
+                contribution_volume: BasisPoints::new(5000).unwrap(),
+                temporal_consistency: BasisPoints::new(7000).unwrap(),
+                vault_hygiene: BasisPoints::new(6000).unwrap(),
             },
             tier: Tier::Tier2,
             computed_at_ms: 1740000000000,
         };
         let json = serde_json::to_string(&score).unwrap();
         let deserialized: TrustmarkScore = serde_json::from_str(&json).unwrap();
-        assert_eq!(deserialized.score_bp, 7500);
+        assert_eq!(deserialized.score_bp, BasisPoints::new(7500).unwrap());
         assert_eq!(deserialized, score); // PartialEq now works (no floats!)
     }
 
     #[test]
     fn trustmark_canonical_deterministic() {
         let score = TrustmarkScore {
-            score_bp: 5000,
+            score_bp: BasisPoints::new(5000).unwrap(),
             dimensions: TrustmarkDimensions {
-                relay_reliability: 5000,
-                persona_integrity: 5000,
-                chain_integrity: 5000,
-                contribution_volume: 5000,
-                temporal_consistency: 5000,
-                vault_hygiene: 5000,
+                relay_reliability: BasisPoints::new(5000).unwrap(),
+                persona_integrity: BasisPoints::new(5000).unwrap(),
+                chain_integrity: BasisPoints::new(5000).unwrap(),
+                contribution_volume: BasisPoints::new(5000).unwrap(),
+                temporal_consistency: BasisPoints::new(5000).unwrap(),
+                vault_hygiene: BasisPoints::new(5000).unwrap(),
             },
             tier: Tier::Tier1,
             computed_at_ms: 1740000000000,
@@ -384,14 +386,14 @@ mod trustmark_tests {
     #[test]
     fn trustmark_no_floats() {
         let score = TrustmarkScore {
-            score_bp: 8500,
+            score_bp: BasisPoints::new(8500).unwrap(),
             dimensions: TrustmarkDimensions {
-                relay_reliability: 8000,
-                persona_integrity: 9000,
-                chain_integrity: 10000,
-                contribution_volume: 5000,
-                temporal_consistency: 7000,
-                vault_hygiene: 6000,
+                relay_reliability: BasisPoints::new(8000).unwrap(),
+                persona_integrity: BasisPoints::new(9000).unwrap(),
+                chain_integrity: BasisPoints::new(10000).unwrap(),
+                contribution_volume: BasisPoints::new(5000).unwrap(),
+                temporal_consistency: BasisPoints::new(7000).unwrap(),
+                vault_hygiene: BasisPoints::new(6000).unwrap(),
             },
             tier: Tier::Tier3,
             computed_at_ms: 1740000000000,
