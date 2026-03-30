@@ -186,10 +186,10 @@ pub fn screen_response_with_policy(
             // subword tokens (e.g. "wen" from "Qwen", "LPDDR" from "LPDDR5X")
             let min_len = match entity.entity_type.as_str() {
                 "GIVENNAME" | "SURNAME" => 2,
-                "TELEPHONENUM" => 7,     // shortest phone: 7 digits
-                "EMAIL" => 5,            // a@b.c
+                "TELEPHONENUM" => 7,      // shortest phone: 7 digits
+                "EMAIL" => 5,             // a@b.c
                 "CREDITCARDNUMBER" => 13, // shortest CC: 13 digits
-                "SOCIALNUM" => 8,        // SSN without dashes: 9 chars
+                "SOCIALNUM" => 8,         // SSN without dashes: 9 chars
                 "TAXNUM" => 8,
                 "DRIVERLICENSENUM" => 6,
                 "IDCARDNUM" => 6,
@@ -475,10 +475,7 @@ mod tests {
             let date_findings: Vec<_> = result
                 .findings
                 .iter()
-                .filter(|f| {
-                    f.category == "pii"
-                        && f.description.to_lowercase().contains("date")
-                })
+                .filter(|f| f.category == "pii" && f.description.to_lowercase().contains("date"))
                 .collect();
             assert!(
                 date_findings.is_empty(),
@@ -501,10 +498,7 @@ mod tests {
             let time_findings: Vec<_> = result
                 .findings
                 .iter()
-                .filter(|f| {
-                    f.category == "pii"
-                        && f.description.to_lowercase().contains("time")
-                })
+                .filter(|f| f.category == "pii" && f.description.to_lowercase().contains("time"))
                 .collect();
             assert!(
                 time_findings.is_empty(),
@@ -580,8 +574,7 @@ mod tests {
 
     #[test]
     fn openai_key_redacted() {
-        let (text, result) =
-            screen_response("Key: sk-proj-abc123def456ghi789jkl012mno345pqr678");
+        let (text, result) = screen_response("Key: sk-proj-abc123def456ghi789jkl012mno345pqr678");
         assert!(result.screened);
         assert!(text.contains("[REDACTED:key]"));
     }
@@ -612,8 +605,7 @@ mod tests {
 
     #[test]
     fn ec_private_key_redacted() {
-        let (text, result) =
-            screen_response("-----BEGIN PRIVATE KEY-----\nMIGH...");
+        let (text, result) = screen_response("-----BEGIN PRIVATE KEY-----\nMIGH...");
         assert!(result.screened);
         assert!(text.contains("[REDACTED:private_key]"));
     }
@@ -691,8 +683,7 @@ mod tests {
 
     #[test]
     fn multiple_emails_redacted() {
-        let (text, result) =
-            screen_response("CC: alice@example.org and bob@example.net");
+        let (text, result) = screen_response("CC: alice@example.org and bob@example.net");
         assert!(result.screened);
         assert!(result.redaction_count >= 2);
         assert!(!text.contains("alice@"));
@@ -893,7 +884,8 @@ mod tests {
 
     #[test]
     fn multiple_categories_all_redacted() {
-        let input = "Contact john@evil.com, SSN 111-22-3333, key: sk-ant-api03-aaabbbcccdddeeefffggghh";
+        let input =
+            "Contact john@evil.com, SSN 111-22-3333, key: sk-ant-api03-aaabbbcccdddeeefffggghh";
         let (text, result) = screen_response(input);
         assert!(result.screened);
         assert!(text.contains("[REDACTED:email]"));

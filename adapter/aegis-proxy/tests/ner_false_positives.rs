@@ -243,10 +243,7 @@ fn technical_content_not_flagged() {
 
 #[test]
 fn person_name_flagged() {
-    assert_screen_finds_ner(
-        "Please contact John Smith for details.",
-        "givenname",
-    );
+    assert_screen_finds_ner("Please contact John Smith for details.", "givenname");
 }
 
 #[test]
