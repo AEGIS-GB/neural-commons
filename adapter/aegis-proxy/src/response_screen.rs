@@ -109,6 +109,48 @@ pub fn screen_response_with_policy(
         }
     }
 
+    // Layer 3: NER-based PII detection (names, addresses, phone numbers)
+    #[cfg(feature = "ner")]
+    {
+        let ner_entities = crate::ner_pii::detect_entities(&text);
+        for entity in &ner_entities {
+            // Map NER entity types to DLP categories
+            let category = match entity.entity_type.as_str() {
+                "GIVENNAME" | "SURNAME" | "TITLE" => "pii",
+                "STREET" | "CITY" | "ZIPCODE" | "BUILDINGNUM" => "pii",
+                "TELEPHONENUM" => "pii",
+                "EMAIL" => "pii", // backup for regex misses
+                "CREDITCARDNUMBER" => "pii",
+                "SOCIALNUM" | "TAXNUM" => "pii",
+                "DRIVERLICENSENUM" | "IDCARDNUM" | "PASSPORTNUM" => "pii",
+                "DATEOFBIRTH" | "AGE" | "SEX" | "GENDER" => "phi",
+                _ => "pii",
+            };
+            let description = format!("NER: {} detected", entity.entity_type.to_lowercase());
+
+            // Only add if not already caught by regex
+            let already_caught = result.findings.iter().any(|f| {
+                f.matched_values
+                    .iter()
+                    .any(|v| v.contains(&entity.text) || entity.text.contains(v.as_str()))
+            });
+
+            if !already_caught && entity.score > 0.6 {
+                result.redaction_count += 1;
+                result.findings.push(ResponseFinding {
+                    category: category.to_string(),
+                    description,
+                    matched_values: vec![entity.text.clone()],
+                });
+                // Redact the entity text
+                text = text.replace(
+                    &entity.text,
+                    &format!("[REDACTED:{}]", entity.entity_type.to_lowercase()),
+                );
+            }
+        }
+    }
+
     result.screened = result.redaction_count > 0;
 
     // Apply DLP mode based on trust policy

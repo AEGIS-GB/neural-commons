@@ -825,6 +825,23 @@ pub async fn start(config: AdapterConfig, mode_override: Option<Mode>) -> Result
         "proxy server starting"
     );
 
+    // Initialize NER PII model for response screening
+    {
+        let ner_candidates = [
+            data_dir.join("../models/pii-ner"),
+            std::path::PathBuf::from("models/pii-ner"),
+            std::path::PathBuf::from("/home/aegis/aegis/neural-commons/models/pii-ner"),
+        ];
+        tracing::debug!(data_dir = %data_dir.display(), "NER: searching for model");
+        for path in &ner_candidates {
+            tracing::debug!(path = %path.display(), exists = path.join("model.onnx").exists(), "NER candidate");
+            if path.join("model.onnx").exists() {
+                aegis_proxy::ner_pii::init(path);
+                break;
+            }
+        }
+    }
+
     let traffic_recorder: Arc<aegis_proxy::proxy::TrafficRecorder> = {
         let ts = traffic_store.clone();
         Arc::new(
