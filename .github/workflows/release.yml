@@ -158,8 +158,6 @@ jobs:
           files: |
             release-files/aegis-linux-x86_64
             release-files/aegis-linux-x86_64.sha256
-            release-files/aegis-darwin-x86_64
-            release-files/aegis-darwin-x86_64.sha256
             release-files/aegis-darwin-aarch64
             release-files/aegis-darwin-aarch64.sha256
             release-files/aegis-windows-x86_64.exe

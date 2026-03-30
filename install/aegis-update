@@ -2,7 +2,7 @@
 # Update Aegis to the latest GitHub release and restart the service
 set -e
 
-REPO="LCatGA12/neural-commons"
+REPO="AEGIS-GB/neural-commons"
 BINARY="aegis-linux-x86_64"
 INSTALL_PATH="$HOME/.cargo/bin/aegis"
 
