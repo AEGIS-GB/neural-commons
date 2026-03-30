@@ -26,8 +26,25 @@ import fs from "node:fs";
 import path from "node:path";
 
 const DEFAULT_AEGIS_URL = "http://127.0.0.1:3141";
-// No hardcoded default — must be configured or found via standard search paths.
-// The old default was a dev machine path that silently fell through on any other machine.
+
+/**
+ * Validate that aegisUrl points to a local address only (SSRF prevention).
+ * In Tier 1, the proxy always runs on localhost.
+ */
+function isLocalUrl(urlStr: string): boolean {
+  try {
+    const url = new URL(urlStr);
+    const hostname = url.hostname;
+    return (
+      hostname === "127.0.0.1" ||
+      hostname === "localhost" ||
+      hostname === "::1" ||
+      hostname === "0.0.0.0"
+    );
+  } catch {
+    return false;
+  }
+}
 
 /**
  * Sign a channel registration payload with Ed25519.
@@ -68,9 +85,15 @@ const plugin: OpenClawPluginDefinition = {
     console.log("[aegis-channel-trust] plugin register() called");
     console.log("[aegis-channel-trust] api.on type:", typeof api.on);
     console.log("[aegis-channel-trust] api keys:", Object.keys(api).join(", "));
-    const aegisUrl =
+    const configuredUrl =
       api.config?.plugins?.entries?.["aegis-channel-trust"]?.aegisUrl ??
       DEFAULT_AEGIS_URL;
+
+    if (!isLocalUrl(configuredUrl)) {
+      console.error(`[aegis-channel-trust] ERROR: aegisUrl "${configuredUrl}" is not a local address. Only localhost URLs are allowed (SSRF prevention). Plugin disabled.`);
+      return;
+    }
+    const aegisUrl = configuredUrl;
     const keyPath =
       api.config?.plugins?.entries?.["aegis-channel-trust"]?.identityKeyPath ??
       null;
