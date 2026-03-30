@@ -83,13 +83,14 @@ const plugin: OpenClawPluginDefinition = {
     if (keyPath) searchPaths.push(keyPath);
     searchPaths.push(path.join(process.cwd(), ".aegis", "identity.key"));
     if (process.env.HOME) searchPaths.push(path.join(process.env.HOME, ".aegis", "identity.key"));
-    console.log("[aegis-channel-trust] searching for identity key:", searchPaths.map(p => path.resolve(p)).join(", "));
+    // Avoid logging full key paths to prevent filesystem structure leaks
+    console.log("[aegis-channel-trust] searching for identity key in", searchPaths.length, "locations");
     for (const candidate of searchPaths) {
       try {
         const resolvedPath = path.resolve(candidate);
         if (fs.existsSync(resolvedPath)) {
           const key = fs.readFileSync(resolvedPath);
-          console.log(`[aegis-channel-trust] found key at ${resolvedPath}: ${key.length} bytes`);
+          console.log(`[aegis-channel-trust] found identity key: ${key.length} bytes`);
           if (key.length === 32) {
             secretKey = key;
             console.log(`[aegis-channel-trust] identity key loaded OK`);
@@ -101,24 +102,27 @@ const plugin: OpenClawPluginDefinition = {
       }
     }
     if (!secretKey) {
-      console.error("[aegis-channel-trust] ERROR: identity key not found — registrations will be UNSIGNED, trust verification bypassed!");
+      console.error("[aegis-channel-trust] ERROR: identity key not found — channel registration DISABLED.");
+      console.error("[aegis-channel-trust] All channels will resolve to 'unknown' trust level.");
       console.error("[aegis-channel-trust] Configure identityKeyPath in plugins.entries.aegis-channel-trust or ensure .aegis/identity.key exists");
     }
 
     async function registerChannel(channel: string, user: string) {
+      // Refuse to register without a valid identity key — unsigned registrations
+      // degrade trust to "unknown" which is a security bypass.
+      if (!secretKey) return;
+
       const key = `${channel}:${user}`;
       if (key === lastRegistered) return;
 
       const ts = Date.now();
       const body: Record<string, unknown> = { channel, user, ts };
 
-      // Sign if we have the identity key
-      if (secretKey) {
-        try {
-          body.sig = signRegistration(channel, user, ts, secretKey);
-        } catch (err) {
-          api.log?.debug?.(`Aegis: signing failed: ${err}`);
-        }
+      try {
+        body.sig = signRegistration(channel, user, ts, secretKey);
+      } catch (err) {
+        api.log?.warn?.(`Aegis: signing failed, skipping registration: ${err}`);
+        return;
       }
 
       try {
