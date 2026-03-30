@@ -127,17 +127,11 @@ impl Provider {
     /// `url` crate. Handles `scheme://host:port/path` and `scheme://host/path`.
     fn extract_host(url: &str) -> Option<String> {
         // Strip scheme
-        let after_scheme = url
-            .find("://")
-            .map(|i| &url[i + 3..])
-            .unwrap_or(url);
+        let after_scheme = url.find("://").map(|i| &url[i + 3..]).unwrap_or(url);
         // Strip path
         let host_port = after_scheme.split('/').next().unwrap_or(after_scheme);
         // Strip userinfo (user:pass@host)
-        let host_port = host_port
-            .rsplit('@')
-            .next()
-            .unwrap_or(host_port);
+        let host_port = host_port.rsplit('@').next().unwrap_or(host_port);
         // Strip port — but be careful with IPv6 [::1]:port
         let host = if host_port.starts_with('[') {
             // IPv6: [::1]:port or [::1]
@@ -157,10 +151,7 @@ impl Provider {
 
     /// Extract the port number from a URL string, if present.
     fn extract_port(url: &str) -> Option<u16> {
-        let after_scheme = url
-            .find("://")
-            .map(|i| &url[i + 3..])
-            .unwrap_or(url);
+        let after_scheme = url.find("://").map(|i| &url[i + 3..]).unwrap_or(url);
         let host_port = after_scheme.split('/').next().unwrap_or(after_scheme);
         // For IPv6 [::1]:port
         if host_port.starts_with('[') {
@@ -315,38 +306,71 @@ mod tests {
 
     #[test]
     fn from_url_detects_anthropic() {
-        assert_eq!(Provider::from_url("https://api.anthropic.com"), Provider::Anthropic);
-        assert_eq!(Provider::from_url("https://api.anthropic.com/v1/messages"), Provider::Anthropic);
+        assert_eq!(
+            Provider::from_url("https://api.anthropic.com"),
+            Provider::Anthropic
+        );
+        assert_eq!(
+            Provider::from_url("https://api.anthropic.com/v1/messages"),
+            Provider::Anthropic
+        );
     }
 
     #[test]
     fn from_url_detects_openai() {
-        assert_eq!(Provider::from_url("https://api.openai.com"), Provider::OpenAi);
-        assert_eq!(Provider::from_url("https://api.openai.com/v1/chat/completions"), Provider::OpenAi);
+        assert_eq!(
+            Provider::from_url("https://api.openai.com"),
+            Provider::OpenAi
+        );
+        assert_eq!(
+            Provider::from_url("https://api.openai.com/v1/chat/completions"),
+            Provider::OpenAi
+        );
     }
 
     #[test]
     fn from_url_detects_ollama() {
-        assert_eq!(Provider::from_url("http://localhost:11434"), Provider::Ollama);
-        assert_eq!(Provider::from_url("http://127.0.0.1:11434/api/chat"), Provider::Ollama);
+        assert_eq!(
+            Provider::from_url("http://localhost:11434"),
+            Provider::Ollama
+        );
+        assert_eq!(
+            Provider::from_url("http://127.0.0.1:11434/api/chat"),
+            Provider::Ollama
+        );
     }
 
     #[test]
     fn from_url_detects_openrouter() {
-        assert_eq!(Provider::from_url("https://openrouter.ai/api/v1"), Provider::OpenAiCompat);
+        assert_eq!(
+            Provider::from_url("https://openrouter.ai/api/v1"),
+            Provider::OpenAiCompat
+        );
     }
 
     #[test]
     fn from_url_rejects_spoofed_domains() {
         // These should NOT match Anthropic — they are attacker-controlled domains
-        assert_eq!(Provider::from_url("https://evil-anthropic.com"), Provider::OpenAiCompat);
-        assert_eq!(Provider::from_url("https://notanthropic.com"), Provider::OpenAiCompat);
-        assert_eq!(Provider::from_url("https://anthropic.com.evil.com"), Provider::OpenAiCompat);
+        assert_eq!(
+            Provider::from_url("https://evil-anthropic.com"),
+            Provider::OpenAiCompat
+        );
+        assert_eq!(
+            Provider::from_url("https://notanthropic.com"),
+            Provider::OpenAiCompat
+        );
+        assert_eq!(
+            Provider::from_url("https://anthropic.com.evil.com"),
+            Provider::OpenAiCompat
+        );
     }
 
     #[test]
     fn from_url_unknown_defaults_to_compat() {
-        assert_eq!(Provider::from_url("https://my-llm-server.example.com"), Provider::OpenAiCompat);
+        assert_eq!(
+            Provider::from_url("https://my-llm-server.example.com"),
+            Provider::OpenAiCompat
+        );
     }
 
     #[test]

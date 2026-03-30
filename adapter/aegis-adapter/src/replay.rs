@@ -158,11 +158,8 @@ impl NonceRegistry {
         }
         let to_remove = self.nonces.len() - target;
         // Collect entries sorted by insertion time (oldest first)
-        let mut entries: Vec<(String, Instant)> = self
-            .nonces
-            .iter()
-            .map(|(k, v)| (k.clone(), *v))
-            .collect();
+        let mut entries: Vec<(String, Instant)> =
+            self.nonces.iter().map(|(k, v)| (k.clone(), *v)).collect();
         entries.sort_by_key(|(_, t)| *t);
         for (key, _) in entries.into_iter().take(to_remove) {
             self.nonces.remove(&key);

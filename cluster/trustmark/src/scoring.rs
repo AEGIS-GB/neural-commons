@@ -761,7 +761,11 @@ mod tests {
         assert!(schema.dimensions.contribution_volume.value() <= 10000);
 
         // Perfect signals should produce a high score
-        assert!(schema.score_bp.value() > 9000, "perfect signals should yield >9000bp, got {}", schema.score_bp.value());
+        assert!(
+            schema.score_bp.value() > 9000,
+            "perfect signals should yield >9000bp, got {}",
+            schema.score_bp.value()
+        );
     }
 
     #[test]

@@ -174,7 +174,10 @@ pub async fn start(config: AdapterConfig, mode_override: Option<Mode>) -> Result
                 }
             }
         });
-        info!("automatic rollup trigger started (check every 60s, threshold={})", aegis_evidence::recorder::DEFAULT_ROLLUP_THRESHOLD);
+        info!(
+            "automatic rollup trigger started (check every 60s, threshold={})",
+            aegis_evidence::recorder::DEFAULT_ROLLUP_THRESHOLD
+        );
     }
 
     // 5. Create shared state

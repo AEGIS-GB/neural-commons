@@ -256,8 +256,8 @@ mod receipt_tests {
 #[cfg(test)]
 mod claim_tests {
     use aegis_crypto::rfc8785;
-    use aegis_schemas::claim::{Claim, ClaimType, TemporalScope};
     use aegis_schemas::BasisPoints;
+    use aegis_schemas::claim::{Claim, ClaimType, TemporalScope};
     use uuid::Uuid;
 
     fn sample_claim() -> Claim {
@@ -339,8 +339,8 @@ mod claim_tests {
 #[cfg(test)]
 mod trustmark_tests {
     use aegis_crypto::rfc8785;
-    use aegis_schemas::trustmark::{Tier, TrustmarkDimensions, TrustmarkScore};
     use aegis_schemas::BasisPoints;
+    use aegis_schemas::trustmark::{Tier, TrustmarkDimensions, TrustmarkScore};
 
     #[test]
     fn trustmark_round_trip() {
@@ -517,12 +517,12 @@ mod crypto_tests {
 #[cfg(test)]
 mod adversarial_tests {
     use aegis_crypto::rfc8785;
+    use aegis_schemas::BasisPoints;
     use aegis_schemas::receipt::{
         GENESIS_PREV_HASH, Receipt, ReceiptContext, ReceiptCore, ReceiptType, RollupDetail,
         RollupHistogram, generate_blinding_nonce,
     };
     use aegis_schemas::trustmark::{Tier, TrustmarkDimensions, TrustmarkScore};
-    use aegis_schemas::BasisPoints;
     use std::collections::HashMap;
     use uuid::Uuid;
 
@@ -559,13 +559,34 @@ mod adversarial_tests {
         let json = serde_json::to_value(&context).unwrap();
 
         // None fields must be absent, not present as null
-        assert!(json.get("action").is_none(), "action must be omitted, not null");
-        assert!(json.get("subject").is_none(), "subject must be omitted, not null");
-        assert!(json.get("trigger").is_none(), "trigger must be omitted, not null");
-        assert!(json.get("outcome").is_none(), "outcome must be omitted, not null");
-        assert!(json.get("detail").is_none(), "detail must be omitted, not null");
-        assert!(json.get("enterprise").is_none(), "enterprise must be omitted, not null");
-        assert!(json.get("enforcement_mode").is_none(), "enforcement_mode must be omitted, not null");
+        assert!(
+            json.get("action").is_none(),
+            "action must be omitted, not null"
+        );
+        assert!(
+            json.get("subject").is_none(),
+            "subject must be omitted, not null"
+        );
+        assert!(
+            json.get("trigger").is_none(),
+            "trigger must be omitted, not null"
+        );
+        assert!(
+            json.get("outcome").is_none(),
+            "outcome must be omitted, not null"
+        );
+        assert!(
+            json.get("detail").is_none(),
+            "detail must be omitted, not null"
+        );
+        assert!(
+            json.get("enterprise").is_none(),
+            "enterprise must be omitted, not null"
+        );
+        assert!(
+            json.get("enforcement_mode").is_none(),
+            "enforcement_mode must be omitted, not null"
+        );
 
         // blinding_nonce must always be present
         assert!(json.get("blinding_nonce").is_some());
@@ -595,7 +616,10 @@ mod adversarial_tests {
         // Canonicalize twice and verify determinism
         let canonical1 = rfc8785::canonicalize(&core).unwrap();
         let canonical2 = rfc8785::canonicalize(&core).unwrap();
-        assert_eq!(canonical1, canonical2, "canonical JSON must be deterministic with unicode bot_id");
+        assert_eq!(
+            canonical1, canonical2,
+            "canonical JSON must be deterministic with unicode bot_id"
+        );
 
         // Round-trip must preserve the unicode
         let json = serde_json::to_string(&core).unwrap();
@@ -608,7 +632,8 @@ mod adversarial_tests {
         // Test BasisPoints at exact boundaries: 0, 1, 9999, 10000
         let boundaries = [0u32, 1, 9999, 10000];
         for &val in &boundaries {
-            let bp = BasisPoints::new(val).unwrap_or_else(|| panic!("BasisPoints({val}) should be valid"));
+            let bp = BasisPoints::new(val)
+                .unwrap_or_else(|| panic!("BasisPoints({val}) should be valid"));
             assert_eq!(bp.value(), val);
 
             // Serialize and deserialize
@@ -649,7 +674,7 @@ mod adversarial_tests {
         let rollup = RollupDetail {
             seq_start: 1,
             seq_end: 100,
-            receipt_count: 100,  // claims 100 receipts
+            receipt_count: 100, // claims 100 receipts
             merkle_root: "d".repeat(64),
             head_hash: "e".repeat(64),
             histogram: RollupHistogram {

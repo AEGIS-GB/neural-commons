@@ -132,8 +132,8 @@ pub fn generate_mnemonic() -> Result<String, Bip39Error> {
     let mut entropy = [0u8; 32];
     rand::rngs::OsRng.fill_bytes(&mut entropy);
 
-    let mnemonic = Mnemonic::from_entropy(&entropy)
-        .map_err(|e| Bip39Error::DerivationFailed(e.to_string()));
+    let mnemonic =
+        Mnemonic::from_entropy(&entropy).map_err(|e| Bip39Error::DerivationFailed(e.to_string()));
 
     // Zeroize entropy immediately after use
     entropy.zeroize();
@@ -195,12 +195,11 @@ pub fn slip0010_derive(seed: &[u8; 64], path: &[u32]) -> Result<[u8; 32], Bip39E
                 "SLIP-0010 Ed25519 requires all hardened indices".to_string(),
             ));
         }
-        let mut mac = HmacSha512::new_from_slice(&chain_code)
-            .map_err(|e| {
-                key.zeroize();
-                chain_code.zeroize();
-                Bip39Error::DerivationFailed(e.to_string())
-            })?;
+        let mut mac = HmacSha512::new_from_slice(&chain_code).map_err(|e| {
+            key.zeroize();
+            chain_code.zeroize();
+            Bip39Error::DerivationFailed(e.to_string())
+        })?;
         mac.update(&[0x00]);
         mac.update(&key);
         mac.update(&index.to_be_bytes());
