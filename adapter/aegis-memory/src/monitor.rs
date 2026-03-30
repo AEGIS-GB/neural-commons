@@ -144,7 +144,7 @@ impl MemoryMonitor {
 
                     // Read old and new content for screening
                     let old_content = None; // We don't store old content, just hashes
-                    let new_content = std::fs::read_to_string(path).ok();
+                    let new_content = tokio::fs::read_to_string(path).await.ok();
 
                     let screen_result = self.screener.screen(
                         &path.to_string_lossy(),
@@ -199,7 +199,7 @@ impl MemoryMonitor {
                     Ok(state) => {
                         changes_detected += 1;
 
-                        let content = std::fs::read_to_string(path).ok();
+                        let content = tokio::fs::read_to_string(path).await.ok();
                         let screen_result =
                             self.screener
                                 .screen(&path.to_string_lossy(), None, content.as_deref());
