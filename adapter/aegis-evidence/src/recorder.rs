@@ -3,7 +3,26 @@
 //! Wraps chain + store + merkle into a single interface.
 //! Thread-safe: the recorder holds a Mutex around the store.
 //!
-//! Lock ordering (MUST be followed by all methods):
+//! # Receipt multiplication
+//!
+//! A single proxied request generates **2 to 9 receipts**, depending on
+//! which screening layers fire. This is by design — each receipt records
+//! a distinct security-relevant event in the evidence chain.
+//!
+//! | Receipt type     | Count | When                                        |
+//! |------------------|-------|---------------------------------------------|
+//! | `ApiCall`        | 2     | Always: one for the request, one for the response |
+//! | `VaultDetection` | 0-3   | Request body + response body (buffered) + response body (streaming) |
+//! | `WriteBarrier`   | 0-1   | Request references or targets a protected file |
+//! | `SlmAnalysis`    | 0-2   | Fast layer + deep layer (each records separately) |
+//!
+//! **Total: 2-9 receipts per request cycle.**
+//!
+//! Merkle rollups compact these into a single digest every
+//! [`DEFAULT_ROLLUP_THRESHOLD`] receipts.
+//!
+//! # Lock ordering (MUST be followed by all methods)
+//!
 //!   1. chain_state
 //!   2. store
 //!   3. last_rollup_seq
