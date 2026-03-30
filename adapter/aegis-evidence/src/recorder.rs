@@ -2,6 +2,12 @@
 //!
 //! Wraps chain + store + merkle into a single interface.
 //! Thread-safe: the recorder holds a Mutex around the store.
+//!
+//! Lock ordering (MUST be followed by all methods):
+//!   1. chain_state
+//!   2. store
+//!   3. last_rollup_seq
+//! Acquiring locks out of order risks deadlock.
 
 use std::path::Path;
 use std::sync::Mutex;
@@ -129,14 +135,15 @@ impl EvidenceRecorder {
 
     /// Create a Merkle rollup covering receipts since the last rollup.
     pub fn rollup(&self) -> Result<Receipt, EvidenceError> {
-        let store = self
-            .store
-            .lock()
-            .map_err(|e| EvidenceError::StoreError(format!("lock poisoned: {e}")))?;
+        // Lock ordering: chain_state → store → last_rollup_seq
         let mut chain_state = self
             .chain_state
             .lock()
             .map_err(|e| EvidenceError::ChainError(format!("lock poisoned: {e}")))?;
+        let store = self
+            .store
+            .lock()
+            .map_err(|e| EvidenceError::StoreError(format!("lock poisoned: {e}")))?;
         let mut last_rollup = self
             .last_rollup_seq
             .lock()
@@ -204,14 +211,15 @@ impl EvidenceRecorder {
         start_seq: Option<u64>,
         end_seq: Option<u64>,
     ) -> Result<Vec<Receipt>, EvidenceError> {
-        let store = self
-            .store
-            .lock()
-            .map_err(|e| EvidenceError::StoreError(format!("lock poisoned: {e}")))?;
+        // Lock ordering: chain_state → store
         let chain_state = self
             .chain_state
             .lock()
             .map_err(|e| EvidenceError::ChainError(format!("lock poisoned: {e}")))?;
+        let store = self
+            .store
+            .lock()
+            .map_err(|e| EvidenceError::StoreError(format!("lock poisoned: {e}")))?;
 
         let start = start_seq.unwrap_or(1);
         let end = end_seq.unwrap_or(chain_state.head_seq);
