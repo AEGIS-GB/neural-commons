@@ -143,6 +143,42 @@ add_to_path() {
     fi
 }
 
+# --- NER PII model download ---
+
+download_ner_model() {
+    local models_dir="${DATA_DIR}/models/pii-ner"
+    local ner_base="https://huggingface.co/Ar86Bat/multilang-pii-ner/resolve/main"
+
+    if [ -f "${models_dir}/model.onnx" ]; then
+        info "NER PII model already installed."
+        return
+    fi
+
+    info "Downloading NER PII detection model (~300 MB)..."
+    info "This enables automatic detection and redaction of personal names,"
+    info "phone numbers, SSNs, credit cards, and addresses in LLM responses."
+    echo ""
+
+    mkdir -p "$models_dir"
+    local failed=0
+
+    for file in model.onnx tokenizer.json config.json; do
+        info "  Fetching ${file}..."
+        if command -v curl >/dev/null 2>&1; then
+            curl -fSL "${ner_base}/${file}" -o "${models_dir}/${file}" || { warn "Failed to download ${file}"; failed=1; }
+        elif command -v wget >/dev/null 2>&1; then
+            wget -q "${ner_base}/${file}" -O "${models_dir}/${file}" || { warn "Failed to download ${file}"; failed=1; }
+        fi
+    done
+
+    if [ "$failed" -eq 0 ] && [ -f "${models_dir}/model.onnx" ]; then
+        info "NER PII model installed at ${models_dir}"
+    else
+        warn "NER model download incomplete. PII detection will be disabled."
+        warn "Retry later: aegis setup ner"
+    fi
+}
+
 # --- SLM model prompt ---
 
 prompt_slm_model() {
@@ -322,6 +358,9 @@ CONFIGEOF
         info "Default config: ${config_dir}/config.toml"
     fi
 
+    # Download NER PII model
+    download_ner_model
+
     # Run first vulnerability scan if binary is available
     export PATH="${INSTALL_DIR}:${PATH}"
     if command -v aegis >/dev/null 2>&1; then
@@ -340,6 +379,11 @@ CONFIGEOF
     echo "================================================================"
     echo "            Aegis Shield — Installed                            "
     echo "================================================================"
+    echo ""
+    echo "  What's active:"
+    echo "     5-layer injection screening (heuristic + classifier + SLM + NER PII + metaprompt)"
+    echo "     NER PII detection (names, phone numbers, SSNs, credit cards, addresses)"
+    echo "     Evidence chain, write barrier, credential vault, memory monitor"
     echo ""
     echo "  Next steps:"
     echo ""

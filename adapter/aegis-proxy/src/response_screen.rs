@@ -113,18 +113,65 @@ pub fn screen_response_with_policy(
     #[cfg(feature = "ner")]
     {
         let ner_entities = crate::ner_pii::detect_entities(&text);
+
+        // Pre-scan: check if address-related entities (STREET) are present.
+        // CITY/ZIPCODE/BUILDINGNUM are only PII when part of an address.
+        let has_street = ner_entities
+            .iter()
+            .any(|e| e.entity_type == "STREET" && e.score > 0.7);
+
+        // Per-entity-type confidence thresholds. Higher thresholds for
+        // types prone to false positives (e.g. common first names used
+        // as verbs: "Mark", "Grant", "Bill").
+        fn min_confidence(entity_type: &str) -> f32 {
+            match entity_type {
+                "GIVENNAME" | "SURNAME" => 0.80,
+                "TITLE" => 0.85,
+                "TELEPHONENUM" | "EMAIL" => 0.70,
+                "CREDITCARDNUMBER" => 0.60,
+                "SOCIALNUM" | "TAXNUM" => 0.60,
+                "DRIVERLICENSENUM" | "IDCARDNUM" | "PASSPORTNUM" => 0.60,
+                "DATEOFBIRTH" | "SEX" | "GENDER" => 0.70,
+                "STREET" => 0.90,
+                "CITY" | "ZIPCODE" | "BUILDINGNUM" => 0.85,
+                _ => 1.0, // unknown types: effectively skip
+            }
+        }
+
         for entity in &ner_entities {
-            // Map NER entity types to DLP categories
+            // Skip entities below their type-specific confidence threshold
+            if entity.score < min_confidence(&entity.entity_type) {
+                continue;
+            }
+
             let category = match entity.entity_type.as_str() {
                 "GIVENNAME" | "SURNAME" | "TITLE" => "pii",
-                "STREET" | "CITY" | "ZIPCODE" | "BUILDINGNUM" => "pii",
                 "TELEPHONENUM" => "pii",
-                "EMAIL" => "pii", // backup for regex misses
+                "EMAIL" => "pii",
                 "CREDITCARDNUMBER" => "pii",
                 "SOCIALNUM" | "TAXNUM" => "pii",
                 "DRIVERLICENSENUM" | "IDCARDNUM" | "PASSPORTNUM" => "pii",
-                "DATEOFBIRTH" | "AGE" | "SEX" | "GENDER" => "phi",
-                _ => "pii",
+                "DATEOFBIRTH" | "SEX" | "GENDER" => "phi",
+                // Dates and times are never PII on their own
+                "DATE" | "TIME" => continue,
+                // AGE: standalone numbers ("42") get misclassified
+                "AGE" => continue,
+                // Address components: only flag when STREET is also present,
+                // indicating an actual address rather than a city name in context
+                "CITY" | "ZIPCODE" | "BUILDINGNUM" => {
+                    if !has_street {
+                        continue;
+                    }
+                    "pii"
+                }
+                // Street: require reasonable length to avoid short misclassifications
+                "STREET" => {
+                    if entity.text.len() < 10 {
+                        continue;
+                    }
+                    "pii"
+                }
+                _ => continue,
             };
             let description = format!("NER: {} detected", entity.entity_type.to_lowercase());
 
@@ -135,7 +182,26 @@ pub fn screen_response_with_policy(
                     .any(|v| v.contains(&entity.text) || entity.text.contains(v.as_str()))
             });
 
-            if !already_caught && entity.score > 0.6 {
+            // Minimum text length per entity type to filter out garbage
+            // subword tokens (e.g. "wen" from "Qwen", "LPDDR" from "LPDDR5X")
+            let min_len = match entity.entity_type.as_str() {
+                "GIVENNAME" | "SURNAME" => 2,
+                "TELEPHONENUM" => 7,     // shortest phone: 7 digits
+                "EMAIL" => 5,            // a@b.c
+                "CREDITCARDNUMBER" => 13, // shortest CC: 13 digits
+                "SOCIALNUM" => 8,        // SSN without dashes: 9 chars
+                "TAXNUM" => 8,
+                "DRIVERLICENSENUM" => 6,
+                "IDCARDNUM" => 6,
+                "PASSPORTNUM" => 6,
+                "STREET" => 10,
+                _ => 2,
+            };
+            if entity.text.len() < min_len {
+                continue;
+            }
+
+            if !already_caught {
                 result.redaction_count += 1;
                 result.findings.push(ResponseFinding {
                     category: category.to_string(),
@@ -369,6 +435,124 @@ fn get_dlp_patterns() -> &'static Vec<DlpPattern> {
 mod tests {
     use super::*;
 
+    // ═══════════════════════════════════════════════════════════════
+    //  FALSE POSITIVES — these must NOT be flagged as PII
+    // ═══════════════════════════════════════════════════════════════
+
+    #[test]
+    fn month_names_not_pii() {
+        // Standalone month names must never be flagged
+        let months = [
+            "The meeting is in March.",
+            "January was cold this year.",
+            "We launched the product in September 2025.",
+            "The deadline is February 14.",
+            "Report for Q1: January, February, March.",
+        ];
+        for input in months {
+            let (text, result) = screen_response(input);
+            assert!(
+                !result.screened,
+                "False positive on month name: {input} — findings: {:?}",
+                result.findings
+            );
+            assert_eq!(text, input, "Text was modified for: {input}");
+        }
+    }
+
+    #[test]
+    fn dates_not_pii() {
+        // Ordinary dates should not be flagged
+        let dates = [
+            "The event is on March 15, 2026.",
+            "Updated: 2025-12-01",
+            "Next review: June 30.",
+            "Created on Monday, April 7th.",
+            "Timestamp: 2026-03-29T09:12:53Z",
+        ];
+        for input in dates {
+            let (text, result) = screen_response(input);
+            let date_findings: Vec<_> = result
+                .findings
+                .iter()
+                .filter(|f| {
+                    f.category == "pii"
+                        && f.description.to_lowercase().contains("date")
+                })
+                .collect();
+            assert!(
+                date_findings.is_empty(),
+                "Date falsely flagged as PII: {input} — findings: {:?}",
+                date_findings
+            );
+        }
+    }
+
+    #[test]
+    fn times_not_pii() {
+        // Ordinary times should not be flagged
+        let times = [
+            "The meeting is at 3:00 PM.",
+            "Server rebooted at 14:30 UTC.",
+            "Logs from 09:15:32.001 show the error.",
+        ];
+        for input in times {
+            let (text, result) = screen_response(input);
+            let time_findings: Vec<_> = result
+                .findings
+                .iter()
+                .filter(|f| {
+                    f.category == "pii"
+                        && f.description.to_lowercase().contains("time")
+                })
+                .collect();
+            assert!(
+                time_findings.is_empty(),
+                "Time falsely flagged as PII: {input} — findings: {:?}",
+                time_findings
+            );
+        }
+    }
+
+    #[test]
+    fn city_names_in_general_context_not_pii() {
+        // City names in non-address contexts should not be flagged
+        let inputs = [
+            "The capital of France is Paris.",
+            "New York has many skyscrapers.",
+            "The server is hosted in London.",
+        ];
+        for input in inputs {
+            let (text, result) = screen_response(input);
+            assert!(
+                !result.screened,
+                "City name falsely flagged: {input} — findings: {:?}",
+                result.findings
+            );
+            assert_eq!(text, input);
+        }
+    }
+
+    #[test]
+    fn common_words_not_pii() {
+        // Words that look like names but are common English words
+        let inputs = [
+            "The application will process the request.",
+            "We need to grant access to the system.",
+            "The bill was paid in full.",
+            "Mark the task as complete.",
+        ];
+        for input in inputs {
+            let (text, result) = screen_response(input);
+            assert!(
+                !result.screened,
+                "Common word falsely flagged: {input} — findings: {:?}",
+                result.findings
+            );
+            assert_eq!(text, input);
+        }
+    }
+
     #[test]
     fn clean_response_passes() {
         let (text, result) = screen_response("The capital of France is Paris.");
@@ -377,6 +561,12 @@ mod tests {
         assert!(!result.blocked);
         assert_eq!(text, "The capital of France is Paris.");
     }
+
+    // ═══════════════════════════════════════════════════════════════
+    //  TRUE POSITIVES — these MUST be detected and redacted
+    // ═══════════════════════════════════════════════════════════════
+
+    // ── Credentials ──
 
     #[test]
     fn api_key_redacted() {
@@ -389,6 +579,48 @@ mod tests {
     }
 
     #[test]
+    fn openai_key_redacted() {
+        let (text, result) =
+            screen_response("Key: sk-proj-abc123def456ghi789jkl012mno345pqr678");
+        assert!(result.screened);
+        assert!(text.contains("[REDACTED:key]"));
+    }
+
+    #[test]
+    fn credential_pattern_redacted() {
+        let (text, result) = screen_response("secret_key = 'abcdef1234567890abcdef'");
+        assert!(result.screened);
+        assert!(text.contains("[REDACTED:credential]"));
+    }
+
+    #[test]
+    fn bearer_token_redacted() {
+        // The credential regex matches "access_token = <value>" style patterns
+        let (text, result) =
+            screen_response("access_token = eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9abc123defg");
+        assert!(result.screened);
+        assert!(text.contains("[REDACTED:credential]"));
+    }
+
+    #[test]
+    fn private_key_redacted() {
+        let (text, result) =
+            screen_response("Here is the key:\n-----BEGIN RSA PRIVATE KEY-----\nMIIE...");
+        assert!(result.screened);
+        assert!(text.contains("[REDACTED:private_key]"));
+    }
+
+    #[test]
+    fn ec_private_key_redacted() {
+        let (text, result) =
+            screen_response("-----BEGIN PRIVATE KEY-----\nMIGH...");
+        assert!(result.screened);
+        assert!(text.contains("[REDACTED:private_key]"));
+    }
+
+    // ── Environment Variables ──
+
+    #[test]
     fn env_var_redacted() {
         let (text, result) = screen_response(
             "Config: ANTHROPIC_API_KEY=sk-secret-value-here DATABASE_URL=postgres://user:pass@host/db",
@@ -398,13 +630,119 @@ mod tests {
     }
 
     #[test]
-    fn etc_passwd_redacted() {
+    fn aws_key_env_var_redacted() {
+        let (text, result) =
+            screen_response("AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY");
+        assert!(result.screened);
+        assert!(text.contains("[REDACTED:env_var]"));
+    }
+
+    // ── PII: SSN ──
+
+    #[test]
+    fn ssn_redacted() {
+        let (text, result) = screen_response("SSN: 123-45-6789");
+        assert!(result.screened);
+        assert!(text.contains("[REDACTED:ssn]"));
+        assert!(!text.contains("123-45-6789"));
+    }
+
+    #[test]
+    fn ssn_in_sentence_redacted() {
+        let (text, result) =
+            screen_response("The patient's social security number is 987-65-4321 on file.");
+        assert!(result.screened);
+        assert!(text.contains("[REDACTED:ssn]"));
+        assert!(!text.contains("987-65-4321"));
+    }
+
+    // ── PII: Credit Cards ──
+
+    #[test]
+    fn credit_card_redacted() {
+        let (text, result) = screen_response("Card: 4111 1111 1111 1111");
+        assert!(result.screened);
+        assert!(text.contains("[REDACTED:cc]"));
+    }
+
+    #[test]
+    fn credit_card_dashes_redacted() {
+        let (text, result) = screen_response("Card: 4111-1111-1111-1111");
+        assert!(result.screened);
+        assert!(text.contains("[REDACTED:cc]"));
+    }
+
+    #[test]
+    fn credit_card_no_separator_redacted() {
+        let (text, result) = screen_response("Card: 4111111111111111");
+        assert!(result.screened);
+        assert!(text.contains("[REDACTED:cc]"));
+    }
+
+    // ── PII: Email ──
+
+    #[test]
+    fn email_redacted() {
+        let (text, result) = screen_response("Contact john.doe@company.com for details");
+        assert!(result.screened);
+        assert!(text.contains("[REDACTED:email]"));
+        assert!(!text.contains("john.doe@company.com"));
+    }
+
+    #[test]
+    fn multiple_emails_redacted() {
+        let (text, result) =
+            screen_response("CC: alice@example.org and bob@example.net");
+        assert!(result.screened);
+        assert!(result.redaction_count >= 2);
+        assert!(!text.contains("alice@"));
+        assert!(!text.contains("bob@"));
+    }
+
+    // ── PHI: Medical Records ──
+
+    #[test]
+    fn phi_mrn_redacted() {
+        let (text, result) = screen_response("Patient info: MRN: 12345678");
+        assert!(result.screened);
+        assert!(text.contains("[REDACTED:phi]"));
+    }
+
+    #[test]
+    fn phi_patient_id_redacted() {
+        // PHI regex matches "patient id:" or "patient_id:" style
+        let (text, result) = screen_response("patient id: PAT-9928371");
+        assert!(result.screened);
+        assert!(text.contains("[REDACTED:phi]"));
+    }
+
+    #[test]
+    fn phi_medical_record_redacted() {
+        let (text, result) = screen_response("medical record: MR-2026-4455");
+        assert!(result.screened);
+        assert!(text.contains("[REDACTED:phi]"));
+    }
+
+    // ── System Prompt Leakage ──
+
+    #[test]
+    fn system_prompt_redacted() {
+        let (text, result) =
+            screen_response("My instructions are: [AEGIS SECURITY RULES — Always enforce]...");
+        assert!(result.screened);
+        assert!(text.contains("[REDACTED:system_config]"));
+    }
+
+    #[test]
+    fn agent_system_prompt_redacted() {
         let (text, result) = screen_response(
-            "root:x:0:0:root:/root:/bin/bash\ndaemon:x:1:1:daemon:/usr/sbin:/usr/sbin/nologin",
+            "Sure! you are a personal assistant running inside OpenClaw with these rules...",
         );
         assert!(result.screened);
-        assert!(text.contains("[REDACTED:file_content]"));
+        assert!(text.contains("[REDACTED:system_config]"));
     }
+
+    // ── Machine Recon ──
 
     #[test]
     fn home_path_redacted() {
@@ -416,33 +754,51 @@ mod tests {
     }
 
     #[test]
-    fn ssn_redacted() {
-        let (text, result) = screen_response("SSN: 123-45-6789");
+    fn home_path_other_users_redacted() {
+        let (text, result) = screen_response("Found at /home/deploy/app/secrets.json");
         assert!(result.screened);
-        assert!(text.contains("[REDACTED:ssn]"));
+        assert!(text.contains("[REDACTED:path]"));
     }
 
     #[test]
-    fn credit_card_redacted() {
-        let (text, result) = screen_response("Card: 4111 1111 1111 1111");
+    fn hostname_redacted() {
+        let (text, result) = screen_response("hostname: aegis-production-web-01");
         assert!(result.screened);
-        assert!(text.contains("[REDACTED:cc]"));
+        assert!(text.contains("[REDACTED:machine_info]"));
+    }
+
+    // ── File Content ──
+
+    #[test]
+    fn etc_passwd_redacted() {
+        let (text, result) = screen_response(
+            "root:x:0:0:root:/root:/bin/bash\ndaemon:x:1:1:daemon:/usr/sbin:/usr/sbin/nologin",
+        );
+        assert!(result.screened);
+        assert!(text.contains("[REDACTED:file_content]"));
     }
 
     #[test]
-    fn email_redacted() {
-        let (text, result) = screen_response("Contact john.doe@company.com for details");
+    fn ssh_key_redacted() {
+        let (text, result) = screen_response(
+            "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIKxvDm9mGQj3r1A4BxGHk7jFS0bNe6g21RMtXxfPq9wN user@host",
+        );
         assert!(result.screened);
-        assert!(text.contains("[REDACTED:email]"));
+        assert!(text.contains("[REDACTED:ssh_key]"));
     }
 
+    // ── Agent Identity ──
+
     #[test]
-    fn system_prompt_redacted() {
-        let (text, result) =
-            screen_response("My instructions are: [AEGIS SECURITY RULES — Always enforce]...");
+    fn agent_identity_redacted() {
+        let (text, result) = screen_response("bot_id: 97510100abcdef1234567890abcdef51f01589");
         assert!(result.screened);
-        assert!(text.contains("[REDACTED:system_config]"));
+        assert!(text.contains("[REDACTED:agent_id]"));
     }
+
+    // ═══════════════════════════════════════════════════════════════
+    //  TOOL CALL BLOCKING — trust-aware
+    // ═══════════════════════════════════════════════════════════════
 
     #[test]
     fn exec_blocked_all_tiers() {
@@ -456,6 +812,24 @@ mod tests {
             let (_, result) = screen_response_with_policy(response, &policy_for(level));
             assert!(result.blocked, "exec should be blocked for {:?}", level);
         }
+    }
+
+    #[test]
+    fn shell_full_allowed() {
+        use crate::trust_policy::policy_for;
+        let response = r#"{"choices":[{"message":{"tool_calls":[{"function":{"name":"shell","arguments":"{}"}}]}}]}"#;
+        let (_, result) =
+            screen_response_with_policy(response, &policy_for(aegis_schemas::TrustLevel::Full));
+        assert!(!result.blocked);
+    }
+
+    #[test]
+    fn shell_trusted_blocked() {
+        use crate::trust_policy::policy_for;
+        let response = r#"{"choices":[{"message":{"tool_calls":[{"function":{"name":"shell","arguments":"{}"}}]}}]}"#;
+        let (_, result) =
+            screen_response_with_policy(response, &policy_for(aegis_schemas::TrustLevel::Trusted));
+        assert!(result.blocked);
     }
 
     #[test]
@@ -486,22 +860,15 @@ mod tests {
     }
 
     #[test]
-    fn shell_trusted_blocked() {
-        use crate::trust_policy::policy_for;
-        let response = r#"{"choices":[{"message":{"tool_calls":[{"function":{"name":"shell","arguments":"{}"}}]}}]}"#;
-        let (_, result) =
-            screen_response_with_policy(response, &policy_for(aegis_schemas::TrustLevel::Trusted));
+    fn anthropic_tool_call_blocked() {
+        let response = r#"{"content":[{"type":"tool_use","name":"shell","input":{"command":"cat /etc/shadow"}}]}"#;
+        let (_, result) = screen_response(response);
         assert!(result.blocked);
     }
 
-    #[test]
-    fn shell_full_allowed() {
-        use crate::trust_policy::policy_for;
-        let response = r#"{"choices":[{"message":{"tool_calls":[{"function":{"name":"shell","arguments":"{}"}}]}}]}"#;
-        let (_, result) =
-            screen_response_with_policy(response, &policy_for(aegis_schemas::TrustLevel::Full));
-        assert!(!result.blocked);
-    }
+    // ═══════════════════════════════════════════════════════════════
+    //  MIXED CONTENT — partial redaction, preserve clean text
+    // ═══════════════════════════════════════════════════════════════
 
     #[test]
     fn mixed_content_partial_redaction() {
@@ -515,38 +882,48 @@ mod tests {
     }
 
     #[test]
-    fn private_key_redacted() {
+    fn date_next_to_real_pii_only_pii_redacted() {
+        // Date should survive, SSN should be redacted
         let (text, result) =
-            screen_response("Here is the key:\n-----BEGIN RSA PRIVATE KEY-----\nMIIE...");
+            screen_response("On March 15, the patient's SSN 123-45-6789 was recorded.");
         assert!(result.screened);
-        assert!(text.contains("[REDACTED:private_key]"));
+        assert!(text.contains("[REDACTED:ssn]"));
+        assert!(text.contains("March 15"), "March should not be redacted");
     }
 
     #[test]
-    fn phi_redacted() {
-        let (text, result) = screen_response("Patient info: MRN: 12345678");
+    fn multiple_categories_all_redacted() {
+        let input = "Contact john@evil.com, SSN 111-22-3333, key: sk-ant-api03-aaabbbcccdddeeefffggghh";
+        let (text, result) = screen_response(input);
         assert!(result.screened);
-        assert!(text.contains("[REDACTED:phi]"));
+        assert!(text.contains("[REDACTED:email]"));
+        assert!(text.contains("[REDACTED:ssn]"));
+        assert!(text.contains("[REDACTED:key]"));
+        assert!(!text.contains("john@evil.com"));
+        assert!(!text.contains("111-22-3333"));
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    //  DLP MODE — trust-level controls redaction behavior
+    // ═══════════════════════════════════════════════════════════════
+
+    #[test]
+    fn log_only_mode_finds_but_does_not_redact() {
+        use crate::trust_policy::policy_for;
+        let input = "SSN: 123-45-6789";
+        let (text, result) =
+            screen_response_with_policy(input, &policy_for(aegis_schemas::TrustLevel::Full));
+        // Full trust = LogOnly mode: findings recorded but text untouched
+        assert!(!result.findings.is_empty(), "Should still find SSN");
+        assert_eq!(text, input, "Text should not be modified in LogOnly mode");
     }
 
     #[test]
-    fn anthropic_tool_call_blocked() {
-        let response = r#"{"content":[{"type":"tool_use","name":"shell","input":{"command":"cat /etc/shadow"}}]}"#;
-        let (_, result) = screen_response(response);
-        assert!(result.blocked);
-    }
-
-    #[test]
-    fn agent_identity_redacted() {
-        let (text, result) = screen_response("bot_id: 97510100abcdef1234567890abcdef51f01589");
-        assert!(result.screened);
-        assert!(text.contains("[REDACTED:agent_id]"));
-    }
-
-    #[test]
-    fn credential_pattern_redacted() {
-        let (text, result) = screen_response("secret_key = 'abcdef1234567890abcdef'");
-        assert!(result.screened);
-        assert!(text.contains("[REDACTED:credential]"));
+    fn block_on_finding_mode_blocks_any_pii() {
+        use crate::trust_policy::policy_for;
+        let input = "SSN: 123-45-6789";
+        let (_, result) =
+            screen_response_with_policy(input, &policy_for(aegis_schemas::TrustLevel::Unknown));
+        assert!(result.blocked, "Unknown trust should block on any finding");
     }
 }

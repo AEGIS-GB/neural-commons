@@ -30,12 +30,12 @@ members = [
 ]
 
 [workspace.package]
-version = "0.5.1"
+version = "0.5.2"
 edition = "2024"
 license = "AGPL-3.0-or-later"
 repository = "https://github.com/AEGIS-GB/neural-commons"
 homepage = "https://github.com/AEGIS-GB/neural-commons"
-description = "Trust infrastructure for AI agents — evidence chain, credential vault, write barrier, injection screening, cryptographic identity"
+description = "Trust infrastructure for AI agents — evidence chain, credential vault, write barrier, injection screening, NER-based PII detection, cryptographic identity"
 keywords = ["security", "ai-agents", "proxy", "trust", "evidence"]
 categories = ["cryptography", "network-programming", "command-line-utilities"]
 

@@ -828,9 +828,9 @@ pub async fn start(config: AdapterConfig, mode_override: Option<Mode>) -> Result
     // Initialize NER PII model for response screening
     {
         let ner_candidates = [
-            data_dir.join("../models/pii-ner"),
-            std::path::PathBuf::from("models/pii-ner"),
-            std::path::PathBuf::from("/home/aegis/aegis/neural-commons/models/pii-ner"),
+            data_dir.join("models/pii-ner"),          // installer: ~/.aegis/data/models/pii-ner
+            data_dir.join("../models/pii-ner"),        // dev: relative to data dir
+            std::path::PathBuf::from("models/pii-ner"), // cwd-relative
         ];
         tracing::debug!(data_dir = %data_dir.display(), "NER: searching for model");
         for path in &ner_candidates {
