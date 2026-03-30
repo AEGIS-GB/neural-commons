@@ -62,8 +62,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       - name: Run contract tests
-        run: cargo test -p contract-tests
-        continue-on-error: true  # package may not exist yet
+        run: cargo test -p aegis-contract-tests
 
   # ── Build Release Binaries ────────────────────────────────────
   build:
