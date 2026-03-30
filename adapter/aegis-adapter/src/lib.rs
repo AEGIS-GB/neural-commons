@@ -22,6 +22,7 @@ pub mod mode;
 pub mod replay;
 pub mod server;
 pub mod state;
+pub mod webhook;
 
 /// Adapter operating mode
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
