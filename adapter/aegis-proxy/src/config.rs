@@ -227,6 +227,21 @@ impl ProxyConfig {
         }
     }
 
+    /// Validate configuration values at startup.
+    /// Returns an error string describing the first invalid field found.
+    pub fn validate(&self) -> Result<(), String> {
+        if self.rate_limit_per_minute == 0 {
+            return Err("rate_limit_per_minute must be > 0".to_string());
+        }
+        if self.rate_limit_burst == 0 {
+            return Err("rate_limit_burst must be > 0".to_string());
+        }
+        if self.max_body_size == 0 {
+            return Err("max_body_size must be > 0".to_string());
+        }
+        Ok(())
+    }
+
     /// Create an enforcement config (blocks on violations).
     pub fn enforce(upstream_url: &str, listen_addr: &str) -> Self {
         Self {
@@ -332,5 +347,32 @@ mod tests {
     #[test]
     fn from_url_unknown_defaults_to_compat() {
         assert_eq!(Provider::from_url("https://my-llm-server.example.com"), Provider::OpenAiCompat);
+    }
+
+    #[test]
+    fn default_proxy_config_validates() {
+        let cfg = ProxyConfig::default();
+        assert!(cfg.validate().is_ok());
+    }
+
+    #[test]
+    fn zero_rate_limit_fails_validation() {
+        let mut cfg = ProxyConfig::default();
+        cfg.rate_limit_per_minute = 0;
+        assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn zero_burst_fails_validation() {
+        let mut cfg = ProxyConfig::default();
+        cfg.rate_limit_burst = 0;
+        assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn zero_max_body_size_fails_validation() {
+        let mut cfg = ProxyConfig::default();
+        cfg.max_body_size = 0;
+        assert!(cfg.validate().is_err());
     }
 }
