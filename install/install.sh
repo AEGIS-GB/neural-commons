@@ -89,6 +89,49 @@ download_binary() {
         exit 1
     fi
 
+    # Verify SHA-256 checksum
+    local checksum_url="${url}.sha256"
+    local checksum_file="${target}.sha256"
+    info "Verifying SHA-256 checksum..."
+
+    if command -v curl >/dev/null 2>&1; then
+        curl -fSL "$checksum_url" -o "$checksum_file" 2>/dev/null
+    elif command -v wget >/dev/null 2>&1; then
+        wget -q "$checksum_url" -O "$checksum_file" 2>/dev/null
+    fi
+
+    if [ -f "$checksum_file" ]; then
+        # checksum file contains: <hash>  <filename>
+        # We need to verify against the downloaded binary
+        local expected_hash
+        expected_hash=$(awk '{print $1}' "$checksum_file")
+        local actual_hash
+        if command -v sha256sum >/dev/null 2>&1; then
+            actual_hash=$(sha256sum "$target" | awk '{print $1}')
+        elif command -v shasum >/dev/null 2>&1; then
+            actual_hash=$(shasum -a 256 "$target" | awk '{print $1}')
+        else
+            warn "No sha256sum or shasum found — skipping checksum verification"
+            rm -f "$checksum_file"
+            chmod +x "$target"
+            info "Installed: ${target} (checksum NOT verified)"
+            return
+        fi
+
+        if [ "$expected_hash" = "$actual_hash" ]; then
+            info "Checksum verified: ${expected_hash:0:16}..."
+        else
+            error "CHECKSUM MISMATCH — binary may be tampered!"
+            error "  Expected: ${expected_hash}"
+            error "  Actual:   ${actual_hash}"
+            rm -f "$target" "$checksum_file"
+            exit 1
+        fi
+        rm -f "$checksum_file"
+    else
+        warn "Checksum file not available — verify manually: https://github.com/${REPO}/releases"
+    fi
+
     chmod +x "$target"
     info "Installed: ${target}"
 }
@@ -403,8 +446,6 @@ CONFIGEOF
     echo "     aegis --help         — all options"
     echo ""
 
-    warn "Binary signature verification not yet implemented."
-    warn "Verify checksums manually: https://github.com/${REPO}/releases"
     echo ""
 }
 
