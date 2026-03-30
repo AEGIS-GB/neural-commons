@@ -263,23 +263,20 @@ impl BarrierHook for BarrierHookImpl {
             // and periodic hash check (Layer 2), not by body scanning.
             if let Some(ref body_text) = req_info.body_text {
                 let body_upper = body_text.to_uppercase();
-                let filenames: Vec<String> = if let Ok(mgr) = self.protected_files.lock() {
-                    mgr.list_all().iter().map(|e| e.pattern.clone()).collect()
-                } else {
-                    vec![]
-                };
-                for filename in &filenames {
-                    let upper_name = filename.to_uppercase();
-                    if body_upper.contains(&upper_name) {
-                        let reason =
-                            format!("request body references protected file: {}", filename);
-                        self.record_and_alert(
-                            &req_info.method,
-                            &req_info.path,
-                            &reason,
-                            req_info.timestamp_ms,
-                        );
-                        return BarrierDecision::Warn(reason);
+                if let Ok(mgr) = self.protected_files.lock() {
+                    for entry in mgr.list_all() {
+                        let upper_name = entry.pattern.to_uppercase();
+                        if body_upper.contains(&upper_name) {
+                            let reason =
+                                format!("request body references protected file: {}", entry.pattern);
+                            self.record_and_alert(
+                                &req_info.method,
+                                &req_info.path,
+                                &reason,
+                                req_info.timestamp_ms,
+                            );
+                            return BarrierDecision::Warn(reason);
+                        }
                     }
                 }
             }
