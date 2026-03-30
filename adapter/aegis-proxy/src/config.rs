@@ -92,18 +92,87 @@ pub enum ProxyMode {
 
 impl Provider {
     /// Resolve provider from a well-known upstream URL.
+    ///
+    /// Parses the URL to extract the host and matches against known provider
+    /// domains exactly (or by suffix for subdomains). Falls back to
+    /// `OpenAiCompat` for unrecognised URLs with a warning.
     pub fn from_url(url: &str) -> Self {
-        if url.contains("anthropic.com") {
-            Provider::Anthropic
-        } else if url.contains("api.openai.com") {
-            Provider::OpenAi
-        } else if url.contains("openrouter.ai") {
-            Provider::OpenAiCompat
-        } else if url.contains(":11434") {
-            Provider::Ollama
+        let host = Self::extract_host(url);
+
+        if let Some(h) = &host {
+            if h == "anthropic.com" || h.ends_with(".anthropic.com") {
+                return Provider::Anthropic;
+            }
+            if h == "api.openai.com" {
+                return Provider::OpenAi;
+            }
+            if h == "openrouter.ai" || h.ends_with(".openrouter.ai") {
+                return Provider::OpenAiCompat;
+            }
+            // Ollama default port
+            if h == "localhost" || h == "127.0.0.1" || h == "::1" {
+                if let Some(port) = Self::extract_port(url) {
+                    if port == 11434 {
+                        return Provider::Ollama;
+                    }
+                }
+            }
+        }
+
+        tracing::warn!(url = %url, "unrecognised provider URL, defaulting to OpenAI-compatible");
+        Provider::OpenAiCompat
+    }
+
+    /// Extract the host portion from a URL string without pulling in the
+    /// `url` crate. Handles `scheme://host:port/path` and `scheme://host/path`.
+    fn extract_host(url: &str) -> Option<String> {
+        // Strip scheme
+        let after_scheme = url
+            .find("://")
+            .map(|i| &url[i + 3..])
+            .unwrap_or(url);
+        // Strip path
+        let host_port = after_scheme.split('/').next().unwrap_or(after_scheme);
+        // Strip userinfo (user:pass@host)
+        let host_port = host_port
+            .rsplit('@')
+            .next()
+            .unwrap_or(host_port);
+        // Strip port — but be careful with IPv6 [::1]:port
+        let host = if host_port.starts_with('[') {
+            // IPv6: [::1]:port or [::1]
+            host_port
+                .find(']')
+                .map(|i| &host_port[1..i])
+                .unwrap_or(host_port)
         } else {
-            // Default to OpenAI-compatible for unknown URLs (most common format)
-            Provider::OpenAiCompat
+            host_port.rsplit(':').last().unwrap_or(host_port)
+        };
+        if host.is_empty() {
+            None
+        } else {
+            Some(host.to_lowercase())
+        }
+    }
+
+    /// Extract the port number from a URL string, if present.
+    fn extract_port(url: &str) -> Option<u16> {
+        let after_scheme = url
+            .find("://")
+            .map(|i| &url[i + 3..])
+            .unwrap_or(url);
+        let host_port = after_scheme.split('/').next().unwrap_or(after_scheme);
+        // For IPv6 [::1]:port
+        if host_port.starts_with('[') {
+            let after_bracket = host_port.find(']').map(|i| &host_port[i + 1..])?;
+            after_bracket.strip_prefix(':')?.parse().ok()
+        } else {
+            let parts: Vec<&str> = host_port.rsplitn(2, ':').collect();
+            if parts.len() == 2 {
+                parts[0].parse().ok()
+            } else {
+                None
+            }
         }
     }
 
@@ -227,5 +296,41 @@ mod tests {
 
         let decoded: Provider = serde_json::from_str("\"anthropic\"").unwrap();
         assert_eq!(decoded, Provider::Anthropic);
+    }
+
+    #[test]
+    fn from_url_detects_anthropic() {
+        assert_eq!(Provider::from_url("https://api.anthropic.com"), Provider::Anthropic);
+        assert_eq!(Provider::from_url("https://api.anthropic.com/v1/messages"), Provider::Anthropic);
+    }
+
+    #[test]
+    fn from_url_detects_openai() {
+        assert_eq!(Provider::from_url("https://api.openai.com"), Provider::OpenAi);
+        assert_eq!(Provider::from_url("https://api.openai.com/v1/chat/completions"), Provider::OpenAi);
+    }
+
+    #[test]
+    fn from_url_detects_ollama() {
+        assert_eq!(Provider::from_url("http://localhost:11434"), Provider::Ollama);
+        assert_eq!(Provider::from_url("http://127.0.0.1:11434/api/chat"), Provider::Ollama);
+    }
+
+    #[test]
+    fn from_url_detects_openrouter() {
+        assert_eq!(Provider::from_url("https://openrouter.ai/api/v1"), Provider::OpenAiCompat);
+    }
+
+    #[test]
+    fn from_url_rejects_spoofed_domains() {
+        // These should NOT match Anthropic — they are attacker-controlled domains
+        assert_eq!(Provider::from_url("https://evil-anthropic.com"), Provider::OpenAiCompat);
+        assert_eq!(Provider::from_url("https://notanthropic.com"), Provider::OpenAiCompat);
+        assert_eq!(Provider::from_url("https://anthropic.com.evil.com"), Provider::OpenAiCompat);
+    }
+
+    #[test]
+    fn from_url_unknown_defaults_to_compat() {
+        assert_eq!(Provider::from_url("https://my-llm-server.example.com"), Provider::OpenAiCompat);
     }
 }
