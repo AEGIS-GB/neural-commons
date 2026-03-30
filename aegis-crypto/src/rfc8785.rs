@@ -44,7 +44,12 @@ fn canonicalize_value(value: &serde_json::Value) -> Result<String, Canonicalizat
         }
         serde_json::Value::Object(map) => {
             let mut keys: Vec<&String> = map.keys().collect();
-            keys.sort(); // Lexicographic sort (RFC 8785 requires UTF-16 sort order)
+            // RFC 8785 §3.2.3: sort by UTF-16 code units (not UTF-8 bytes)
+            keys.sort_by(|a, b| {
+                let a_utf16: Vec<u16> = a.encode_utf16().collect();
+                let b_utf16: Vec<u16> = b.encode_utf16().collect();
+                a_utf16.cmp(&b_utf16)
+            });
             let pairs: Result<Vec<String>, _> = keys
                 .iter()
                 .map(|k| {
@@ -86,5 +91,39 @@ mod tests {
             String::from_utf8(result).unwrap(),
             r#"{"a":3,"b":{"c":2,"d":1}}"#
         );
+    }
+
+    #[test]
+    fn test_utf16_sort_order_non_ascii() {
+        // RFC 8785 §3.2.3: keys sorted by UTF-16 code units
+        // In UTF-16: 'a' = 0x0061, 'ñ' = 0x00F1, 'z' = 0x007A
+        // Correct UTF-16 order: a (0x0061) < z (0x007A) < ñ (0x00F1)
+        // UTF-8 byte order would give: a < z < ñ (same for this case)
+        let input = json!({"ñ": 3, "a": 1, "z": 2});
+        let result = canonicalize(&input).unwrap();
+        let output = String::from_utf8(result).unwrap();
+        assert_eq!(output, "{\"a\":1,\"z\":2,\"ñ\":3}");
+    }
+
+    #[test]
+    fn test_utf16_sort_order_supplementary_plane() {
+        // Supplementary plane characters (U+10000+) encode as surrogate pairs in UTF-16
+        // U+1D11E (𝄞 MUSICAL SYMBOL G CLEF) = D834 DD1E in UTF-16
+        // U+00E9 (é) = 00E9 in UTF-16
+        // UTF-16 order: 'a' (0061) < 'é' (00E9) < '𝄞' (D834 DD1E)
+        let input = json!({"𝄞": 3, "a": 1, "é": 2});
+        let result = canonicalize(&input).unwrap();
+        let output = String::from_utf8(result).unwrap();
+        assert_eq!(output, "{\"a\":1,\"é\":2,\"𝄞\":3}");
+    }
+
+    #[test]
+    fn test_utf16_sort_cjk_keys() {
+        // CJK characters: 日 (U+65E5, 65E5 in UTF-16), 本 (U+672C)
+        // ASCII 'a' (0x0061) < 日 (0x65E5) < 本 (0x672C)
+        let input = json!({"本": 3, "a": 1, "日": 2});
+        let result = canonicalize(&input).unwrap();
+        let output = String::from_utf8(result).unwrap();
+        assert_eq!(output, "{\"a\":1,\"日\":2,\"本\":3}");
     }
 }
