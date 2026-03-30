@@ -21,7 +21,7 @@ use aegis_proxy::middleware::{
 };
 use aegis_schemas::ReceiptType;
 use aegis_vault::scanner;
-use tracing::{debug, info};
+use tracing::{debug, error, info};
 
 // Classifier advisory is threaded through function parameters, not globals.
 // The old global Mutex caused cross-request contamination under concurrent load.
@@ -242,17 +242,25 @@ impl BarrierHook for BarrierHookImpl {
             // Layer 3a: Check if the HTTP request path matches a protected file
             let path = std::path::Path::new(&req_info.path);
 
-            if let Ok(mgr) = self.protected_files.lock()
-                && mgr.is_critical(path)
-            {
-                let reason = format!("request targets critical protected path: {}", req_info.path);
-                self.record_and_alert(
-                    &req_info.method,
-                    &req_info.path,
-                    &reason,
-                    req_info.timestamp_ms,
-                );
-                return BarrierDecision::Block(reason);
+            match self.protected_files.lock() {
+                Ok(mgr) => {
+                    if mgr.is_critical(path) {
+                        let reason = format!("request targets critical protected path: {}", req_info.path);
+                        self.record_and_alert(
+                            &req_info.method,
+                            &req_info.path,
+                            &reason,
+                            req_info.timestamp_ms,
+                        );
+                        return BarrierDecision::Block(reason);
+                    }
+                }
+                Err(_) => {
+                    error!("barrier lock poisoned in check_write (path check) — failing closed");
+                    return BarrierDecision::Block(
+                        "barrier lock poisoned — failing closed".to_string(),
+                    );
+                }
             }
 
             // Layer 3b: Scan request body for references to protected filenames.
@@ -263,20 +271,28 @@ impl BarrierHook for BarrierHookImpl {
             // and periodic hash check (Layer 2), not by body scanning.
             if let Some(ref body_text) = req_info.body_text {
                 let body_upper = body_text.to_uppercase();
-                if let Ok(mgr) = self.protected_files.lock() {
-                    for entry in mgr.list_all() {
-                        let upper_name = entry.pattern.to_uppercase();
-                        if body_upper.contains(&upper_name) {
-                            let reason =
-                                format!("request body references protected file: {}", entry.pattern);
-                            self.record_and_alert(
-                                &req_info.method,
-                                &req_info.path,
-                                &reason,
-                                req_info.timestamp_ms,
-                            );
-                            return BarrierDecision::Warn(reason);
+                match self.protected_files.lock() {
+                    Ok(mgr) => {
+                        for entry in mgr.list_all() {
+                            let upper_name = entry.pattern.to_uppercase();
+                            if body_upper.contains(&upper_name) {
+                                let reason =
+                                    format!("request body references protected file: {}", entry.pattern);
+                                self.record_and_alert(
+                                    &req_info.method,
+                                    &req_info.path,
+                                    &reason,
+                                    req_info.timestamp_ms,
+                                );
+                                return BarrierDecision::Warn(reason);
+                            }
                         }
+                    }
+                    Err(_) => {
+                        error!("barrier lock poisoned in check_write (body scan) — failing closed");
+                        return BarrierDecision::Block(
+                            "barrier lock poisoned — failing closed".to_string(),
+                        );
                     }
                 }
             }
