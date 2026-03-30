@@ -5,30 +5,39 @@
 
 use std::path::PathBuf;
 
-fn model_dir() -> PathBuf {
+fn model_dir() -> Option<PathBuf> {
     let candidates = [
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../models/pii-ner"),
         PathBuf::from("/home/aegis/aegis/neural-commons/models/pii-ner"),
     ];
-    for p in &candidates {
-        if p.join("model.onnx").exists() {
-            return p.clone();
-        }
-    }
-    panic!("NER model not found");
+    candidates
+        .into_iter()
+        .find(|p| p.join("model.onnx").exists())
 }
 
-fn init_ner() {
+fn init_ner() -> bool {
     use std::sync::Once;
     static INIT: Once = Once::new();
+    static mut AVAILABLE: bool = false;
     INIT.call_once(|| {
-        aegis_proxy::ner_pii::init(&model_dir());
-        assert!(aegis_proxy::ner_pii::is_available());
+        if let Some(dir) = model_dir() {
+            aegis_proxy::ner_pii::init(&dir);
+            unsafe { AVAILABLE = aegis_proxy::ner_pii::is_available() };
+        }
     });
+    unsafe { AVAILABLE }
+}
+
+macro_rules! require_ner {
+    () => {
+        if !init_ner() {
+            eprintln!("  SKIPPED (NER model not available in CI)");
+            return;
+        }
+    };
 }
 
 fn screen(input: &str) -> (String, aegis_proxy::response_screen::ResponseScreenResult) {
-    init_ner();
     aegis_proxy::response_screen::screen_response(input)
 }
 
@@ -49,6 +58,7 @@ fn assert_clean(label: &str, input: &str) {
 
 #[test]
 fn business_language() {
+    require_ner!();
     let cases = [
         (
             "quarterly_report",
@@ -99,6 +109,7 @@ fn business_language() {
 
 #[test]
 fn engineering_content() {
+    require_ner!();
     let cases = [
         (
             "git_log",
@@ -152,6 +163,7 @@ fn engineering_content() {
 
 #[test]
 fn news_style_content() {
+    require_ner!();
     let cases = [
         (
             "weather",
@@ -205,6 +217,7 @@ fn news_style_content() {
 
 #[test]
 fn llm_response_patterns() {
+    require_ner!();
     let cases = [
         (
             "code_review",
@@ -258,6 +271,7 @@ fn llm_response_patterns() {
 
 #[test]
 fn edge_cases() {
+    require_ner!();
     let cases = [
         (
             "product_name",
