@@ -131,6 +131,12 @@ pub async fn start(config: AdapterConfig, mode_override: Option<Mode>) -> Result
     let (alert_tx, _alert_rx) =
         tokio::sync::broadcast::channel::<aegis_dashboard::DashboardAlert>(32);
 
+    // 4a. Optionally spawn webhook alerter for critical alerts
+    if let Some(ref webhook_url) = config.webhook_url {
+        let alerter = crate::webhook::WebhookAlerter::new(webhook_url.clone());
+        alerter.spawn(alert_tx.subscribe());
+    }
+
     let chain_head = recorder.chain_head();
     info!(
         seq = chain_head.head_seq,

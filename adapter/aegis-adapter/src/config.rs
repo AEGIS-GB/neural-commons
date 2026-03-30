@@ -47,6 +47,11 @@ pub struct AdapterConfig {
     /// Channel trust configuration
     #[serde(default)]
     pub trust: TrustSection,
+
+    /// Optional webhook URL for critical alerts.
+    /// When set, critical alerts are POSTed here in addition to the SSE dashboard stream.
+    #[serde(default)]
+    pub webhook_url: Option<String>,
 }
 
 /// Trust configuration — channel-based access control + context observability.
@@ -349,6 +354,7 @@ impl Default for AdapterConfig {
             rate_limit: RateLimitConfig::default(),
             data_dir: default_data_dir(),
             trust: TrustSection::default(),
+            webhook_url: None,
         }
     }
 }
