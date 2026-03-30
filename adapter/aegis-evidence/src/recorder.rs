@@ -7,6 +7,7 @@
 //!   1. chain_state
 //!   2. store
 //!   3. last_rollup_seq
+//!
 //! Acquiring locks out of order risks deadlock.
 
 use std::path::Path;

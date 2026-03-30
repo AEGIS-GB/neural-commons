@@ -140,7 +140,7 @@ impl Provider {
                 .map(|i| &host_port[1..i])
                 .unwrap_or(host_port)
         } else {
-            host_port.rsplit(':').last().unwrap_or(host_port)
+            host_port.rsplit(':').next_back().unwrap_or(host_port)
         };
         if host.is_empty() {
             None
@@ -380,6 +380,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::field_reassign_with_default)]
     fn zero_rate_limit_fails_validation() {
         let mut cfg = ProxyConfig::default();
         cfg.rate_limit_per_minute = 0;
@@ -387,6 +388,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::field_reassign_with_default)]
     fn zero_burst_fails_validation() {
         let mut cfg = ProxyConfig::default();
         cfg.rate_limit_burst = 0;
@@ -394,6 +396,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::field_reassign_with_default)]
     fn zero_max_body_size_fails_validation() {
         let mut cfg = ProxyConfig::default();
         cfg.max_body_size = 0;
