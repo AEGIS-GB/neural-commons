@@ -686,6 +686,19 @@ async fn forward_request(
         body_bytes
     };
 
+    // Recompute body hash and size after potential stripping so the evidence
+    // receipt records the hash of what is actually forwarded upstream.
+    let body_hash = middleware::body_hash(&body_bytes);
+    let body_text = if !body_bytes.is_empty() {
+        std::str::from_utf8(&body_bytes).ok().map(|s| s.to_string())
+    } else {
+        None
+    };
+    let mut req_info = req_info;
+    req_info.body_hash = body_hash;
+    req_info.body_size = body_bytes.len();
+    req_info.body_text = body_text;
+
     // --- Parse Anthropic request for SLM screening ---
     let anthropic_req = if !body_bytes.is_empty() {
         anthropic::parse_request(&body_bytes).ok()
