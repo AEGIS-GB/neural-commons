@@ -142,7 +142,8 @@ jobs:
           - Evidence recorder — tamper-evident receipt chain for every API call
           - Write barrier — protects SOUL.md, AGENTS.md, IDENTITY.md, TOOLS.md, BOOT.md
           - Credential vault — encrypted storage, plaintext scanner
-          - SLM injection screening — via Ollama (heuristic fallback if unavailable)
+          - 5-layer injection screening — heuristic, ProtectAI classifier, SLM deep analysis, NER PII, metaprompt hardening
+          - NER PII detection — auto-detects and redacts personal names, phone numbers, SSNs, credit cards, addresses in LLM responses (model auto-downloaded on install, ~300 MB)
           - Memory monitor — watches MEMORY.md, HEARTBEAT.md, USER.md
           - Dashboard — localhost web UI showing security posture
           - CLI — scan, export, vault, memory, setup commands

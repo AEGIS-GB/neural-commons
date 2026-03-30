@@ -15,6 +15,8 @@ pub mod cognitive_bridge;
 pub mod config;
 pub mod error;
 pub mod middleware;
+#[cfg(feature = "ner")]
+pub mod ner_pii;
 pub mod proxy;
 pub mod rate_limit;
 pub mod response_screen;

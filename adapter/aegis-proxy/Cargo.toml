@@ -25,3 +25,9 @@ ed25519-dalek.workspace = true
 tokio-stream = "0.1"
 bytes = "1"
 regex = "1"
+ort = { workspace = true, optional = true }
+tokenizers = { workspace = true, optional = true }
+
+[features]
+default = ["ner"]
+ner = ["dep:ort", "dep:tokenizers"]

@@ -4,7 +4,7 @@
 [![Release](https://img.shields.io/github/v/release/LCatGA12/neural-commons)](https://github.com/LCatGA12/neural-commons/releases/latest)
 [![License: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-blue.svg)](LICENSE)
 
-Trust infrastructure for MoltBook bot wardens. A Rust proxy that gives AI agents cryptographic identity, tamper-evident evidence, write protection, credential security, 4-layer prompt injection screening, and channel-aware trust.
+Trust infrastructure for MoltBook bot wardens. A Rust proxy that gives AI agents cryptographic identity, tamper-evident evidence, write protection, credential security, 5-layer prompt injection screening, NER-based PII detection, and channel-aware trust.
 
 **[Why Install Aegis?](docs/WHY_INSTALL_AEGIS.md)** — written by an agent, for agents.
 
@@ -23,7 +23,7 @@ aegis --no-slm
 
 Dashboard: http://localhost:3141/dashboard
 
-Your agent now has evidence recording, write barriers, credential scanning, 4-layer injection screening, and channel-based trust — all running locally. Default mode is observe-only (warns but never blocks).
+Your agent now has evidence recording, write barriers, credential scanning, 5-layer injection screening, NER-based PII detection, and channel-based trust — all running locally. Default mode is observe-only (warns but never blocks).
 
 See the [Quickstart Guide](docs/QUICKSTART.md) for full setup details.
 
@@ -33,11 +33,12 @@ See the [Quickstart Guide](docs/QUICKSTART.md) for full setup details.
 
 Aegis sits between a bot and its upstream LLM provider as a transparent proxy. It watches what happens, records tamper-proof evidence, and protects critical files — all without breaking existing workflows.
 
-- **4-Layer Screening Pipeline** — Defense-in-depth prompt injection detection:
+- **5-Layer Screening Pipeline** — Defense-in-depth prompt injection and data loss prevention:
   1. **Heuristic** (<1ms) — 14-pattern regex for known injection patterns + SSRF detection
   2. **ProtectAI Classifier** (~30ms) — ONNX DeBERTa-v2 ML model, cached at startup
   3. **SLM Deep Analysis** (2-3s) — Local 30B model (Qwen3) for combined injection + recon + SSRF + fetch→exfil analysis, runs async alongside LLM forwarding
-  4. **Metaprompt Hardening** (0ms) — 7 security rules injected into system message (format-agnostic, works with Anthropic + OpenAI APIs)
+  4. **NER PII Detection** (~2ms) — XLM-RoBERTa ONNX model detects and redacts personal names, phone numbers, SSNs, credit cards, addresses, and other PII/PHI in responses. Context-aware: skips dates, city names without addresses, and version numbers. Trust-level controls redaction behavior (log-only, redact, or block).
+  5. **Metaprompt Hardening** (0ms) — 7 security rules injected into system message (format-agnostic, works with Anthropic + OpenAI APIs)
 - **Channel Trust** — Trust level resolved per-channel via signed Ed25519 certificates. Channel identity determines screening behavior: advisory vs blocking classifier, holster presets, SSRF policy. Configurable channel patterns with glob matching.
 - **Evidence Chain** — Every API call produces a signed, hash-chained receipt. SHA-256 linked, Ed25519 signed, stored in append-only SQLite. Verifiable end-to-end with `aegis export --verify`.
 - **Write Barrier** — Triple-layer detection for unauthorized file changes: real-time filesystem watcher, periodic hash sweeps, and outbound proxy interlock. Protects SOUL.md, AGENTS.md, MEMORY.md, .env, and custom files.

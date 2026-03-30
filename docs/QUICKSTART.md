@@ -11,6 +11,7 @@ After install, your agent has:
 - **Write barrier** — blocks unauthorized changes to SOUL.md, AGENTS.md, IDENTITY.md
 - **Credential scanner** — detects leaked API keys in responses
 - **Injection screening** — flags prompt injection attempts (via local SLM or heuristics)
+- **PII detection** — NER-based detection and redaction of personal names, phone numbers, SSNs, credit cards, and addresses in LLM responses. Context-aware (won't flag month names, city names without addresses, or version numbers). Auto-downloads model on first run (~300 MB).
 - **Memory monitor** — watches MEMORY.md and daily logs for suspicious writes
 - **Dashboard** — see everything at localhost:3141/dashboard
 
