@@ -8,8 +8,8 @@
 //! to the real Anthropic API. Integration is a single config change:
 //!   ~/.openclaw/openclaw.json → baseUrl: "http://127.0.0.1:AEGIS_PORT"
 //!
-//! The proxy captures request/response data for evidence recording,
-//! barrier checks, SLM screening, and vault scanning.
+//! The proxy captures request/response data for vault scanning (first),
+//! evidence recording, barrier checks, and SLM screening.
 //!
 //! In pass-through mode: forward without inspection.
 //! In observe-only/enforce mode: run middleware chain before/after forwarding.
@@ -694,7 +694,27 @@ async fn forward_request(
 
     // Run pre-request middleware (skip in pass-through mode)
     if state.config.mode != ProxyMode::PassThrough {
-        // Evidence hook: on_request
+        // Vault hook FIRST: scan request body for credentials before recording
+        // evidence, so we never persist a receipt referencing a body that
+        // contains undetected credentials.
+        if let Some(ref vault) = state.hooks.vault
+            && let Ok(body_str) = std::str::from_utf8(&body_bytes)
+        {
+            let vault_decision = vault.scan(body_str).await;
+            if let middleware::VaultDecision::Detected(ref secrets) = vault_decision {
+                info!(
+                    count = secrets.len(),
+                    "vault detected credentials in request"
+                );
+                if let Some(ref evidence) = state.hooks.evidence
+                    && let Err(e) = evidence.on_vault_detection(&path, "request", secrets).await
+                {
+                    warn!("evidence hook error on vault detection: {e}");
+                }
+            }
+        }
+
+        // Evidence hook: on_request (after vault scan)
         if let Some(ref evidence) = state.hooks.evidence
             && let Err(e) = evidence.on_request(&req_info).await
         {
@@ -728,24 +748,6 @@ async fn forward_request(
                     info!(path = %path, reason = %reason, "barrier would block (observe-only)");
                 }
                 middleware::BarrierDecision::Allow => {}
-            }
-        }
-
-        // Vault hook: scan request body for credentials
-        if let Some(ref vault) = state.hooks.vault
-            && let Ok(body_str) = std::str::from_utf8(&body_bytes)
-        {
-            let vault_decision = vault.scan(body_str).await;
-            if let middleware::VaultDecision::Detected(ref secrets) = vault_decision {
-                info!(
-                    count = secrets.len(),
-                    "vault detected credentials in request"
-                );
-                if let Some(ref evidence) = state.hooks.evidence
-                    && let Err(e) = evidence.on_vault_detection(&path, "request", secrets).await
-                {
-                    warn!("evidence hook error on vault detection: {e}");
-                }
             }
         }
 
