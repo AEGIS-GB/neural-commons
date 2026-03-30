@@ -25,6 +25,9 @@ pub fn trust_to_profile(trust: &aegis_schemas::TrustLevel) -> HolsterProfile {
 
 /// Apply holster policy to an enriched analysis.
 /// Returns a HolsterDecision.
+///
+/// `custom_threshold` is used when `profile` is `Custom`. If `None`,
+/// defaults to 8000 for backward compatibility.
 pub fn apply_holster(
     analysis: &EnrichedAnalysis,
     profile: &HolsterProfile,
@@ -32,11 +35,26 @@ pub fn apply_holster(
     engine: &EngineProfile,
     escalated: bool,
 ) -> HolsterDecision {
+    apply_holster_with_custom(analysis, profile, namespace, engine, escalated, None)
+}
+
+/// Apply holster policy with an optional custom threshold.
+///
+/// When `profile` is `HolsterProfile::Custom`, uses `custom_threshold`
+/// if provided, otherwise defaults to 8000 for backward compatibility.
+pub fn apply_holster_with_custom(
+    analysis: &EnrichedAnalysis,
+    profile: &HolsterProfile,
+    namespace: &Namespace,
+    engine: &EngineProfile,
+    escalated: bool,
+    custom_threshold: Option<u32>,
+) -> HolsterDecision {
     let threshold = match profile {
         HolsterProfile::Aggressive => 6000,
         HolsterProfile::Balanced => 8000,
         HolsterProfile::Permissive => 9000,
-        HolsterProfile::Custom => 8000, // TODO: load from warden config
+        HolsterProfile::Custom => custom_threshold.unwrap_or(8000),
     };
 
     let threshold_exceeded = analysis.threat_score > threshold;
@@ -173,6 +191,56 @@ mod tests {
         );
 
         assert_eq!(decision.compute_cost_bp, 300); // 100 + 200
+    }
+
+    #[test]
+    fn test_custom_profile_uses_configured_threshold() {
+        let analysis = EnrichedAnalysis {
+            schema_version: 2,
+            scoring_version: 1,
+            confidence: 9000,
+            intent: Intent::Inject,
+            threat_score: 7500,
+            dimensions: ThreatDimensions::default(),
+            annotations: vec![],
+            explanation: "test".to_string(),
+        };
+
+        // With custom threshold of 7000, 7500 should exceed → Reject
+        let decision = apply_holster_with_custom(
+            &analysis,
+            &HolsterProfile::Custom,
+            &Namespace::Inbound,
+            &EngineProfile::LocalSlm,
+            false,
+            Some(7000),
+        );
+        assert_eq!(decision.action, HolsterAction::Reject);
+        assert!(decision.threshold_exceeded);
+
+        // With custom threshold of 8000 (default), 7500 should not exceed → Quarantine
+        let decision = apply_holster_with_custom(
+            &analysis,
+            &HolsterProfile::Custom,
+            &Namespace::Inbound,
+            &EngineProfile::LocalSlm,
+            false,
+            Some(8000),
+        );
+        assert_eq!(decision.action, HolsterAction::Quarantine);
+        assert!(!decision.threshold_exceeded);
+
+        // With no custom threshold, defaults to 8000 → Quarantine
+        let decision = apply_holster_with_custom(
+            &analysis,
+            &HolsterProfile::Custom,
+            &Namespace::Inbound,
+            &EngineProfile::LocalSlm,
+            false,
+            None,
+        );
+        assert_eq!(decision.action, HolsterAction::Quarantine);
+        assert!(!decision.threshold_exceeded);
     }
 
     #[test]
