@@ -83,6 +83,8 @@ neural-commons/
 
 ## Request Lifecycle
 
+> Full detailed flow with entity mutations: [docs/architecture/REQUEST_LIFECYCLE.md](docs/architecture/REQUEST_LIFECYCLE.md)
+
 ```
 OpenClaw message_received → aegis-channel-trust plugin signs & registers channel
   → POST /aegis/register-channel {channel, user, ts, sig}
@@ -90,25 +92,33 @@ OpenClaw message_received → aegis-channel-trust plugin signs & registers chann
 
 OpenClaw POST /v1/messages (or /v1/chat/completions)
   → proxy.rs forward_request()
-    → Provider detection (anthropic.rs detect_provider — 422 for unknown)
-    → Channel trust resolution (cognitive_bridge → trust level → holster preset)
+    → Provider detection (host-based matching — 422 for unknown)
+    → Channel trust resolution (per-request context → trust level → holster preset)
     → Rate limiter check (token bucket, keyed by Ed25519 fingerprint, 1000/min burst 50)
+    → VAULT SCAN first (credentials in request body — always enforced)
+    → Evidence hook records request receipt (ApiCall, body hash of final body)
+    → Barrier check (protected file paths + body references)
     → 4-layer screening:
-        1. Heuristic (<1ms) — regex patterns + SSRF detection
-        2. ProtectAI Classifier (~30ms) — ONNX DeBERTa-v2 (blocking on public, advisory on trusted)
-        3. SLM Deep Analysis (async) — Qwen3-30B combined prompt, runs alongside LLM forwarding
-        4. Metaprompt (0ms) — 7 security rules injected into system message
+        FAST LAYERS (blocking, <15ms):
+          1. Heuristic (<1ms) — 14 regex pattern families + encoded content decode
+          2. ProtectAI Classifier (~5-15ms) — ONNX DeBERTa-v2 (blocking on public, advisory on trusted)
+        DEEP LAYER (conditional, 2-3s):
+          3. SLM Deep Analysis — Qwen3-30B via Ollama, structured JSON output
+             Trusted channels: deferred to AFTER response (fire-and-forget)
+             Untrusted channels: sequential BEFORE forwarding (may block)
+        BODY MODIFICATION:
+          4. Metaprompt (0ms) — 7 security rules injected into system message (default: ON)
+    → Body stripping (remove system messages from untrusted channels)
+    → body_hash recomputed after stripping
     → Forward request to upstream (reqwest, 5min timeout)
-    → SSE streaming detection:
-        Content-Type: text/event-stream OR Transfer-Encoding: chunked
-        → spawn background task: read chunks → incremental SHA-256 → forward to client
-        → oneshot channel delivers final hash+size for evidence recording
-    → Non-streaming: buffer full response
-    → Vault hook scans response body (hooks.rs VaultHookImpl → scanner::scan_text)
-    → Vault redaction if credentials detected (scanner::redact_text → masked response)
-    → Evidence hook records receipt (hooks.rs EvidenceHookImpl → EvidenceRecorder)
-    → Traffic recorder captures request/response for dashboard inspector
-    → Response returned (redacted if vault detected credentials)
+    → Response arrives:
+        → Vault scan response body (streaming: at chunk boundaries + final)
+        → DLP/PII screening + redaction (trust-level dependent)
+        → Evidence hook records response receipt (ApiCall)
+        → Traffic recorder captures for dashboard (ring buffer, 200 entries)
+    → Response returned (redacted if vault/DLP detected sensitive content)
+
+Evidence: 2-8 receipts per request cycle (see REQUEST_LIFECYCLE.md for breakdown)
 ```
 
 ## Debugging Map
