@@ -43,7 +43,9 @@ impl SecurityState {
         match self.nonce_registry.lock() {
             Ok(mut registry) => registry.register(nonce),
             Err(_poisoned) => {
-                tracing::error!("nonce registry mutex poisoned — failing closed, rejecting request");
+                tracing::error!(
+                    "nonce registry mutex poisoned — failing closed, rejecting request"
+                );
                 false
             }
         }

@@ -310,7 +310,8 @@ impl BarrierHook for BarrierHookImpl {
             match self.protected_files.lock() {
                 Ok(mgr) => {
                     if mgr.is_critical(path) {
-                        let reason = format!("request targets critical protected path: {}", req_info.path);
+                        let reason =
+                            format!("request targets critical protected path: {}", req_info.path);
                         self.record_and_alert(
                             &req_info.method,
                             &req_info.path,
@@ -341,8 +342,10 @@ impl BarrierHook for BarrierHookImpl {
                         for entry in mgr.list_all() {
                             let upper_name = entry.pattern.to_uppercase();
                             if body_upper.contains(&upper_name) {
-                                let reason =
-                                    format!("request body references protected file: {}", entry.pattern);
+                                let reason = format!(
+                                    "request body references protected file: {}",
+                                    entry.pattern
+                                );
                                 self.record_and_alert(
                                     &req_info.method,
                                     &req_info.path,
