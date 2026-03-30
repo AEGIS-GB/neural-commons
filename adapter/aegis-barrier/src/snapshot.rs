@@ -98,7 +98,8 @@ impl SnapshotStore {
 
     /// Restore a file from its snapshot.
     ///
-    /// Writes to a `.tmp` file first, then renames for atomicity.
+    /// Uses `tempfile::NamedTempFile` in the same directory as the target,
+    /// then `persist()` for an atomic rename — no TOCTOU window.
     /// Returns `Ok(true)` if restored, `Ok(false)` if no snapshot exists,
     /// `Err` on I/O failure.
     pub fn restore(&self, workspace: &Path, rel_path: &Path) -> Result<bool, std::io::Error> {
@@ -111,13 +112,16 @@ impl SnapshotStore {
         };
 
         let abs_path = workspace.join(rel_path);
-        let tmp_path = abs_path.with_extension("aegis-restore.tmp");
 
-        // Write to temp file first
-        std::fs::write(&tmp_path, &snapshot.content)?;
+        // Create temp file in the same directory to ensure same filesystem
+        // (required for atomic rename on Unix)
+        let parent = abs_path.parent().unwrap_or(workspace);
+        let mut tmp_file = tempfile::NamedTempFile::new_in(parent)?;
 
-        // Atomic rename
-        std::fs::rename(&tmp_path, &abs_path)?;
+        std::io::Write::write_all(&mut tmp_file, &snapshot.content)?;
+
+        // persist() atomically replaces the target via rename(2)
+        tmp_file.persist(&abs_path).map_err(|e| e.error)?;
 
         info!(
             path = %rel_path.display(),
