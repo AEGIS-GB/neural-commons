@@ -1,4 +1,15 @@
 //! TRUSTMARK score computation (D13) — weighted sum of 6 dimensions.
+//!
+//! # WARNING: unsafe float arithmetic
+//!
+//! This module uses `f64` internally for dimension scoring and weighted sums.
+//! The design doc (D13/D2) mandates integer basis points for all signed data.
+//! The internal `TrustmarkScore` here is a computation convenience type and
+//! MUST NOT be used directly in signed receipts or wire formats.
+//!
+//! Use [`TrustmarkScore::to_schema_score`] to convert to the
+//! `aegis_schemas::TrustmarkScore` (which uses validated `BasisPoints`)
+//! before persisting or transmitting.
 
 use serde::{Deserialize, Serialize};
 
@@ -414,6 +425,51 @@ impl TrustmarkScore {
     }
 }
 
+impl TrustmarkScore {
+    /// Convert the internal f64-based score to the schema type
+    /// (`aegis_schemas::TrustmarkScore`) which uses validated `BasisPoints`.
+    ///
+    /// All float values are converted by multiplying by 10000 and clamping
+    /// to [0, 10000]. This is the ONLY safe path from internal scoring to
+    /// wire/signed data.
+    pub fn to_schema_score(&self) -> aegis_schemas::TrustmarkScore {
+        let to_bp = |v: f64| aegis_schemas::BasisPoints::clamped((v * 10_000.0).round() as u32);
+
+        // Extract dimension values by name
+        let dim_val = |name: &str| -> f64 {
+            self.dimensions
+                .iter()
+                .find(|d| d.name == name)
+                .map(|d| d.value)
+                .unwrap_or(0.0)
+        };
+
+        let dimensions = aegis_schemas::trustmark::TrustmarkDimensions {
+            relay_reliability: to_bp(dim_val("relay_reliability")),
+            persona_integrity: to_bp(dim_val("persona_integrity")),
+            chain_integrity: to_bp(dim_val("chain_integrity")),
+            contribution_volume: to_bp(dim_val("contribution_volume")),
+            temporal_consistency: to_bp(dim_val("temporal_consistency")),
+            vault_hygiene: to_bp(dim_val("vault_hygiene")),
+        };
+
+        let tier = if self.total >= 0.40 {
+            aegis_schemas::trustmark::Tier::Tier3
+        } else if self.total >= 0.20 {
+            aegis_schemas::trustmark::Tier::Tier2
+        } else {
+            aegis_schemas::trustmark::Tier::Tier1
+        };
+
+        aegis_schemas::TrustmarkScore {
+            score_bp: to_bp(self.total),
+            dimensions,
+            tier,
+            computed_at_ms: self.computed_at_ms as i64,
+        }
+    }
+}
+
 /// Target thresholds per dimension.
 fn target_for(name: &str) -> f64 {
     match name {
@@ -672,6 +728,48 @@ mod tests {
             + WEIGHT_RELAY_RELIABILITY
             + WEIGHT_CONTRIBUTION_VOLUME;
         assert!((sum - 1.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn to_schema_score_clamps_and_converts() {
+        let signals = LocalSignals {
+            protected_files_total: 9,
+            protected_files_intact: 9,
+            manifest_signature_valid: Some(true),
+            between_session_tampers: 0,
+            chain_verified: Some(true),
+            chain_receipt_count: 10000,
+            vault_scans_total: 500,
+            vault_leaks_detected: 0,
+            vault_leaks_redacted: 0,
+            receipt_timestamps: (0..288).map(|i| i * 300_000).collect(),
+            receipts_last_24h: 288,
+            volume_baseline: Some(100),
+            relay_forwarded: 100,
+            relay_failed: 0,
+        };
+        let internal = TrustmarkScore::compute(&signals);
+        let schema = internal.to_schema_score();
+
+        // All BasisPoints values must be in [0, 10000]
+        assert!(schema.score_bp.value() <= 10000);
+        assert!(schema.dimensions.persona_integrity.value() <= 10000);
+        assert!(schema.dimensions.chain_integrity.value() <= 10000);
+        assert!(schema.dimensions.vault_hygiene.value() <= 10000);
+        assert!(schema.dimensions.temporal_consistency.value() <= 10000);
+        assert!(schema.dimensions.relay_reliability.value() <= 10000);
+        assert!(schema.dimensions.contribution_volume.value() <= 10000);
+
+        // Perfect signals should produce a high score
+        assert!(schema.score_bp.value() > 9000, "perfect signals should yield >9000bp, got {}", schema.score_bp.value());
+    }
+
+    #[test]
+    fn to_schema_score_fresh_install() {
+        let internal = TrustmarkScore::compute(&LocalSignals::default());
+        let schema = internal.to_schema_score();
+        // Fresh install should have moderate score
+        assert!(schema.score_bp.value() > 3000 && schema.score_bp.value() < 7000);
     }
 
     #[test]
