@@ -830,7 +830,6 @@ async fn forward_request(
                     .await;
                 if let Some((decision, verdict)) = fast_result {
                     slm_verdict = verdict;
-                    stamp_trust(&mut slm_verdict);
 
                     // Trust policy: deferred tiers (full/trusted) never block on fast layers.
                     // The fast-layer result is logged but the request proceeds.
@@ -891,7 +890,6 @@ async fn forward_request(
                             .screen_deep(&screen_content, classifier_advisory.clone(), trust_ctx)
                             .await;
                         slm_verdict = verdict;
-                        stamp_trust(&mut slm_verdict);
                         match decision {
                             middleware::SlmDecision::Reject(reason)
                                 if state.config.mode == ProxyMode::Enforce =>
@@ -917,6 +915,12 @@ async fn forward_request(
                         }
                     }
                 }
+
+                // Stamp channel trust once, after all SLM paths converge.
+                // Previously called twice (after fast and after deep), which
+                // was redundant and confusing. Early-return (blocked) paths
+                // carry trust via RecordingContext from req_info.channel_trust.
+                stamp_trust(&mut slm_verdict);
             }
         }
     }
