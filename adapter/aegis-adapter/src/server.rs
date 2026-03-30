@@ -135,6 +135,33 @@ pub async fn start(config: AdapterConfig, mode_override: Option<Mode>) -> Result
         "evidence chain loaded"
     );
 
+    // 4b. Spawn automatic rollup background task
+    {
+        let rollup_recorder = recorder.clone();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
+            interval.tick().await; // skip immediate first tick
+            loop {
+                interval.tick().await;
+                let head = rollup_recorder.chain_head();
+                if head.receipt_count >= aegis_evidence::recorder::DEFAULT_ROLLUP_THRESHOLD {
+                    match rollup_recorder.rollup() {
+                        Ok(receipt) => {
+                            tracing::info!(
+                                seq = receipt.core.seq,
+                                "automatic Merkle rollup completed"
+                            );
+                        }
+                        Err(e) => {
+                            tracing::warn!("automatic rollup failed: {e}");
+                        }
+                    }
+                }
+            }
+        });
+        info!("automatic rollup trigger started (check every 60s, threshold={})", aegis_evidence::recorder::DEFAULT_ROLLUP_THRESHOLD);
+    }
+
     // 5. Create shared state
     let adapter_state = Arc::new(AdapterState {
         evidence: recorder.clone(),
