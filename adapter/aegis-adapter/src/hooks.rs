@@ -525,12 +525,9 @@ impl SlmHookImpl {
             classifier_advisory: None,
         };
 
-        // Stamp channel trust from registered context (cognitive bridge)
-        if let Some(trust) = aegis_proxy::cognitive_bridge::get_registered_channel_trust() {
-            v.channel = trust.channel;
-            v.channel_user = trust.user;
-            v.channel_trust_level = Some(format!("{:?}", trust.trust_level).to_lowercase());
-        }
+        // Channel trust is stamped by the `stamp_trust` closure in proxy.rs
+        // AFTER build_verdict returns — no need to read from the global here.
+        // The global ACTIVE_CHANNEL races under concurrent load.
 
         // Classifier advisory passed through function parameter (not a global)
         v.classifier_advisory = classifier_advisory;

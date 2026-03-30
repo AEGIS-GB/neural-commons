@@ -318,7 +318,12 @@ struct ChannelContextResponse {
 static CHANNEL_REGISTRY: std::sync::RwLock<ChannelRegistry> =
     std::sync::RwLock::new(ChannelRegistry::new());
 
-/// Active channel — the most recently registered channel (used for proxy trust resolution).
+/// Active channel — the most recently registered channel.
+///
+/// DEPRECATED: This global is a race condition under concurrent load.
+/// Per-request trust is carried in `RequestInfo::channel_trust` and stamped
+/// onto SLM verdicts by the `stamp_trust` closure in proxy.rs.
+/// New code should NOT read from this global.
 static ACTIVE_CHANNEL: std::sync::RwLock<Option<aegis_schemas::ChannelTrust>> =
     std::sync::RwLock::new(None);
 
@@ -353,6 +358,10 @@ pub struct ChannelRecord {
 }
 
 /// Get the current active channel trust context.
+///
+/// DEPRECATED: This reads from a global that races under concurrent load.
+/// Use `RequestInfo::channel_trust` instead — it carries per-request context.
+#[deprecated(note = "Use per-request RequestInfo::channel_trust instead")]
 pub fn get_registered_channel_trust() -> Option<aegis_schemas::ChannelTrust> {
     ACTIVE_CHANNEL.read().ok()?.clone()
 }
@@ -472,10 +481,9 @@ async fn register_channel_handler(
         registered: true,
     };
 
-    // Store as active channel
-    if let Ok(mut ctx) = ACTIVE_CHANNEL.write() {
-        *ctx = Some(trust);
-    }
+    // NOTE: Previously wrote to ACTIVE_CHANNEL here, but that global races
+    // under concurrent load. Per-request trust is carried in RequestInfo::channel_trust.
+    // The channel registry below is still maintained for observability (dashboard).
 
     // Update channel registry
     let now_ms = crate::middleware::now_ms();
