@@ -31,6 +31,11 @@ pub struct DimensionScore {
     pub target: f64,
     /// Status label: "healthy", "attention", "critical".
     pub status: String,
+    /// Whether this dimension has a real signal source.
+    /// Dimensions backed by unimplemented modules (mesh relay, volume baseline)
+    /// are flagged as estimated so consumers don't treat them as authoritative.
+    #[serde(default)]
+    pub estimated: bool,
 }
 
 /// Complete TRUSTMARK score with all dimensions.
@@ -332,8 +337,9 @@ impl TrustmarkScore {
 
     fn score_relay_reliability(s: &LocalSignals) -> DimensionScore {
         let total = s.relay_forwarded + s.relay_failed;
+        let is_estimated = total == 0; // No real signal source until mesh is implemented
         let (value, reason) = if total == 0 {
-            (0.5, "mesh relay not active".into())
+            (0.5, "mesh relay not active — estimated".into())
         } else {
             let rate = s.relay_forwarded as f64 / total as f64;
             (
@@ -353,7 +359,7 @@ impl TrustmarkScore {
         } else {
             "Mesh relay activates in Tier 3. Default score 0.5 until then.".into()
         };
-        dim(
+        let mut d = dim(
             "relay_reliability",
             value,
             WEIGHT_RELAY_RELIABILITY,
@@ -361,13 +367,16 @@ impl TrustmarkScore {
             formula,
             inputs,
             improve,
-        )
+        );
+        d.estimated = is_estimated;
+        d
     }
 
     fn score_contribution_volume(s: &LocalSignals) -> DimensionScore {
         let baseline = s.volume_baseline.unwrap_or(100);
+        let is_estimated = s.volume_baseline.is_none();
         let (value, reason) = if baseline == 0 {
-            (0.5, "no baseline configured".into())
+            (0.5, "no baseline configured — estimated".into())
         } else {
             let ratio = (s.receipts_last_24h as f64 / baseline as f64).min(1.0);
             (
@@ -391,7 +400,7 @@ impl TrustmarkScore {
                 baseline
             )
         };
-        dim(
+        let mut d = dim(
             "contribution_volume",
             value,
             WEIGHT_CONTRIBUTION_VOLUME,
@@ -399,7 +408,9 @@ impl TrustmarkScore {
             formula,
             inputs,
             improve,
-        )
+        );
+        d.estimated = is_estimated;
+        d
     }
 }
 
@@ -448,6 +459,7 @@ fn dim(
         improve,
         target,
         status,
+        estimated: false,
     }
 }
 
