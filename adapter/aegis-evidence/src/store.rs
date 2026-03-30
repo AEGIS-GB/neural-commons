@@ -262,6 +262,38 @@ impl EvidenceStore {
 
         Ok(true)
     }
+
+    /// Create a backup of the evidence database at the given path.
+    ///
+    /// Uses SQLite's `VACUUM INTO` to create a consistent, compacted copy.
+    /// The destination file must not already exist.
+    pub fn backup(&self, dest: &Path) -> Result<(), EvidenceError> {
+        let dest_str = dest.to_str().ok_or_else(|| {
+            EvidenceError::StoreError("backup path contains invalid UTF-8".to_string())
+        })?;
+        self.db
+            .execute_batch(&format!("VACUUM INTO '{}'", dest_str.replace('\'', "''")))
+            .map_err(|e| EvidenceError::StoreError(format!("backup failed: {e}")))?;
+        Ok(())
+    }
+
+    /// Run SQLite integrity check on the evidence database.
+    ///
+    /// Returns `Ok(())` if the database passes integrity check,
+    /// or an error describing the integrity failure.
+    pub fn integrity_check(&self) -> Result<(), EvidenceError> {
+        let result: String = self
+            .db
+            .query_row("PRAGMA integrity_check", [], |row| row.get(0))
+            .map_err(|e| EvidenceError::StoreError(format!("integrity_check failed: {e}")))?;
+        if result == "ok" {
+            Ok(())
+        } else {
+            Err(EvidenceError::StoreError(format!(
+                "integrity check failed: {result}"
+            )))
+        }
+    }
 }
 
 /// Create database tables if they don't exist.
@@ -407,6 +439,55 @@ mod tests {
     fn empty_chain_is_valid() {
         let store = EvidenceStore::open_in_memory().unwrap();
         assert!(store.verify_full_chain().unwrap());
+    }
+
+    #[test]
+    fn integrity_check_passes_on_fresh_db() {
+        let store = EvidenceStore::open_in_memory().unwrap();
+        assert!(store.integrity_check().is_ok());
+    }
+
+    #[test]
+    fn integrity_check_passes_after_receipts() {
+        let store = EvidenceStore::open_in_memory().unwrap();
+        let key = generate_keypair();
+        let bot_id = ed25519::fingerprint_hex(&key.verifying_key());
+        let mut state = init_genesis();
+
+        for _ in 0..3 {
+            let r = create_receipt(&key, &bot_id, ReceiptType::ApiCall, make_context(), &state)
+                .unwrap();
+            state = advance_chain_state(&state, &r);
+            store.append_receipt(&r, &state).unwrap();
+        }
+
+        assert!(store.integrity_check().is_ok());
+    }
+
+    #[test]
+    fn backup_creates_copy() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let db_path = tmp.path().join("evidence.db");
+        let store = EvidenceStore::open(&db_path).unwrap();
+        let key = generate_keypair();
+        let bot_id = ed25519::fingerprint_hex(&key.verifying_key());
+        let mut state = init_genesis();
+
+        for _ in 0..3 {
+            let r = create_receipt(&key, &bot_id, ReceiptType::ApiCall, make_context(), &state)
+                .unwrap();
+            state = advance_chain_state(&state, &r);
+            store.append_receipt(&r, &state).unwrap();
+        }
+
+        let backup_path = tmp.path().join("backup.db");
+        store.backup(&backup_path).unwrap();
+        assert!(backup_path.exists());
+
+        // Open the backup and verify it has the same data
+        let backup_store = EvidenceStore::open(&backup_path).unwrap();
+        assert_eq!(backup_store.get_receipt_count().unwrap(), 3);
+        assert!(backup_store.integrity_check().is_ok());
     }
 
     #[test]

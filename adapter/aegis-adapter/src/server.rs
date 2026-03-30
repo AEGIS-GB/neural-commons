@@ -137,6 +137,12 @@ pub async fn start(config: AdapterConfig, mode_override: Option<Mode>) -> Result
         alerter.spawn(alert_tx.subscribe());
     }
 
+    // 4a2. Run integrity check on evidence database
+    match recorder.integrity_check() {
+        Ok(()) => info!("evidence database integrity check passed"),
+        Err(e) => warn!("evidence database integrity check failed: {e}"),
+    }
+
     let chain_head = recorder.chain_head();
     info!(
         seq = chain_head.head_seq,
