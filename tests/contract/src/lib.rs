@@ -513,3 +513,172 @@ mod crypto_tests {
         assert_ne!(seed_empty, seed_pass);
     }
 }
+
+#[cfg(test)]
+mod adversarial_tests {
+    use aegis_crypto::rfc8785;
+    use aegis_schemas::receipt::{
+        GENESIS_PREV_HASH, Receipt, ReceiptContext, ReceiptCore, ReceiptType, RollupDetail,
+        RollupHistogram, generate_blinding_nonce,
+    };
+    use aegis_schemas::trustmark::{Tier, TrustmarkDimensions, TrustmarkScore};
+    use aegis_schemas::BasisPoints;
+    use std::collections::HashMap;
+    use uuid::Uuid;
+
+    #[test]
+    fn test_basis_points_overflow_rejected() {
+        // Values above 10000 must be rejected
+        assert!(BasisPoints::new(10001).is_none());
+        assert!(BasisPoints::new(20000).is_none());
+        assert!(BasisPoints::new(u32::MAX).is_none());
+
+        // Deserialization must also reject
+        let result: Result<BasisPoints, _> = serde_json::from_str("10001");
+        assert!(result.is_err());
+        let result: Result<BasisPoints, _> = serde_json::from_str("99999");
+        assert!(result.is_err());
+
+        // Boundary: 10000 is valid
+        assert!(BasisPoints::new(10000).is_some());
+    }
+
+    #[test]
+    fn test_receipt_context_optional_fields_omitted() {
+        // All optional fields set to None should be omitted from JSON, not null
+        let context = ReceiptContext {
+            blinding_nonce: generate_blinding_nonce(),
+            enforcement_mode: None,
+            action: None,
+            subject: None,
+            trigger: None,
+            outcome: None,
+            detail: None,
+            enterprise: None,
+        };
+        let json = serde_json::to_value(&context).unwrap();
+
+        // None fields must be absent, not present as null
+        assert!(json.get("action").is_none(), "action must be omitted, not null");
+        assert!(json.get("subject").is_none(), "subject must be omitted, not null");
+        assert!(json.get("trigger").is_none(), "trigger must be omitted, not null");
+        assert!(json.get("outcome").is_none(), "outcome must be omitted, not null");
+        assert!(json.get("detail").is_none(), "detail must be omitted, not null");
+        assert!(json.get("enterprise").is_none(), "enterprise must be omitted, not null");
+        assert!(json.get("enforcement_mode").is_none(), "enforcement_mode must be omitted, not null");
+
+        // blinding_nonce must always be present
+        assert!(json.get("blinding_nonce").is_some());
+
+        // Round-trip through serialization
+        let json_str = serde_json::to_string(&context).unwrap();
+        let deserialized: ReceiptContext = serde_json::from_str(&json_str).unwrap();
+        assert_eq!(deserialized.action, None);
+        assert_eq!(deserialized.subject, None);
+    }
+
+    #[test]
+    fn test_unicode_bot_id_in_receipt() {
+        // Non-ASCII bot_id must canonicalize deterministically
+        let unicode_bot_id = "\u{1F600}\u{1F47B}\u{2764}\u{FE0F}emoji-bot-\u{00E9}\u{00FC}";
+        let core = ReceiptCore {
+            id: Uuid::now_v7(),
+            bot_id: unicode_bot_id.to_string(),
+            receipt_type: ReceiptType::ApiCall,
+            ts_ms: 1740000000000,
+            prev_hash: GENESIS_PREV_HASH.to_string(),
+            payload_hash: "b".repeat(64),
+            seq: 1,
+            sig: "c".repeat(128),
+        };
+
+        // Canonicalize twice and verify determinism
+        let canonical1 = rfc8785::canonicalize(&core).unwrap();
+        let canonical2 = rfc8785::canonicalize(&core).unwrap();
+        assert_eq!(canonical1, canonical2, "canonical JSON must be deterministic with unicode bot_id");
+
+        // Round-trip must preserve the unicode
+        let json = serde_json::to_string(&core).unwrap();
+        let deserialized: ReceiptCore = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.bot_id, unicode_bot_id);
+    }
+
+    #[test]
+    fn test_trustmark_score_boundary_values() {
+        // Test BasisPoints at exact boundaries: 0, 1, 9999, 10000
+        let boundaries = [0u32, 1, 9999, 10000];
+        for &val in &boundaries {
+            let bp = BasisPoints::new(val).unwrap_or_else(|| panic!("BasisPoints({val}) should be valid"));
+            assert_eq!(bp.value(), val);
+
+            // Serialize and deserialize
+            let json = serde_json::to_string(&bp).unwrap();
+            let deserialized: BasisPoints = serde_json::from_str(&json).unwrap();
+            assert_eq!(deserialized.value(), val);
+        }
+
+        // Build a full TrustmarkScore at boundary values
+        let score = TrustmarkScore {
+            score_bp: BasisPoints::new(0).unwrap(),
+            dimensions: TrustmarkDimensions {
+                relay_reliability: BasisPoints::new(0).unwrap(),
+                persona_integrity: BasisPoints::new(1).unwrap(),
+                chain_integrity: BasisPoints::new(9999).unwrap(),
+                contribution_volume: BasisPoints::new(10000).unwrap(),
+                temporal_consistency: BasisPoints::new(0).unwrap(),
+                vault_hygiene: BasisPoints::new(10000).unwrap(),
+            },
+            tier: Tier::Tier1,
+            computed_at_ms: 1740000000000,
+        };
+        let json = serde_json::to_string(&score).unwrap();
+        let deserialized: TrustmarkScore = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.dimensions.persona_integrity.value(), 1);
+        assert_eq!(deserialized.dimensions.chain_integrity.value(), 9999);
+        assert_eq!(deserialized.dimensions.contribution_volume.value(), 10000);
+        assert_eq!(deserialized.dimensions.vault_hygiene.value(), 10000);
+    }
+
+    #[test]
+    fn test_rollup_receipt_count_mismatch() {
+        // Create a RollupDetail with mismatched counts
+        let mut type_counts = HashMap::new();
+        type_counts.insert("api_call".to_string(), 50u64);
+        type_counts.insert("write_barrier".to_string(), 10u64);
+
+        let rollup = RollupDetail {
+            seq_start: 1,
+            seq_end: 100,
+            receipt_count: 100,  // claims 100 receipts
+            merkle_root: "d".repeat(64),
+            head_hash: "e".repeat(64),
+            histogram: RollupHistogram {
+                type_counts: type_counts.clone(),
+                severity_counts: None,
+            },
+        };
+
+        // The histogram type_counts sum to 60, but receipt_count claims 100.
+        // This mismatch should be detectable by consumers.
+        let histogram_total: u64 = rollup.histogram.type_counts.values().sum();
+        assert_ne!(
+            histogram_total, rollup.receipt_count,
+            "mismatch should be detectable: histogram total ({}) != receipt_count ({})",
+            histogram_total, rollup.receipt_count
+        );
+
+        // Verify the rollup serializes and deserializes correctly despite mismatch
+        let json = serde_json::to_string(&rollup).unwrap();
+        let deserialized: RollupDetail = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.receipt_count, 100);
+        let deser_total: u64 = deserialized.histogram.type_counts.values().sum();
+        assert_eq!(deser_total, 60);
+
+        // Verify seq range vs receipt_count consistency check
+        let seq_range_count = rollup.seq_end - rollup.seq_start + 1;
+        assert_eq!(
+            seq_range_count, rollup.receipt_count,
+            "seq range matches receipt_count (this is the primary invariant)"
+        );
+    }
+}
