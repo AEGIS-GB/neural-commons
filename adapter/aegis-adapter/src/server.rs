@@ -95,6 +95,9 @@ pub enum StartupError {
 pub async fn start(config: AdapterConfig, mode_override: Option<Mode>) -> Result<(), StartupError> {
     let start_time = Instant::now();
 
+    // 0. Validate configuration
+    config.validate().map_err(StartupError::Config)?;
+
     // 1. Determine operating mode
     let mode = mode_override.unwrap_or_else(|| config.mode.clone().into());
     let mode_controller = Arc::new(ModeController::new(mode));

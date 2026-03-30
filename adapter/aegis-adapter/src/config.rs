@@ -376,6 +376,24 @@ impl AdapterConfig {
         Ok(config)
     }
 
+    /// Validate configuration values at startup.
+    /// Returns an error string describing the first invalid field found.
+    pub fn validate(&self) -> Result<(), String> {
+        if self.proxy.rate_limit_per_minute == 0 {
+            return Err("proxy.rate_limit_per_minute must be > 0".to_string());
+        }
+        if self.proxy.burst_size == 0 {
+            return Err("proxy.burst_size must be > 0".to_string());
+        }
+        if self.proxy.max_body_size == 0 {
+            return Err("proxy.max_body_size must be > 0".to_string());
+        }
+        if self.slm.slm_timeout_secs == 0 {
+            return Err("slm.slm_timeout_secs must be > 0".to_string());
+        }
+        Ok(())
+    }
+
     /// Load from default location (.aegis/config.toml) or return defaults.
     pub fn load_or_default() -> Self {
         let default_path = PathBuf::from(".aegis").join("config.toml");
@@ -409,5 +427,39 @@ mod tests {
         let toml_str = toml::to_string_pretty(&config).unwrap();
         let parsed: AdapterConfig = toml::from_str(&toml_str).unwrap();
         assert_eq!(parsed.proxy.listen_addr, config.proxy.listen_addr);
+    }
+
+    #[test]
+    fn default_config_validates() {
+        let config = AdapterConfig::default();
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn zero_rate_limit_fails_validation() {
+        let mut config = AdapterConfig::default();
+        config.proxy.rate_limit_per_minute = 0;
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn zero_burst_size_fails_validation() {
+        let mut config = AdapterConfig::default();
+        config.proxy.burst_size = 0;
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn zero_max_body_size_fails_validation() {
+        let mut config = AdapterConfig::default();
+        config.proxy.max_body_size = 0;
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn zero_slm_timeout_fails_validation() {
+        let mut config = AdapterConfig::default();
+        config.slm.slm_timeout_secs = 0;
+        assert!(config.validate().is_err());
     }
 }
