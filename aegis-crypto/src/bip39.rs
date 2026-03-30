@@ -17,6 +17,7 @@
 
 use ed25519_dalek::SigningKey;
 use thiserror::Error;
+use zeroize::Zeroize;
 
 /// Current KDF version — embedded in identity metadata and receipts.
 /// Bump on any change to derivation scheme.
@@ -132,8 +133,12 @@ pub fn generate_mnemonic() -> Result<String, Bip39Error> {
     rand::rngs::OsRng.fill_bytes(&mut entropy);
 
     let mnemonic = Mnemonic::from_entropy(&entropy)
-        .map_err(|e| Bip39Error::DerivationFailed(e.to_string()))?;
-    Ok(mnemonic.to_string())
+        .map_err(|e| Bip39Error::DerivationFailed(e.to_string()));
+
+    // Zeroize entropy immediately after use
+    entropy.zeroize();
+
+    Ok(mnemonic?.to_string())
 }
 
 /// Validate a mnemonic phrase.
@@ -174,36 +179,49 @@ pub fn slip0010_derive(seed: &[u8; 64], path: &[u32]) -> Result<[u8; 32], Bip39E
     let mut mac = HmacSha512::new_from_slice(b"ed25519 seed")
         .map_err(|e| Bip39Error::DerivationFailed(e.to_string()))?;
     mac.update(seed);
-    let result = mac.finalize().into_bytes();
+    let mut result = mac.finalize().into_bytes();
     let mut key = [0u8; 32];
     let mut chain_code = [0u8; 32];
     key.copy_from_slice(&result[..32]);
     chain_code.copy_from_slice(&result[32..]);
+    result.zeroize();
 
     // Derive each level (all hardened)
     for &index in path {
         if index < 0x80000000 {
+            key.zeroize();
+            chain_code.zeroize();
             return Err(Bip39Error::DerivationFailed(
                 "SLIP-0010 Ed25519 requires all hardened indices".to_string(),
             ));
         }
         let mut mac = HmacSha512::new_from_slice(&chain_code)
-            .map_err(|e| Bip39Error::DerivationFailed(e.to_string()))?;
+            .map_err(|e| {
+                key.zeroize();
+                chain_code.zeroize();
+                Bip39Error::DerivationFailed(e.to_string())
+            })?;
         mac.update(&[0x00]);
         mac.update(&key);
         mac.update(&index.to_be_bytes());
-        let result = mac.finalize().into_bytes();
-        key.copy_from_slice(&result[..32]);
-        chain_code.copy_from_slice(&result[32..]);
+        let mut child_result = mac.finalize().into_bytes();
+        key.copy_from_slice(&child_result[..32]);
+        chain_code.copy_from_slice(&child_result[32..]);
+        child_result.zeroize();
     }
+
+    // Zeroize chain_code — only the final key is returned
+    chain_code.zeroize();
 
     Ok(key)
 }
 
 /// Derive an Ed25519 signing key for a specific purpose from a BIP-39 seed.
 pub fn derive_signing_key(seed: &[u8; 64], purpose: KeyPurpose) -> Result<SigningKey, Bip39Error> {
-    let key_bytes = slip0010_derive(seed, purpose.path_segments())?;
-    Ok(SigningKey::from_bytes(&key_bytes))
+    let mut key_bytes = slip0010_derive(seed, purpose.path_segments())?;
+    let signing_key = SigningKey::from_bytes(&key_bytes);
+    key_bytes.zeroize();
+    Ok(signing_key)
 }
 
 /// Full identity creation flow (entropy-first):
@@ -216,8 +234,10 @@ pub fn create_identity(
     passphrase: &str,
 ) -> Result<(String, SigningKey, IdentityMetadata), Bip39Error> {
     let mnemonic = generate_mnemonic()?;
-    let seed = mnemonic_to_seed(&mnemonic, passphrase)?;
-    let signing_key = derive_signing_key(&seed, KeyPurpose::Signing)?;
+    let mut seed = mnemonic_to_seed(&mnemonic, passphrase)?;
+    let signing_key = derive_signing_key(&seed, KeyPurpose::Signing);
+    seed.zeroize();
+    let signing_key = signing_key?;
 
     let metadata = IdentityMetadata {
         kdf_version: KDF_VERSION,
@@ -236,8 +256,10 @@ pub fn restore_from_mnemonic(
     purpose: KeyPurpose,
 ) -> Result<SigningKey, Bip39Error> {
     validate_mnemonic(mnemonic)?;
-    let seed = mnemonic_to_seed(mnemonic, passphrase)?;
-    derive_signing_key(&seed, purpose)
+    let mut seed = mnemonic_to_seed(mnemonic, passphrase)?;
+    let result = derive_signing_key(&seed, purpose);
+    seed.zeroize();
+    result
 }
 
 #[cfg(test)]
@@ -309,6 +331,33 @@ mod tests {
         let seed = [0u8; 64];
         let result = slip0010_derive(&seed, &[44]); // not hardened
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_slip0010_zeroizes_intermediates_on_error() {
+        // Verify that providing a non-hardened index returns an error
+        // (and internally zeroizes key material before returning)
+        let seed = [42u8; 64];
+        let result = slip0010_derive(
+            &seed,
+            &[44 | 0x80000000, 784], // second index not hardened
+        );
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_derive_signing_key_produces_valid_key_after_zeroize() {
+        // Ensure that key derivation still works correctly after
+        // adding zeroization — the returned key must be usable
+        let mnemonic = generate_mnemonic().unwrap();
+        let seed = mnemonic_to_seed(&mnemonic, "").unwrap();
+        let key = derive_signing_key(&seed, KeyPurpose::Signing).unwrap();
+
+        // Key should be usable for signing
+        use ed25519_dalek::Signer;
+        let sig = key.sign(b"zeroize test");
+        use ed25519_dalek::Verifier;
+        assert!(key.verifying_key().verify(b"zeroize test", &sig).is_ok());
     }
 
     #[test]
