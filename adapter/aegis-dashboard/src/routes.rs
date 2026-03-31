@@ -871,25 +871,48 @@ async fn api_traffic(State(state): State<Arc<DashboardSharedState>>) -> Json<ser
         .iter()
         .rev()
         .map(|e| {
-            serde_json::json!({
-                "id": e.id,
-                "ts_ms": e.ts_ms,
-                "method": e.method,
-                "path": e.path,
-                "status": e.status,
-                "request_size": e.request_size,
-                "response_size": e.response_size,
-                "duration_ms": e.duration_ms,
-                "is_streaming": e.is_streaming,
-                "slm_duration_ms": e.slm_duration_ms,
-                "slm_verdict": e.slm_verdict,
-                "slm_threat_score": e.slm_threat_score,
-                "channel": e.channel,
-                "trust_level": e.trust_level,
-                "model": e.model,
-                "context": e.context,
-                "response_screen": e.response_screen,
-            })
+            {
+                // Extract classifier_ms and other SLM detail fields for the list view
+                let classifier_ms = e
+                    .slm_detail
+                    .as_ref()
+                    .and_then(|d| d.get("classifier_ms"))
+                    .and_then(|v| v.as_u64());
+                let classifier_advisory = e
+                    .slm_detail
+                    .as_ref()
+                    .and_then(|d| d.get("classifier_advisory"))
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string());
+                let pass_a_ms = e
+                    .slm_detail
+                    .as_ref()
+                    .and_then(|d| d.get("pass_a_ms"))
+                    .and_then(|v| v.as_u64());
+
+                serde_json::json!({
+                    "id": e.id,
+                    "ts_ms": e.ts_ms,
+                    "method": e.method,
+                    "path": e.path,
+                    "status": e.status,
+                    "request_size": e.request_size,
+                    "response_size": e.response_size,
+                    "duration_ms": e.duration_ms,
+                    "is_streaming": e.is_streaming,
+                    "slm_duration_ms": e.slm_duration_ms,
+                    "slm_verdict": e.slm_verdict,
+                    "slm_threat_score": e.slm_threat_score,
+                    "classifier_ms": classifier_ms,
+                    "classifier_advisory": classifier_advisory,
+                    "pass_a_ms": pass_a_ms,
+                    "channel": e.channel,
+                    "trust_level": e.trust_level,
+                    "model": e.model,
+                    "context": e.context,
+                    "response_screen": e.response_screen,
+                })
+            }
         })
         .collect();
 
@@ -1068,21 +1091,40 @@ fn parse_sse_response_text(sse_body: &str) -> Option<String> {
         }
     }
 
-    // Second pass: reassemble from delta events (if response.completed was truncated)
+    // Second pass: reassemble from delta events
     let mut text = String::new();
     for line in sse_body.lines() {
         let data = match line
             .strip_prefix("data: ")
             .or_else(|| line.strip_prefix("data:"))
         {
-            Some(d) => d,
+            Some(d) => d.trim(),
             None => continue,
         };
-        if let Ok(evt) = serde_json::from_str::<serde_json::Value>(data)
-            && evt.get("type").and_then(|t| t.as_str()) == Some("response.output_text.delta")
-            && let Some(delta) = evt.get("delta").and_then(|d| d.as_str())
-        {
-            text.push_str(delta);
+        if data == "[DONE]" {
+            continue;
+        }
+        if let Ok(evt) = serde_json::from_str::<serde_json::Value>(data) {
+            // Responses API: response.output_text.delta
+            if evt.get("type").and_then(|t| t.as_str()) == Some("response.output_text.delta")
+                && let Some(delta) = evt.get("delta").and_then(|d| d.as_str())
+            {
+                text.push_str(delta);
+                continue;
+            }
+            // Chat Completions SSE: choices[].delta.content
+            // Format: {"choices":[{"delta":{"content":"token"}}]}
+            if let Some(choices) = evt.get("choices").and_then(|c| c.as_array()) {
+                for choice in choices {
+                    if let Some(content) = choice
+                        .get("delta")
+                        .and_then(|d| d.get("content"))
+                        .and_then(|c| c.as_str())
+                    {
+                        text.push_str(content);
+                    }
+                }
+            }
         }
     }
 

@@ -58,7 +58,7 @@ pub struct TrafficEntry {
     pub response_screen: Option<serde_json::Value>,
 }
 
-const MAX_BODY_CAPTURE: usize = 256 * 1024; // 256KB per body — large enough for streaming responses with tool schemas
+const MAX_BODY_CAPTURE: usize = 512 * 1024; // 512KB per body — must be large enough for OpenClaw system prompt + message history + user message
 
 /// In-memory ring buffer for traffic inspection.
 pub struct TrafficStore {
