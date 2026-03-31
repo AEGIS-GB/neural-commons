@@ -44,6 +44,10 @@ use crate::middleware::{self, MiddlewareHooks, RequestInfo, ResponseInfo};
 struct RecordingContext {
     /// If true, the handler already recorded this request — middleware should skip.
     handler_recorded: bool,
+    /// If true, this request was actually proxied to an upstream LLM.
+    /// Only proxied requests should be recorded as traffic.
+    /// Internal routes (/aegis/*, /dashboard/*, /favicon.ico) are never proxied.
+    proxied: bool,
     slm_verdict: Option<middleware::SlmVerdict>,
     trust_level: Option<String>,
     context: Option<String>,
@@ -264,12 +268,6 @@ pub async fn start_with_traffic_full(
 /// Recording middleware — wraps every proxy request.
 /// Captures request body before the handler, records response after.
 /// This is the SINGLE recording point — no manual recording in the handler.
-/// Returns true for internal Aegis paths that should not be recorded as traffic.
-/// These are management/observability endpoints, not proxied LLM requests.
-fn is_internal_path(path: &str) -> bool {
-    path.starts_with("/aegis/") || path.starts_with("/dashboard") || path == "/favicon.ico"
-}
-
 async fn recording_middleware(
     State(state): State<AppState>,
     connect_info: axum::extract::ConnectInfo<std::net::SocketAddr>,
@@ -280,11 +278,6 @@ async fn recording_middleware(
     let path = req.uri().path().to_string();
     let _source_ip = connect_info.0.ip().to_string();
     let start = std::time::Instant::now();
-
-    // Skip recording for internal Aegis paths (status, dashboard, favicon)
-    if is_internal_path(&path) {
-        return next.run(req).await;
-    }
 
     // Extract request body for recording (clone before handler consumes it)
     let (parts, body) = req.into_parts();
@@ -316,23 +309,27 @@ async fn recording_middleware(
         .map(|ct| ct.contains("text/event-stream"))
         .unwrap_or(false);
 
-    // Record traffic — but only if the handler didn't already record.
-    // Handler sets RecordingContext { handler_recorded: true } on paths where it records
-    // (non-streaming completed, streaming stream-task). Middleware only records early
-    // rejections (401, 422, 429) and SLM blocks (403 with verdict in RecordingContext).
+    // Record traffic — but ONLY for proxied requests.
+    // RecordingContext is set exclusively by forward_request (the proxy handler).
+    // Internal routes (dashboard, /aegis/*, favicon) never set it, so they are
+    // never recorded. This avoids hardcoded path filters.
     let rec_ctx = response.extensions().get::<RecordingContext>().cloned();
-    let handler_recorded = rec_ctx
-        .as_ref()
-        .map(|c| c.handler_recorded)
-        .unwrap_or(false);
+
+    // No RecordingContext or proxied=false = not a proxied LLM request = don't record.
+    let rec_ctx = match rec_ctx {
+        Some(ctx) if ctx.proxied => ctx,
+        _ => return response,
+    };
+
+    let handler_recorded = rec_ctx.handler_recorded;
 
     if !handler_recorded && !is_streaming {
         if let Some(ref recorder) = state.traffic_recorder {
             let model = extract_model_from_body(&body_for_record);
             let channel_ip = Some(_source_ip.as_str());
-            let trust = rec_ctx.as_ref().and_then(|c| c.trust_level.clone());
-            let context_str = rec_ctx.as_ref().and_then(|c| c.context.clone());
-            let slm_v = rec_ctx.as_ref().and_then(|c| c.slm_verdict.clone());
+            let trust = rec_ctx.trust_level.clone();
+            let context_str = rec_ctx.context.clone();
+            let slm_v = rec_ctx.slm_verdict.clone();
             // No global fallback — context comes from RecordingContext only
             let context = context_str.as_deref();
 
@@ -557,6 +554,7 @@ async fn forward_request(
     // Extract request info
     let method = req.method().clone();
     let path = req.uri().path().to_string();
+
     let query = req
         .uri()
         .query()
@@ -794,6 +792,7 @@ async fn forward_request(
                             format!("{:?}", req_info.channel_trust.trust_level).to_lowercase(),
                         ),
                         context: req_info.channel_trust.channel.clone(),
+                        proxied: true,
                         ..Default::default()
                     });
                     return Ok(resp);
@@ -852,6 +851,7 @@ async fn forward_request(
                     |reason: &str, verdict: &Option<middleware::SlmVerdict>| {
                         let ctx = RecordingContext {
                             handler_recorded: false, // middleware should record this
+                            proxied: true,
                             slm_verdict: verdict.clone(),
                             trust_level: Some(
                                 format!("{:?}", req_info.channel_trust.trust_level).to_lowercase(),
@@ -1429,6 +1429,7 @@ async fn forward_request(
         // Signal to middleware: stream task records this, not middleware
         resp.extensions_mut().insert(RecordingContext {
             handler_recorded: true,
+            proxied: true,
             ..Default::default()
         });
         return Ok(resp);
@@ -1517,6 +1518,7 @@ async fn forward_request(
                     .into_response();
                 resp.extensions_mut().insert(RecordingContext {
                     handler_recorded: false,
+                    proxied: true,
                     trust_level: Some(
                         format!("{:?}", req_info.channel_trust.trust_level).to_lowercase(),
                     ),
@@ -1632,6 +1634,7 @@ async fn forward_request(
     // Signal to middleware: handler already recorded this request
     response.extensions_mut().insert(RecordingContext {
         handler_recorded: true,
+        proxied: true,
         ..Default::default()
     });
 
