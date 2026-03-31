@@ -33,6 +33,7 @@ struct TrafficSummary {
     model: Option<String>,
     context: Option<String>,
     response_screen: Option<serde_json::Value>,
+    request_id: Option<String>,
 }
 
 #[derive(Deserialize, Debug)]
@@ -62,6 +63,21 @@ struct TrafficDetailEntry {
     model: Option<String>,
     context: Option<String>,
     response_screen: Option<serde_json::Value>,
+    request_id: Option<String>,
+}
+
+#[derive(Deserialize, Debug)]
+struct ReceiptsResponse {
+    request_id: Option<String>,
+    receipts: Option<Vec<ReceiptInfo>>,
+}
+
+#[derive(Deserialize, Debug)]
+struct ReceiptInfo {
+    receipt_type: Option<String>,
+    action: Option<String>,
+    outcome: Option<String>,
+    id: Option<String>,
 }
 
 #[derive(Deserialize, Debug)]
@@ -147,7 +163,13 @@ pub fn run(
     show_body: bool,
     show_health: bool,
     num: usize,
+    watch: bool,
 ) {
+    if watch {
+        run_watch(aegis_url, channel_filter, verdict_filter, num);
+        return;
+    }
+
     let dashboard_base = format!("{}/dashboard/api", aegis_url.trim_end_matches('/'));
 
     if let Some(entry_id) = id {
@@ -201,6 +223,16 @@ fn fetch_json<T: for<'de> Deserialize<'de>>(url: &str) -> Option<T> {
         return None;
     }
     resp.json().ok()
+}
+
+/// Color an SLM verdict string with ANSI escapes.
+fn color_verdict(verdict: &str) -> String {
+    match verdict {
+        "admit" => format!("\x1b[32m{:<8}\x1b[0m", "admit"),
+        "REJECT" | "reject" => format!("\x1b[31m{:<8}\x1b[0m", "REJECT"),
+        "QRNTNE" | "quarantine" => format!("\x1b[33m{:<8}\x1b[0m", "QRNTNE"),
+        other => format!("{:<8}", other),
+    }
 }
 
 fn show_table(
@@ -264,10 +296,10 @@ fn show_table(
     // Header
     println!();
     println!(
-        " {:<5} {:<10} {:<16} {:<9} {:<18} {:<14} {:<8} {:>8}",
-        "#", "Time", "Channel", "Trust", "Context", "Model", "SLM", "Duration"
+        " {:<5} {:<10} {:<9} {:<16} {:<9} {:<14} {:<8} {:<6} {:>8}",
+        "#", "Time", "ReqID", "Channel", "Trust", "Model", "SLM", "Score", "Duration"
     );
-    println!("{}", "━".repeat(106));
+    println!("{}", "\u{2501}".repeat(106));
 
     for entry in &entries {
         let time = {
@@ -279,44 +311,42 @@ fn show_table(
             format!("{:02}:{:02}:{:02}", h, m, s)
         };
 
+        let req_id = entry
+            .request_id
+            .as_deref()
+            .map(|r| r.chars().take(8).collect::<String>())
+            .unwrap_or_else(|| "\u{2014}".to_string());
+
         let channel = entry
             .channel
             .as_deref()
-            .unwrap_or("—")
+            .unwrap_or("\u{2014}")
             .chars()
             .take(16)
             .collect::<String>();
 
-        let context = entry
-            .context
+        let trust = entry.trust_level.as_deref().unwrap_or("\u{2014}");
+        let model = entry
+            .model
             .as_deref()
-            .map(|c| {
-                if c.starts_with("telegram:direct:") {
-                    format!("tg:{}", &c[16..])
-                } else if c.starts_with("telegram:dm:") {
-                    format!("tg:dm:{}", &c[12..])
-                } else if c.starts_with("openclaw:web:") {
-                    format!("web:{}", &c[13..])
-                } else if c.starts_with("cli:local:") {
-                    format!("cli:{}", &c[10..])
-                } else {
-                    c.chars().take(18).collect()
-                }
-            })
-            .unwrap_or_else(|| "—".to_string());
+            .unwrap_or("\u{2014}")
+            .chars()
+            .take(14)
+            .collect::<String>();
 
-        let trust = entry.trust_level.as_deref().unwrap_or("—");
-        let model = entry.model.as_deref().unwrap_or("—");
-        let req_tok = estimate_tokens(entry.request_size);
-        let resp_tok = estimate_tokens(entry.response_size);
-
-        let slm = match entry.slm_verdict.as_deref() {
-            Some("admit") => "admit".to_string(),
-            Some("reject") => "REJECT".to_string(),
-            Some("quarantine") => "QRNTNE".to_string(),
-            Some(v) => v.to_string(),
-            None => "—".to_string(),
+        let slm_raw = match entry.slm_verdict.as_deref() {
+            Some("admit") => "admit",
+            Some("reject") => "REJECT",
+            Some("quarantine") => "QRNTNE",
+            Some(v) => v,
+            None => "\u{2014}",
         };
+        let slm = color_verdict(slm_raw);
+
+        let score = entry
+            .slm_threat_score
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| "\u{2014}".to_string());
 
         let dur = if entry.duration_ms > 1000 {
             format!("{:.1}s", entry.duration_ms as f64 / 1000.0)
@@ -325,8 +355,8 @@ fn show_table(
         };
 
         println!(
-            " {:<5} {:<10} {:<16} {:<9} {:<18} {:<14} {:<8} {:>8}",
-            entry.id, time, channel, trust, context, model, slm, dur
+            " {:<5} {:<10} {:<9} {:<16} {:<9} {:<14} {} {:<6} {:>8}",
+            entry.id, time, req_id, channel, trust, model, slm, score, dur
         );
     }
 
@@ -358,12 +388,12 @@ fn show_detail(base: &str, id: u64, show_body: bool) {
                 .as_deref()
                 .map(|_| "")
         })
-        .unwrap_or("—");
+        .unwrap_or("\u{2014}");
     let model_display = if model.is_empty() {
         e.request_body
             .as_deref()
             .and_then(extract_model)
-            .unwrap_or_else(|| "—".to_string())
+            .unwrap_or_else(|| "\u{2014}".to_string())
     } else {
         model.to_string()
     };
@@ -371,18 +401,23 @@ fn show_detail(base: &str, id: u64, show_body: bool) {
     let resp_tok = estimate_tokens(e.response_size);
     let total_tok = req_tok + resp_tok;
     let streaming = if e.is_streaming { "yes" } else { "no" };
-    let channel = e.channel.as_deref().unwrap_or("—");
-    let trust = e.trust_level.as_deref().unwrap_or("—");
-    let context = e.context.as_deref().unwrap_or("—");
+    let channel = e.channel.as_deref().unwrap_or("\u{2014}");
+    let trust = e.trust_level.as_deref().unwrap_or("\u{2014}");
+    let context = e.context.as_deref().unwrap_or("\u{2014}");
+    let req_id_display = e.request_id.as_deref().unwrap_or("\u{2014}");
 
     let upstream = if e.status == 403 {
         "BLOCKED (never forwarded)".to_string()
     } else {
-        format!("→ {}", e.status)
+        format!("\u{2192} {}", e.status)
     };
 
     println!();
-    println!("━━━ Request #{} {}", e.id, "━".repeat(58));
+    println!(
+        "\u{2501}\u{2501}\u{2501} Request #{} {}",
+        e.id,
+        "\u{2501}".repeat(58)
+    );
     println!(
         "  Time       {}                Duration   {}ms",
         format_ts(e.ts_ms),
@@ -390,6 +425,7 @@ fn show_detail(base: &str, id: u64, show_body: bool) {
     );
     println!("  Channel    {:<28} Trust      {}", channel, trust);
     println!("  Context    {}", context);
+    println!("  RequestID  {}", req_id_display);
     println!("  Route      {} {} {}", e.method, e.path, upstream);
     println!(
         "  Model      {:<28} Streaming  {}",
@@ -398,7 +434,9 @@ fn show_detail(base: &str, id: u64, show_body: bool) {
 
     // Tokens
     println!();
-    println!("  ── Tokens ─────────────────────────────────────────────────────────");
+    println!(
+        "  \u{2500}\u{2500} Tokens \u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}"
+    );
     println!(
         "  Prompt     {:<10} Completion   {:<10} Total   {}",
         req_tok, resp_tok, total_tok
@@ -414,7 +452,7 @@ fn show_detail(base: &str, id: u64, show_body: bool) {
     };
     println!();
     println!(
-        "  ── SLM Screening ── verdict: {} ───────────────────────────────",
+        "  \u{2500}\u{2500} SLM Screening \u{2500}\u{2500} verdict: {} \u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}",
         verdict_label
     );
 
@@ -447,18 +485,22 @@ fn show_detail(base: &str, id: u64, show_body: bool) {
                 .and_then(|v| v.as_str())
                 .unwrap_or("dangerous operation");
             println!();
-            println!("  ── Response Screening ── \x1b[31mBLOCKED\x1b[0m ─────────────────────────");
+            println!(
+                "  \u{2500}\u{2500} Response Screening \u{2500}\u{2500} \x1b[31mBLOCKED\x1b[0m \u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}"
+            );
             println!("  Reason     {}", reason);
         } else if screened {
             println!();
             println!(
-                "  ── Response Screening ── \x1b[33m{} redaction{}\x1b[0m ─────────────────────",
+                "  \u{2500}\u{2500} Response Screening \u{2500}\u{2500} \x1b[33m{} redaction{}\x1b[0m \u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}",
                 redactions,
                 if redactions > 1 { "s" } else { "" }
             );
         } else {
             println!();
-            println!("  ── Response Screening ── \x1b[32mclean\x1b[0m ───────────────────────────");
+            println!(
+                "  \u{2500}\u{2500} Response Screening \u{2500}\u{2500} \x1b[32mclean\x1b[0m \u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}"
+            );
         }
 
         if let Some(findings) = rs.get("findings").and_then(|v| v.as_array()) {
@@ -475,24 +517,93 @@ fn show_detail(base: &str, id: u64, show_body: bool) {
         && let Some(msg) = extract_last_user_message(body)
     {
         println!();
-        println!("  ── Last User Message ──────────────────────────────────────────────");
+        println!(
+            "  \u{2500}\u{2500} Last User Message \u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}"
+        );
         // Word-wrap at ~70 chars with indent
         for line in textwrap(&msg, 68) {
             println!("  {}", line);
         }
     }
 
-    // Evidence
+    // Pipeline & Evidence Receipts
     println!();
-    println!("  ── Evidence ───────────────────────────────────────────────────────");
-    println!("  Chain: recorded");
+    let pipeline_req_id = e.request_id.as_deref().unwrap_or("\u{2014}");
+    println!(
+        "  \u{2500}\u{2500} Pipeline \u{2500}\u{2500} request_id: {} {}",
+        pipeline_req_id,
+        "\u{2500}".repeat(40)
+    );
+
+    // Fetch linked receipts
+    let receipts_url = format!("{}/traffic/{}/receipts", base, id);
+    if let Some(receipts_resp) = fetch_json::<ReceiptsResponse>(&receipts_url) {
+        if let Some(ref receipts) = receipts_resp.receipts {
+            // Per-layer breakdown
+            let mut has_layer_info = false;
+            for r in receipts {
+                let rtype = r.receipt_type.as_deref().unwrap_or("");
+                let action = r.action.as_deref().unwrap_or("");
+                let outcome = r.outcome.as_deref().unwrap_or("");
+
+                match rtype {
+                    "slm_analysis" => {
+                        has_layer_info = true;
+                        println!("  SlmAnalysis     {} {}", action, outcome);
+                    }
+                    "vault_detection" => {
+                        has_layer_info = true;
+                        println!("  VaultDetection  {} {}", action, outcome);
+                    }
+                    "write_barrier" => {
+                        has_layer_info = true;
+                        println!("  WriteBarrier    {} {}", action, outcome);
+                    }
+                    "api_call" => {
+                        has_layer_info = true;
+                        println!("  ApiCall         {} {}", action, outcome);
+                    }
+                    _ => {}
+                }
+            }
+
+            if !has_layer_info {
+                println!("  (no per-layer breakdown available)");
+            }
+
+            // Evidence receipts listing
+            println!();
+            println!(
+                "  \u{2500}\u{2500} Evidence Receipts ({}) {}",
+                receipts.len(),
+                "\u{2500}".repeat(50)
+            );
+            for (i, r) in receipts.iter().enumerate() {
+                let rtype = r.receipt_type.as_deref().unwrap_or("unknown");
+                let action = r.action.as_deref().unwrap_or("");
+                let rid = r.id.as_deref().unwrap_or("");
+                let short_id: String = rid.chars().take(8).collect();
+                println!(
+                    "  {:>3}  {:<18} {:<40} [{}]",
+                    i + 1,
+                    rtype,
+                    action,
+                    short_id
+                );
+            }
+        } else {
+            println!("  (no receipts found)");
+        }
+    } else {
+        println!("  Chain: recorded");
+    }
 
     // Body
     if show_body {
         if let Some(ref body) = e.request_body {
             println!();
             println!(
-                "  ── Request Body ({} bytes) ────────────────────────────────────",
+                "  \u{2500}\u{2500} Request Body ({} bytes) \u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}",
                 e.request_size
             );
             let truncated: String = body.chars().take(2000).collect();
@@ -501,7 +612,7 @@ fn show_detail(base: &str, id: u64, show_body: bool) {
         if let Some(ref body) = e.response_body {
             println!();
             println!(
-                "  ── Response Body ({} bytes) ───────────────────────────────────",
+                "  \u{2500}\u{2500} Response Body ({} bytes) \u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}",
                 e.response_size
             );
             let truncated: String = body.chars().take(2000).collect();
@@ -509,15 +620,59 @@ fn show_detail(base: &str, id: u64, show_body: bool) {
         }
     }
 
-    println!("{}", "━".repeat(70));
+    println!("{}", "\u{2501}".repeat(70));
     println!();
+}
+
+fn run_watch(
+    aegis_url: &str,
+    channel_filter: Option<&str>,
+    verdict_filter: Option<&str>,
+    num: usize,
+) {
+    let dashboard_base = format!("{}/dashboard/api", aegis_url.trim_end_matches('/'));
+    let status_url = format!("{}/aegis/status", aegis_url.trim_end_matches('/'));
+
+    loop {
+        // Clear screen
+        print!("\x1b[2J\x1b[H");
+
+        // Fetch status
+        let status: Option<serde_json::Value> = fetch_json(&status_url);
+
+        // Header
+        println!("  \x1b[1maegis trace\x1b[0m \u{2014} live monitoring (Ctrl+C to exit)");
+        if let Some(ref s) = status {
+            let mode = s.get("mode").and_then(|v| v.as_str()).unwrap_or("?");
+            let uptime = s.get("uptime_secs").and_then(|v| v.as_u64()).unwrap_or(0);
+            let receipts = s.get("receipt_count").and_then(|v| v.as_u64()).unwrap_or(0);
+            let uptime_str = if uptime > 3600 {
+                format!("{}h {}m", uptime / 3600, (uptime % 3600) / 60)
+            } else {
+                format!("{}m", uptime / 60)
+            };
+            println!(
+                "  Mode: {} | Uptime: {} | Evidence: {} receipts",
+                mode, uptime_str, receipts
+            );
+        }
+        println!("  {}", "\u{2500}".repeat(90));
+
+        // Table
+        show_table(&dashboard_base, channel_filter, verdict_filter, None, num);
+
+        // Refresh
+        std::thread::sleep(std::time::Duration::from_secs(2));
+    }
 }
 
 fn show_slm_health(aegis_url: &str) {
     let status_url = format!("{}/aegis/status", aegis_url.trim_end_matches('/'));
     let slm_url = format!("{}/dashboard/api/slm", aegis_url.trim_end_matches('/'));
 
-    println!("  ── SLM Health ─────────────────────────────────────────────────────");
+    println!(
+        "  \u{2500}\u{2500} SLM Health \u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}"
+    );
 
     if let Some(status) = fetch_json::<serde_json::Value>(&status_url) {
         let mode = status.get("mode").and_then(|v| v.as_str()).unwrap_or("?");
@@ -533,7 +688,7 @@ fn show_slm_health(aegis_url: &str) {
             .get("slm_server")
             .and_then(|v| v.as_str())
             .unwrap_or("?");
-        println!("  Engine     {} → {}", slm_engine, slm_server);
+        println!("  Engine     {} \u{2192} {}", slm_engine, slm_server);
         println!("  Model      {}", slm_model);
         println!("  Mode       {}", mode);
     }

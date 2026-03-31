@@ -230,6 +230,10 @@ enum Commands {
         /// Number of entries to show in table view (default: 10)
         #[arg(short, long, default_value = "10")]
         num: usize,
+
+        /// Live monitoring mode — refreshes like 'top' (Ctrl+C to exit)
+        #[arg(short, long)]
+        watch: bool,
     },
 
     /// Show version information
@@ -1072,6 +1076,7 @@ fn main() {
             health,
             aegis_url,
             num,
+            watch,
         }) => {
             trace::run(
                 &aegis_url,
@@ -1082,6 +1087,7 @@ fn main() {
                 body,
                 health,
                 num,
+                watch,
             );
         }
 
