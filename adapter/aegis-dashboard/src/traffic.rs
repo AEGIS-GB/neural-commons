@@ -56,6 +56,9 @@ pub struct TrafficEntry {
     /// Response screening result (DLP redactions, tool blocks).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub response_screen: Option<serde_json::Value>,
+    /// Pipeline request ID (UUID v7). Links to evidence receipts for the same request.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub request_id: Option<String>,
 }
 
 const MAX_BODY_CAPTURE: usize = 256 * 1024; // 256KB per body — large enough for streaming responses with tool schemas
@@ -132,6 +135,7 @@ impl TrafficStore {
             context: context.map(|s| s.to_string()),
             slm_detail,
             response_screen,
+            request_id: None,
         };
 
         let mut entries = self.entries.write().unwrap();
@@ -208,6 +212,16 @@ impl TrafficStore {
             } else {
                 entry.slm_detail = Some(verdict.clone());
             }
+        }
+    }
+
+    /// Set the pipeline request ID on an existing traffic entry.
+    /// Called after `record()` when the pipeline's UUID v7 is available.
+    pub fn update_request_id(&self, id: u64, request_id: &str) {
+        if let Ok(mut entries) = self.entries.write()
+            && let Some(entry) = entries.iter_mut().find(|e| e.id == id)
+        {
+            entry.request_id = Some(request_id.to_string());
         }
     }
 
