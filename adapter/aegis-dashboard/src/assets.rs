@@ -1509,12 +1509,13 @@ function renderTraffic(data){
   sc+='<div class="card"><div class="stat">'+avgDur+'ms</div><div class="stat-label">Avg Latency</div></div>';
   stats.innerHTML=sc;
   if(!data.entries||data.entries.length===0){tbl.innerHTML='<p class="empty-state">No traffic captured yet. Send requests through the proxy to see them here.</p>';return;}
-  let h='<table class="dtable"><tr><th>#</th><th>Time</th><th>Method</th><th>Path</th><th>Status</th><th>SLM</th><th>Req Size</th><th>Resp Size</th><th>Duration</th><th>Type</th></tr>';
+  let h='<table class="dtable"><tr><th>#</th><th>ReqID</th><th>Time</th><th>Method</th><th>Path</th><th>Status</th><th>SLM</th><th>Req Size</th><th>Resp Size</th><th>Duration</th><th>Type</th></tr>';
   for(const e of data.entries){
     const sc2=e.status<400?'badge-green':'badge-red';
     const isErr=e.status>=400;
     h+='<tr class="traffic-row" style="'+(isErr?'background:rgba(248,81,73,0.08);border-left:3px solid #da3633':'')+'" onclick="showTrafficDetail('+e.id+')">';
     h+='<td>'+e.id+'</td>';
+    h+='<td style="font-family:monospace;font-size:11px;color:#79c0ff">'+(e.request_id?e.request_id.substring(0,8):'\u2014')+'</td>';
     h+='<td style="white-space:nowrap">'+fmtTimeShort(e.ts_ms)+'</td>';
     h+='<td><span class="badge badge-blue">'+e.method+'</span></td>';
     h+='<td style="max-width:250px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+esc(e.path)+'</td>';
@@ -1552,6 +1553,7 @@ async function showTrafficDetail(id){
     h+='<span style="color:#8b949e;font-size:12px">'+e.duration_ms+'ms</span>';
     h+='<span style="color:#8b949e;font-size:12px">'+(e.is_streaming?'streaming':'')+'</span>';
     h+='<span style="color:#8b949e;font-size:12px">'+fmtTime(e.ts_ms)+'</span>';
+    if(e.request_id){h+='<span style="font-family:monospace;font-size:12px;color:#79c0ff" title="'+esc(e.request_id)+'">rid:'+esc(e.request_id.substring(0,8))+'</span>';}
     if(e.slm_verdict){h+=' '+verdictBadge(e.slm_verdict)+' <span style="font-size:12px;color:#8b949e">score:'+(e.slm_threat_score||0)+' '+(e.slm_duration_ms||0)+'ms</span>';}
     h+='</div>';
     // ── Error banner for 4xx/5xx responses ──
@@ -1564,6 +1566,23 @@ async function showTrafficDetail(id){
       if(typeof errMsg==='object')errMsg=JSON.stringify(errMsg);
       if(errMsg)h+='<div style="font-family:monospace;font-size:12px;color:#e1e4e8;background:#0d1117;padding:8px 12px;border-radius:4px;overflow-x:auto;white-space:pre-wrap;word-break:break-word">'+escHtml(errMsg)+'</div>';
       h+='</div>';
+    }
+    // ── Linked Evidence Receipts ──
+    if(e.request_id){
+      h+='<div class="card" style="margin-bottom:16px"><h2>Evidence Receipts</h2><div id="receipt-list-'+id+'" style="color:#8b949e;font-size:13px">Loading receipts\u2026</div></div>';
+      fetch('/dashboard/api/traffic/'+id+'/receipts').then(r=>r.json()).then(rd=>{
+        const el=document.getElementById('receipt-list-'+id);
+        if(!el)return;
+        if(!rd.receipts||rd.receipts.length===0){el.innerHTML='<span class="empty-state">No linked receipts.</span>';return;}
+        let rh='<table class="dtable"><tr><th>Type</th><th>Action</th><th>Outcome</th></tr>';
+        for(const rc of rd.receipts){
+          rh+='<tr><td><span class="badge badge-blue">'+esc(rc.receipt_type)+'</span></td>';
+          rh+='<td style="font-family:monospace;font-size:11px">'+esc(rc.action)+'</td>';
+          rh+='<td style="font-size:12px">'+esc(rc.outcome)+'</td></tr>';
+        }
+        rh+='</table>';
+        el.innerHTML=rh;
+      }).catch(()=>{const el=document.getElementById('receipt-list-'+id);if(el)el.innerHTML='<span class="empty-state">Failed to load receipts.</span>';});
     }
     // ── Unified: Full SLM Screening Detail (same as SLM tab) ──
     let matchedSlm=null;
