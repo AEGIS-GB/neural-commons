@@ -95,6 +95,7 @@ pub trait EvidenceHook: Send + Sync {
         path: &'a str,
         direction: &'a str,
         secrets: &'a [String],
+        request_id: &'a str,
     ) -> Pin<Box<dyn Future<Output = Result<(), ProxyError>> + Send + 'a>>;
 }
 
@@ -237,10 +238,12 @@ pub trait SlmHook: Send + Sync {
     /// None if content should go to deep SLM.
     /// The String in the tuple is the classifier advisory (if any) to pass to screen_deep.
     /// `classifier_blocking`: if false, classifier is advisory only (trusted sources).
+    /// `request_id`: pipeline request ID for receipt correlation.
     fn screen_fast<'a>(
         &'a self,
         content: &'a str,
         classifier_blocking: bool,
+        request_id: &'a str,
     ) -> Pin<
         Box<
             dyn Future<Output = (Option<(SlmDecision, Option<SlmVerdict>)>, Option<String>)>
@@ -252,17 +255,21 @@ pub trait SlmHook: Send + Sync {
     /// Deep SLM screening: runs the 30B model (~2-3s).
     /// `classifier_advisory` comes from screen_fast — threaded through, not global state.
     /// `trust_context` is injected into the SLM prompt so the model considers trust level.
+    /// `request_id`: pipeline request ID for receipt correlation.
     fn screen_deep<'a>(
         &'a self,
         content: &'a str,
         classifier_advisory: Option<String>,
         trust_context: Option<String>,
+        request_id: &'a str,
     ) -> Pin<Box<dyn Future<Output = (SlmDecision, Option<SlmVerdict>)> + Send + 'a>>;
 
     /// Full screening: fast + deep combined (legacy, blocking).
+    /// `request_id`: pipeline request ID for receipt correlation.
     fn screen<'a>(
         &'a self,
         content: &'a str,
+        request_id: &'a str,
     ) -> Pin<Box<dyn Future<Output = (SlmDecision, Option<SlmVerdict>)> + Send + 'a>>;
 }
 
@@ -353,6 +360,7 @@ impl EvidenceHook for NoopEvidenceHook {
         _path: &'a str,
         _direction: &'a str,
         _secrets: &'a [String],
+        _request_id: &'a str,
     ) -> Pin<Box<dyn Future<Output = Result<(), ProxyError>> + Send + 'a>> {
         Box::pin(async { Ok(()) })
     }
@@ -378,6 +386,7 @@ impl SlmHook for NoopSlmHook {
         &'a self,
         _content: &'a str,
         _classifier_blocking: bool,
+        _request_id: &'a str,
     ) -> Pin<
         Box<
             dyn Future<Output = (Option<(SlmDecision, Option<SlmVerdict>)>, Option<String>)>
@@ -392,12 +401,14 @@ impl SlmHook for NoopSlmHook {
         _content: &'a str,
         _classifier_advisory: Option<String>,
         _trust_context: Option<String>,
+        _request_id: &'a str,
     ) -> Pin<Box<dyn Future<Output = (SlmDecision, Option<SlmVerdict>)> + Send + 'a>> {
         Box::pin(async { (SlmDecision::Admit, None) })
     }
     fn screen<'a>(
         &'a self,
         _content: &'a str,
+        _request_id: &'a str,
     ) -> Pin<Box<dyn Future<Output = (SlmDecision, Option<SlmVerdict>)> + Send + 'a>> {
         Box::pin(async { (SlmDecision::Admit, None) })
     }
@@ -562,7 +573,7 @@ mod tests {
     #[tokio::test]
     async fn noop_slm_hook() {
         let hook = NoopSlmHook;
-        let (decision, verdict) = hook.screen("some content").await;
+        let (decision, verdict) = hook.screen("some content", "test-req-id").await;
         assert_eq!(decision, SlmDecision::Admit);
         assert!(verdict.is_none());
     }
