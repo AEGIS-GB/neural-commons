@@ -224,6 +224,37 @@ impl EvidenceStore {
         Ok(())
     }
 
+    /// Get all receipts matching a request_id in their context JSON.
+    ///
+    /// Uses SQLite's JSON_EXTRACT to search the `context_json` column.
+    /// Full table scan (no index on JSON field) — acceptable for per-adapter volumes.
+    pub fn get_receipts_by_request_id(
+        &self,
+        request_id: &str,
+    ) -> Result<Vec<Receipt>, EvidenceError> {
+        let mut stmt = self.db.prepare(
+            "SELECT core_json, context_json FROM receipts WHERE JSON_EXTRACT(context_json, '$.request_id') = ?1 ORDER BY seq ASC",
+        )?;
+
+        let rows = stmt.query_map(params![request_id], |row| {
+            let core_json: String = row.get(0)?;
+            let context_json: String = row.get(1)?;
+            Ok((core_json, context_json))
+        })?;
+
+        let mut receipts = Vec::new();
+        for row in rows {
+            let (core_json, context_json) = row?;
+            let core: ReceiptCore = serde_json::from_str(&core_json)
+                .map_err(|e| EvidenceError::SerializationError(e.to_string()))?;
+            let context: ReceiptContext = serde_json::from_str(&context_json)
+                .map_err(|e| EvidenceError::SerializationError(e.to_string()))?;
+            receipts.push(Receipt { core, context });
+        }
+
+        Ok(receipts)
+    }
+
     /// Total receipt count.
     pub fn get_receipt_count(&self) -> Result<u64, EvidenceError> {
         let count: i64 = self
@@ -489,6 +520,36 @@ mod tests {
         let backup_store = EvidenceStore::open(&backup_path).unwrap();
         assert_eq!(backup_store.get_receipt_count().unwrap(), 3);
         assert!(backup_store.integrity_check().is_ok());
+    }
+
+    #[test]
+    fn get_receipts_by_request_id() {
+        let store = EvidenceStore::open_in_memory().unwrap();
+        let key = generate_keypair();
+        let bot_id = ed25519::fingerprint_hex(&key.verifying_key());
+        let mut state = init_genesis();
+
+        let rid = "01964a2b-7c00-7def-8000-000000000001";
+
+        // Record 2 receipts with request_id, 1 without
+        for i in 0..3 {
+            let mut ctx = make_context();
+            if i < 2 {
+                ctx.request_id = Some(rid.to_string());
+            }
+            let r = create_receipt(&key, &bot_id, ReceiptType::ApiCall, ctx, &state).unwrap();
+            state = advance_chain_state(&state, &r);
+            store.append_receipt(&r, &state).unwrap();
+        }
+
+        let matched = store.get_receipts_by_request_id(rid).unwrap();
+        assert_eq!(matched.len(), 2);
+        assert_eq!(matched[0].core.seq, 1);
+        assert_eq!(matched[1].core.seq, 2);
+
+        // Non-existent request_id returns empty
+        let empty = store.get_receipts_by_request_id("nonexistent").unwrap();
+        assert!(empty.is_empty());
     }
 
     #[test]

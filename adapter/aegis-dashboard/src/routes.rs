@@ -93,6 +93,7 @@ pub fn routes(state: Arc<DashboardSharedState>) -> Router {
         .route("/api/slm", get(api_slm))
         .route("/api/traffic", get(api_traffic))
         .route("/api/traffic/{id}", get(api_traffic_detail))
+        .route("/api/traffic/{id}/receipts", get(api_traffic_receipts))
         .route("/api/trust", get(api_trust))
         .route("/api/trust/add", post(api_trust_add))
         .route("/api/trust/remove", post(api_trust_remove))
@@ -914,6 +915,58 @@ async fn api_traffic_detail(
             }))
         }
         None => Json(serde_json::json!({"error": "not found"})),
+    }
+}
+
+/// GET /dashboard/api/traffic/{id}/receipts — evidence receipts linked to a traffic entry by request_id.
+async fn api_traffic_receipts(
+    State(state): State<Arc<DashboardSharedState>>,
+    Path(id): Path<u64>,
+) -> Json<serde_json::Value> {
+    // 1. Get traffic entry
+    let entry = match state.traffic.get(id) {
+        Some(e) => e,
+        None => return Json(serde_json::json!({"error": "traffic entry not found"})),
+    };
+
+    // 2. Get request_id
+    let request_id = match entry.request_id {
+        Some(ref rid) => rid.clone(),
+        None => {
+            return Json(serde_json::json!({
+                "receipts": [],
+                "note": "no request_id on this traffic entry",
+            }));
+        }
+    };
+
+    // 3. Query evidence chain for matching receipts
+    match state.evidence.get_by_request_id(&request_id) {
+        Ok(receipts) => {
+            let receipt_summaries: Vec<serde_json::Value> = receipts
+                .iter()
+                .map(|r| {
+                    serde_json::json!({
+                        "id": r.core.id,
+                        "seq": r.core.seq,
+                        "receipt_type": format!("{:?}", r.core.receipt_type),
+                        "bot_id": r.core.bot_id,
+                        "ts_ms": r.core.ts_ms,
+                        "action": r.context.action,
+                        "outcome": r.context.outcome,
+                        "subject": r.context.subject,
+                        "trigger": r.context.trigger,
+                    })
+                })
+                .collect();
+            Json(serde_json::json!({
+                "request_id": request_id,
+                "receipts": receipt_summaries,
+            }))
+        }
+        Err(e) => Json(serde_json::json!({
+            "error": format!("evidence query failed: {e}"),
+        })),
     }
 }
 
