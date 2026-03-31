@@ -264,6 +264,12 @@ pub async fn start_with_traffic_full(
 /// Recording middleware — wraps every proxy request.
 /// Captures request body before the handler, records response after.
 /// This is the SINGLE recording point — no manual recording in the handler.
+/// Returns true for internal Aegis paths that should not be recorded as traffic.
+/// These are management/observability endpoints, not proxied LLM requests.
+fn is_internal_path(path: &str) -> bool {
+    path.starts_with("/aegis/") || path.starts_with("/dashboard") || path == "/favicon.ico"
+}
+
 async fn recording_middleware(
     State(state): State<AppState>,
     connect_info: axum::extract::ConnectInfo<std::net::SocketAddr>,
@@ -274,6 +280,11 @@ async fn recording_middleware(
     let path = req.uri().path().to_string();
     let _source_ip = connect_info.0.ip().to_string();
     let start = std::time::Instant::now();
+
+    // Skip recording for internal Aegis paths (status, dashboard, favicon)
+    if is_internal_path(&path) {
+        return next.run(req).await;
+    }
 
     // Extract request body for recording (clone before handler consumes it)
     let (parts, body) = req.into_parts();
