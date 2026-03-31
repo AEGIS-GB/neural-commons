@@ -59,6 +59,7 @@ fn record_receipt(
     outcome: &str,
     detail: Option<serde_json::Value>,
     alert_tx: Option<&tokio::sync::broadcast::Sender<crate::state::DashboardAlert>>,
+    request_id: Option<&str>,
 ) {
     let context = aegis_schemas::ReceiptContext {
         blinding_nonce: aegis_schemas::receipt::generate_blinding_nonce(),
@@ -69,6 +70,7 @@ fn record_receipt(
         outcome: Some(outcome.to_string()),
         detail,
         enterprise: None,
+        request_id: request_id.map(|s| s.to_string()),
     };
     if let Err(e) = recorder.record(receipt_type.clone(), context) {
         tracing::warn!(receipt_type = ?receipt_type, action = %action, "failed to record receipt: {e}");
@@ -128,6 +130,7 @@ impl EvidenceHook for EvidenceHookImpl {
                 &outcome,
                 None,
                 Some(&self.alert_tx),
+                Some(&req_info.request_id),
             );
 
             debug!(
@@ -159,6 +162,7 @@ impl EvidenceHook for EvidenceHookImpl {
                 &outcome,
                 None,
                 Some(&self.alert_tx),
+                Some(&req_info.request_id),
             );
 
             debug!(
@@ -192,6 +196,7 @@ impl EvidenceHook for EvidenceHookImpl {
                 &outcome,
                 None,
                 Some(&self.alert_tx),
+                None,
             );
 
             // Vault detection also gets an explicit alert (not gated by is_critical)
@@ -380,6 +385,7 @@ impl BarrierHookImpl {
             reason,
             None,
             Some(&self.alert_tx),
+            None,
         );
     }
 }
@@ -568,6 +574,7 @@ impl SlmHookImpl {
             &outcome_str,
             detail,
             Some(&self.alert_tx),
+            None,
         );
 
         // Push explicit alert on quarantine/reject (SLM alerts always push)

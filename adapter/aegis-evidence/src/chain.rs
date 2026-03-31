@@ -154,6 +154,7 @@ mod tests {
             outcome: Some("pass".to_string()),
             detail: None,
             enterprise: None,
+            request_id: None,
         }
     }
 

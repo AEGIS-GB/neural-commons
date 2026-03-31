@@ -129,6 +129,7 @@ mod tests {
             outcome: None,
             detail: None,
             enterprise: None,
+            request_id: None,
         }
     }
 
