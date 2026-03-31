@@ -7,6 +7,15 @@
 
 use uuid::Uuid;
 
+/// A receipt to be recorded from pipeline results.
+#[derive(Debug, Clone)]
+pub struct PipelineReceipt {
+    pub receipt_type: String, // "api_call", "vault_detection", "write_barrier", "slm_analysis"
+    pub action: String,
+    pub outcome: String,
+    pub detail: Option<serde_json::Value>,
+}
+
 /// Result of a vault scan (request or response direction).
 #[derive(Debug, Clone)]
 pub struct VaultStepResult {
@@ -138,6 +147,150 @@ impl PipelineState {
     pub fn request_id_str(&self) -> String {
         self.request_id.to_string()
     }
+
+    /// Produce all evidence receipts from the pipeline's collected results.
+    ///
+    /// Called once at request completion. Returns receipts in chronological order.
+    pub fn to_receipts(
+        &self,
+        body_hash: &str,
+        body_size: usize,
+        resp_status: Option<u16>,
+        resp_body_size: Option<usize>,
+        resp_duration_ms: Option<u64>,
+    ) -> Vec<PipelineReceipt> {
+        let mut receipts = Vec::new();
+
+        // 1. Vault detection (request)
+        if let Some(ref vault) = self.vault_request
+            && !vault.secrets_found.is_empty()
+        {
+            receipts.push(PipelineReceipt {
+                receipt_type: "vault_detection".to_string(),
+                action: format!("vault_request {}", self.path),
+                outcome: format!(
+                    "credentials detected (count={}, types={})",
+                    vault.secrets_found.len(),
+                    vault.secrets_found.join(", ")
+                ),
+                detail: None,
+            });
+        }
+
+        // 2. API call (request direction) — always
+        receipts.push(PipelineReceipt {
+            receipt_type: "api_call".to_string(),
+            action: format!("{} {}", self.method, self.path),
+            outcome: format!(
+                "intercepted (body={}B hash={})",
+                body_size,
+                &body_hash[..16.min(body_hash.len())]
+            ),
+            detail: None,
+        });
+
+        // 3. Barrier check
+        if let Some(ref barrier) = self.barrier
+            && barrier.decision != "allow"
+        {
+            receipts.push(PipelineReceipt {
+                receipt_type: "write_barrier".to_string(),
+                action: format!("{} {}", self.method, self.path),
+                outcome: barrier
+                    .reason
+                    .clone()
+                    .unwrap_or_else(|| barrier.decision.clone()),
+                detail: None,
+            });
+        }
+
+        // 4. SLM fast layer
+        if let Some(ref slm) = self.slm_fast {
+            receipts.push(PipelineReceipt {
+                receipt_type: "slm_analysis".to_string(),
+                action: format!(
+                    "slm_screen {}",
+                    slm.verdict
+                        .as_ref()
+                        .map(|v| v.engine.as_str())
+                        .unwrap_or("unknown")
+                ),
+                outcome: format!(
+                    "action={} threat_score={} intent={}",
+                    slm.decision,
+                    slm.verdict.as_ref().map(|v| v.threat_score).unwrap_or(0),
+                    slm.verdict
+                        .as_ref()
+                        .map(|v| v.intent.as_str())
+                        .unwrap_or("unknown")
+                ),
+                detail: slm
+                    .verdict
+                    .as_ref()
+                    .and_then(|v| serde_json::to_value(v).ok()),
+            });
+        }
+
+        // 5. SLM deep layer
+        if let Some(ref slm) = self.slm_deep {
+            receipts.push(PipelineReceipt {
+                receipt_type: "slm_analysis".to_string(),
+                action: format!(
+                    "slm_screen {}",
+                    slm.verdict
+                        .as_ref()
+                        .map(|v| v.engine.as_str())
+                        .unwrap_or("unknown")
+                ),
+                outcome: format!(
+                    "action={} threat_score={} intent={}",
+                    slm.decision,
+                    slm.verdict.as_ref().map(|v| v.threat_score).unwrap_or(0),
+                    slm.verdict
+                        .as_ref()
+                        .map(|v| v.intent.as_str())
+                        .unwrap_or("unknown")
+                ),
+                detail: slm
+                    .verdict
+                    .as_ref()
+                    .and_then(|v| serde_json::to_value(v).ok()),
+            });
+        }
+
+        // 6. API call (response direction)
+        if let Some(status) = resp_status {
+            receipts.push(PipelineReceipt {
+                receipt_type: "api_call".to_string(),
+                action: format!("response {} {}", self.method, self.path),
+                outcome: format!(
+                    "status={} body={}B duration={}ms",
+                    status,
+                    resp_body_size.unwrap_or(0),
+                    resp_duration_ms.unwrap_or(0)
+                ),
+                detail: None,
+            });
+        }
+
+        // 7. Vault detection (response)
+        if let Some(ref vault) = self.vault_response
+            && !vault.secrets_found.is_empty()
+        {
+            receipts.push(PipelineReceipt {
+                receipt_type: "vault_detection".to_string(),
+                action: format!("vault_response {}", self.path),
+                outcome: format!(
+                    "credentials detected (count={}, types={})",
+                    vault.secrets_found.len(),
+                    vault.secrets_found.join(", ")
+                ),
+                detail: None,
+            });
+        }
+
+        receipts
+    }
 }
 
 fn now_ms() -> i64 {
@@ -177,5 +330,49 @@ mod tests {
         let mut p = PipelineState::new("POST", "/v1/messages", "127.0.0.1");
         p.outcome = PipelineOutcome::Blocked(403);
         assert!(p.is_blocked());
+    }
+
+    #[test]
+    fn to_receipts_minimal_request() {
+        let p = PipelineState::new("POST", "/v1/messages", "127.0.0.1");
+        let receipts = p.to_receipts("abcd1234", 256, Some(200), Some(1024), Some(150));
+        // Should have: 1 request ApiCall + 1 response ApiCall = 2
+        assert_eq!(receipts.len(), 2);
+        assert_eq!(receipts[0].receipt_type, "api_call");
+        assert!(receipts[0].action.contains("POST /v1/messages"));
+        assert_eq!(receipts[1].receipt_type, "api_call");
+        assert!(receipts[1].action.contains("response"));
+    }
+
+    #[test]
+    fn to_receipts_with_vault_and_slm() {
+        let mut p = PipelineState::new("POST", "/v1/messages", "127.0.0.1");
+        p.vault_request = Some(VaultStepResult {
+            direction: "request".to_string(),
+            secrets_found: vec!["api_key:sk-****".to_string()],
+        });
+        p.slm_fast = Some(SlmStepResult {
+            layer: "fast".to_string(),
+            decision: "quarantine".to_string(),
+            verdict: None,
+        });
+        let receipts = p.to_receipts("abcd1234", 256, Some(200), Some(1024), Some(150));
+        // vault_detection + api_call(req) + slm_analysis + api_call(resp) = 4
+        assert_eq!(receipts.len(), 4);
+        assert_eq!(receipts[0].receipt_type, "vault_detection");
+        assert_eq!(receipts[1].receipt_type, "api_call");
+        assert_eq!(receipts[2].receipt_type, "slm_analysis");
+        assert_eq!(receipts[3].receipt_type, "api_call");
+    }
+
+    #[test]
+    fn to_receipts_blocked_no_response() {
+        let mut p = PipelineState::new("POST", "/v1/messages", "127.0.0.1");
+        p.outcome = PipelineOutcome::Blocked(403);
+        // No response (blocked before forwarding)
+        let receipts = p.to_receipts("abcd1234", 256, None, None, None);
+        // Only request ApiCall, no response
+        assert_eq!(receipts.len(), 1);
+        assert_eq!(receipts[0].receipt_type, "api_call");
     }
 }
