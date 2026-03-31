@@ -1016,11 +1016,21 @@ fn parse_chat_messages(req_body: &str, resp_body: &str) -> Vec<serde_json::Value
                         .and_then(|r| r.as_str())
                         .unwrap_or("assistant");
                     let content = msg.get("content").and_then(|c| c.as_str()).unwrap_or("");
-                    messages.push(serde_json::json!({
+                    let mut msg_json = serde_json::json!({
                         "role": role,
                         "content": content,
                         "source": "response",
-                    }));
+                    });
+                    // Include finish_reason if not "stop" (indicates truncation)
+                    let finish_reason = choice
+                        .get("finish_reason")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("stop");
+                    if finish_reason != "stop" {
+                        msg_json["finish_reason"] =
+                            serde_json::Value::String(finish_reason.to_string());
+                    }
+                    messages.push(msg_json);
                     got_response = true;
                 }
             }

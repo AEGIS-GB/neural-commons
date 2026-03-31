@@ -1343,15 +1343,25 @@ async function showTraceDetail(id){
         rsh+='<div style="margin-bottom:10px"><span style="font-size:11px;color:#8b949e">REDACTIONS: '+rs.redaction_count+'</span></div>';
       }
       if(rs.findings&&rs.findings.length>0){
-        rsh+='<table class="dtable"><tr><th>Category</th><th>Description</th><th>Original Value</th></tr>';
+        rsh+='<table class="dtable"><tr><th>Category</th><th>Description</th><th>Location</th><th>Original Value</th></tr>';
         for(const f of rs.findings){
           const catCol=f.category==='credential'||f.category==='dangerous_tool'?'#f85149':f.category==='pii'||f.category==='phi'?'#d29922':'#8b949e';
           const vals=(f.matched_values||[]).map(v=>escHtml(v)).join('<br>');
+          const loc=f.location||'unknown';
+          const locColor=loc==='message_content'?'#f85149':loc==='tool_call'?'#d29922':'#484f58';
+          const locLabel=loc==='message_content'?'\u{1F4AC} message':loc==='tool_call'?'\u{1F527} tool call':loc==='api_protocol'?'\u{1F4CB} API metadata':'\u2753 unknown';
           rsh+='<tr><td><span style="color:'+catCol+';font-weight:600">'+escHtml(f.category)+'</span></td>';
           rsh+='<td style="font-size:12px;color:#8b949e">'+escHtml(f.description)+'</td>';
+          rsh+='<td style="font-size:11px;color:'+locColor+'">'+locLabel+'</td>';
           rsh+='<td style="font-size:11px;color:#e1e4e8;font-family:monospace;word-break:break-all">'+vals+'</td></tr>';
         }
         rsh+='</table>';
+        const allProtocol=rs.findings.every(f=>f.location==='api_protocol');
+        if(allProtocol&&rs.findings.length>0){
+          rsh+='<div style="margin-top:8px;padding:8px 12px;background:rgba(139,148,158,0.1);border-radius:4px;font-size:11px;color:#8b949e">';
+          rsh+='All findings are from API protocol metadata (response ID, model name, fingerprint), not from the assistant\'s message content.';
+          rsh+='</div>';
+        }
       }
       h+=dsec('Response Screening — '+(rs.blocked?'BLOCKED':rs.redaction_count+' redaction'+(rs.redaction_count>1?'s':'')),true,rsh);
     }
@@ -1613,7 +1623,9 @@ async function showTrafficDetail(id){
           content='[AEGIS Security Rules injected]\n\n'+content.split('\n\n').slice(-1)[0];
         }
         const cls=m.role==='user'?'chat-user':m.role==='system'?'chat-system':'chat-assistant';
-        h+='<div class="chat-msg '+cls+'"><strong>'+esc(m.role)+'</strong><br>'+esc(content)+'</div>';
+        let roleExtra='';
+        if(m.finish_reason&&m.finish_reason!=='stop'){roleExtra='<span style="color:#d29922;font-size:11px;margin-left:8px">\u26A0 truncated ('+escHtml(m.finish_reason)+')</span>';}
+        h+='<div class="chat-msg '+cls+'"><strong>'+esc(m.role)+'</strong>'+roleExtra+'<br>'+esc(content)+'</div>';
       }
       h+='</div>';
     }
