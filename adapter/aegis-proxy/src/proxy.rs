@@ -641,6 +641,8 @@ async fn forward_request(
         }
     };
 
+    let mut pipeline = crate::pipeline::PipelineState::new(method.as_ref(), &path, &source_ip);
+
     let req_info = RequestInfo {
         method: method.to_string(),
         path: path.clone(),
@@ -651,6 +653,7 @@ async fn forward_request(
         timestamp_ms: middleware::now_ms(),
         body_text,
         channel_trust,
+        request_id: pipeline.request_id_str(),
     };
 
     // Recording is handled by recording_middleware — no manual recording needed.
@@ -678,6 +681,7 @@ async fn forward_request(
                     path = %path,
                     "stripped system/developer messages from untrusted source"
                 );
+                pipeline.body_stripped = true;
                 stripped.into()
             }
             None => body_bytes,
@@ -730,6 +734,10 @@ async fn forward_request(
                 {
                     warn!("evidence hook error on vault detection: {e}");
                 }
+                pipeline.vault_request = Some(crate::pipeline::VaultStepResult {
+                    direction: "request".to_string(),
+                    secrets_found: secrets.clone(),
+                });
             }
         }
 
@@ -743,11 +751,27 @@ async fn forward_request(
         // Barrier hook: check writes
         if let Some(ref barrier) = state.hooks.barrier {
             let decision = barrier.check_write(&req_info).await;
+
+            // Store barrier result in pipeline
+            pipeline.barrier = Some(crate::pipeline::BarrierStepResult {
+                decision: match &decision {
+                    middleware::BarrierDecision::Allow => "allow".to_string(),
+                    middleware::BarrierDecision::Warn(_) => "warn".to_string(),
+                    middleware::BarrierDecision::Block(_) => "block".to_string(),
+                },
+                reason: match &decision {
+                    middleware::BarrierDecision::Warn(r)
+                    | middleware::BarrierDecision::Block(r) => Some(r.clone()),
+                    middleware::BarrierDecision::Allow => None,
+                },
+            });
+
             match decision {
                 middleware::BarrierDecision::Block(reason)
                     if state.config.mode == ProxyMode::Enforce =>
                 {
                     warn!(path = %path, reason = %reason, "barrier blocked request");
+                    pipeline.outcome = crate::pipeline::PipelineOutcome::Blocked(403);
                     let mut resp =
                         (StatusCode::FORBIDDEN, format!("blocked: {reason}")).into_response();
                     resp.extensions_mut().insert(RecordingContext {
@@ -831,6 +855,14 @@ async fn forward_request(
                 if let Some((decision, verdict)) = fast_result {
                     slm_verdict = verdict;
 
+                    if let Some(ref v) = slm_verdict {
+                        pipeline.slm_fast = Some(crate::pipeline::SlmStepResult {
+                            layer: "fast".to_string(),
+                            decision: v.action.clone(),
+                            verdict: slm_verdict.clone(),
+                        });
+                    }
+
                     // Trust policy: deferred tiers (full/trusted) never block on fast layers.
                     // The fast-layer result is logged but the request proceeds.
                     if trust_policy.slm_deferred {
@@ -847,12 +879,14 @@ async fn forward_request(
                                 if state.config.mode == ProxyMode::Enforce =>
                             {
                                 warn!(path = %path, reason = %reason, "SLM fast-layer rejected request");
+                                pipeline.outcome = crate::pipeline::PipelineOutcome::Blocked(403);
                                 return Ok(make_blocked_response(&reason, &slm_verdict));
                             }
                             middleware::SlmDecision::Quarantine(reason)
                                 if state.config.mode == ProxyMode::Enforce =>
                             {
                                 warn!(path = %path, reason = %reason, "SLM fast-layer quarantined — blocking in enforce mode");
+                                pipeline.outcome = crate::pipeline::PipelineOutcome::Blocked(403);
                                 return Ok(make_blocked_response(&reason, &slm_verdict));
                             }
                             middleware::SlmDecision::Quarantine(reason) => {
@@ -890,17 +924,28 @@ async fn forward_request(
                             .screen_deep(&screen_content, classifier_advisory.clone(), trust_ctx)
                             .await;
                         slm_verdict = verdict;
+
+                        if let Some(ref v) = slm_verdict {
+                            pipeline.slm_deep = Some(crate::pipeline::SlmStepResult {
+                                layer: "deep".to_string(),
+                                decision: v.action.clone(),
+                                verdict: slm_verdict.clone(),
+                            });
+                        }
+
                         match decision {
                             middleware::SlmDecision::Reject(reason)
                                 if state.config.mode == ProxyMode::Enforce =>
                             {
                                 warn!(path = %path, reason = %reason, "SLM deep-layer rejected request (sequential)");
+                                pipeline.outcome = crate::pipeline::PipelineOutcome::Blocked(403);
                                 return Ok(make_blocked_response(&reason, &slm_verdict));
                             }
                             middleware::SlmDecision::Quarantine(reason)
                                 if state.config.mode == ProxyMode::Enforce =>
                             {
                                 warn!(path = %path, reason = %reason, "SLM deep-layer quarantined — blocking (sequential)");
+                                pipeline.outcome = crate::pipeline::PipelineOutcome::Blocked(403);
                                 return Ok(make_blocked_response(&reason, &slm_verdict));
                             }
                             middleware::SlmDecision::Quarantine(reason) => {
@@ -1004,6 +1049,7 @@ async fn forward_request(
                 }
                 if injected {
                     debug!("metaprompt hardening: injected security rules");
+                    pipeline.metaprompt_injected = true;
                     match serde_json::to_vec(&json) {
                         Ok(new_body) => bytes::Bytes::from(new_body),
                         Err(e) => {
@@ -1360,6 +1406,9 @@ async fn forward_request(
         .map_err(|e| ProxyError::UpstreamConnectionFailed(format!("response body: {e}")))?;
 
     let duration_ms = start_time.elapsed().as_millis() as u64;
+
+    pipeline.response_status = Some(resp_status);
+    pipeline.response_duration_ms = Some(duration_ms);
 
     // Mutable response body — vault redaction may modify it
     let mut final_body = resp_body.to_vec();

@@ -50,6 +50,8 @@ pub struct RequestInfo {
     /// Channel trust context (from X-Aegis-Channel-Cert header).
     /// Default: TrustLevel::Unknown (backward compatible).
     pub channel_trust: aegis_schemas::ChannelTrust,
+    /// Unique pipeline request ID (UUID v7). Links traffic entries to evidence receipts.
+    pub request_id: String,
 }
 
 /// Information captured from the upstream response.
@@ -527,6 +529,7 @@ mod tests {
             timestamp_ms: now_ms(),
             body_text: None,
             channel_trust: aegis_schemas::ChannelTrust::default(),
+            request_id: String::new(),
         };
         assert!(hook.on_request(&info).await.is_ok());
         let resp = ResponseInfo {
@@ -551,6 +554,7 @@ mod tests {
             timestamp_ms: now_ms(),
             body_text: None,
             channel_trust: aegis_schemas::ChannelTrust::default(),
+            request_id: String::new(),
         };
         assert_eq!(hook.check_write(&info).await, BarrierDecision::Allow);
     }

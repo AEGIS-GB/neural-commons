@@ -757,6 +757,7 @@ mod tests {
             timestamp_ms: now_ms(),
             body_text: None,
             channel_trust: aegis_schemas::ChannelTrust::default(),
+            request_id: String::new(),
         }
     }
 
