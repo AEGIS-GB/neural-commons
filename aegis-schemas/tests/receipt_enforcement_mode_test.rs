@@ -11,6 +11,7 @@ fn enforcement_mode_field_omitted_when_none() {
         outcome: None,
         detail: None,
         enterprise: None,
+        request_id: None,
     };
     let json = serde_json::to_value(&ctx).unwrap();
     assert!(
@@ -30,6 +31,7 @@ fn enforcement_mode_field_present_when_set() {
         outcome: None,
         detail: None,
         enterprise: None,
+        request_id: None,
     };
     let json = serde_json::to_value(&ctx).unwrap();
     assert_eq!(json["enforcement_mode"], "observe");

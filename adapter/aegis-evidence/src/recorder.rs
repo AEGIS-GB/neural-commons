@@ -149,6 +149,7 @@ impl EvidenceRecorder {
             outcome: Some(outcome.to_string()),
             detail: None,
             enterprise: None,
+            request_id: None,
         };
         self.record(receipt_type, context)
     }
@@ -197,6 +198,7 @@ impl EvidenceRecorder {
             outcome: Some("completed".to_string()),
             detail: Some(serde_json::to_value(&rollup_detail)?),
             enterprise: None,
+            request_id: None,
         };
 
         let rollup_receipt = chain::create_receipt(

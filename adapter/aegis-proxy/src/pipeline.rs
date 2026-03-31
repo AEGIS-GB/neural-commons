@@ -14,6 +14,8 @@ pub struct PipelineReceipt {
     pub action: String,
     pub outcome: String,
     pub detail: Option<serde_json::Value>,
+    /// Pipeline request ID — always set from PipelineState.
+    pub request_id: String,
 }
 
 /// Result of a vault scan (request or response direction).
@@ -174,6 +176,7 @@ impl PipelineState {
                     vault.secrets_found.join(", ")
                 ),
                 detail: None,
+                request_id: self.request_id_str(),
             });
         }
 
@@ -187,6 +190,7 @@ impl PipelineState {
                 &body_hash[..16.min(body_hash.len())]
             ),
             detail: None,
+            request_id: self.request_id_str(),
         });
 
         // 3. Barrier check
@@ -201,6 +205,7 @@ impl PipelineState {
                     .clone()
                     .unwrap_or_else(|| barrier.decision.clone()),
                 detail: None,
+                request_id: self.request_id_str(),
             });
         }
 
@@ -228,6 +233,7 @@ impl PipelineState {
                     .verdict
                     .as_ref()
                     .and_then(|v| serde_json::to_value(v).ok()),
+                request_id: self.request_id_str(),
             });
         }
 
@@ -255,6 +261,7 @@ impl PipelineState {
                     .verdict
                     .as_ref()
                     .and_then(|v| serde_json::to_value(v).ok()),
+                request_id: self.request_id_str(),
             });
         }
 
@@ -270,6 +277,7 @@ impl PipelineState {
                     resp_duration_ms.unwrap_or(0)
                 ),
                 detail: None,
+                request_id: self.request_id_str(),
             });
         }
 
@@ -286,6 +294,7 @@ impl PipelineState {
                     vault.secrets_found.join(", ")
                 ),
                 detail: None,
+                request_id: self.request_id_str(),
             });
         }
 

@@ -37,6 +37,7 @@ mod receipt_tests {
             outcome: Some("success".to_string()),
             detail: Some(serde_json::json!({"model": "gpt-4", "tokens": 150})),
             enterprise: None,
+            request_id: None,
         }
     }
 
@@ -120,6 +121,7 @@ mod receipt_tests {
             outcome: None,
             detail: None,
             enterprise: None,
+            request_id: None,
         };
         let json = serde_json::to_value(&context).unwrap();
         // These fields should NOT be present (omitted, not null)
@@ -154,6 +156,7 @@ mod receipt_tests {
                 compliance_extensions: None,
                 fleet_aggregate: None,
             }),
+            request_id: None,
         };
         let json = serde_json::to_value(&context).unwrap();
         // Enterprise is a nested object, not flattened
@@ -555,6 +558,7 @@ mod adversarial_tests {
             outcome: None,
             detail: None,
             enterprise: None,
+            request_id: None,
         };
         let json = serde_json::to_value(&context).unwrap();
 
@@ -705,5 +709,44 @@ mod adversarial_tests {
             seq_range_count, rollup.receipt_count,
             "seq range matches receipt_count (this is the primary invariant)"
         );
+    }
+
+    #[test]
+    fn receipt_context_request_id_round_trip() {
+        let ctx = ReceiptContext {
+            blinding_nonce: generate_blinding_nonce(),
+            enforcement_mode: None,
+            action: None,
+            subject: None,
+            trigger: None,
+            outcome: None,
+            detail: None,
+            enterprise: None,
+            request_id: Some("01234567-89ab-cdef-0123-456789abcdef".to_string()),
+        };
+        let json = serde_json::to_string(&ctx).unwrap();
+        assert!(json.contains("request_id"));
+        let parsed: ReceiptContext = serde_json::from_str(&json).unwrap();
+        assert_eq!(
+            parsed.request_id,
+            Some("01234567-89ab-cdef-0123-456789abcdef".to_string())
+        );
+    }
+
+    #[test]
+    fn receipt_context_request_id_omitted_when_none() {
+        let ctx = ReceiptContext {
+            blinding_nonce: generate_blinding_nonce(),
+            enforcement_mode: None,
+            action: None,
+            subject: None,
+            trigger: None,
+            outcome: None,
+            detail: None,
+            enterprise: None,
+            request_id: None,
+        };
+        let json = serde_json::to_string(&ctx).unwrap();
+        assert!(!json.contains("request_id"));
     }
 }

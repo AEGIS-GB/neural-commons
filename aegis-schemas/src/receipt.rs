@@ -90,6 +90,12 @@ pub struct ReceiptContext {
     /// Enterprise fields — nested object inside context, NOT top-level.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub enterprise: Option<EnterpriseContext>,
+
+    /// Pipeline request ID (UUID v7) — links all receipts from the same HTTP request.
+    /// Enables cross-referencing evidence receipts with dashboard traffic entries.
+    /// None for receipts not generated from the request pipeline (e.g., memory monitor).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub request_id: Option<String>,
 }
 
 /// Enterprise fields inside ReceiptContext (D1: nested, not flattened).
