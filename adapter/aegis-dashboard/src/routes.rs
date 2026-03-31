@@ -890,6 +890,7 @@ async fn api_traffic(State(state): State<Arc<DashboardSharedState>>) -> Json<ser
                 "model": e.model,
                 "context": e.context,
                 "response_screen": e.response_screen,
+                "request_id": e.request_id,
             })
         })
         .collect();
