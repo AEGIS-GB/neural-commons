@@ -639,15 +639,50 @@ impl SlmHook for SlmHookImpl {
             .await;
 
             match result {
-                Ok((Some(screening_result), _advisory)) => (
+                Ok((Some(screening_result), _advisory, _timing)) => (
                     Some(self.record_and_alert(&screening_result, content)),
                     None,
                 ),
-                Ok((None, advisory)) => {
+                Ok((None, advisory, timing)) => {
                     if let Some(ref adv) = advisory {
                         tracing::info!(advisory = %adv, "classifier advisory → will pass to deep SLM");
                     }
-                    (None, advisory)
+                    // Build a minimal verdict with fast-layer timing so the dashboard
+                    // can show classifier status even when content is clean.
+                    let fast_verdict = if timing.classifier_ms.is_some() {
+                        Some((
+                            SlmDecision::Admit,
+                            Some(SlmVerdict {
+                                action: "admit".to_string(),
+                                threat_score: 0,
+                                intent: "benign".to_string(),
+                                confidence: 10000,
+                                engine: "fast-layers".to_string(),
+                                screening_ms: timing.classifier_ms.unwrap_or(0)
+                                    + timing.heuristic_ms.unwrap_or(0),
+                                pass_a_ms: timing.heuristic_ms,
+                                pass_b_ms: None,
+                                classifier_ms: timing.classifier_ms,
+                                annotation_count: 0,
+                                dimensions: None,
+                                screened_text: None,
+                                reason: None,
+                                explanation: None,
+                                annotations: None,
+                                channel: None,
+                                channel_user: None,
+                                channel_trust_level: None,
+                                classifier_advisory: advisory.clone(),
+                                holster_profile: None,
+                                holster_action: None,
+                                threshold_exceeded: None,
+                                escalated: None,
+                            }),
+                        ))
+                    } else {
+                        None
+                    };
+                    (fast_verdict, advisory)
                 }
                 Err(e) => {
                     tracing::warn!("fast screening task panicked: {e}");

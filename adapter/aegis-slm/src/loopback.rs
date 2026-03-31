@@ -118,12 +118,19 @@ pub fn screen_content(config: &LoopbackConfig, content: &str) -> ScreeningDecisi
 /// Returns (screening_result, classifier_advisory).
 /// - screening_result: Some if a fast layer caught a threat, None if clean/advisory
 /// - classifier_advisory: Some("prob=0.98") if classifier flagged but was in advisory mode
+/// Fast layer timing metadata — returned even when content is clean.
+#[derive(Debug, Clone, Default)]
+pub struct FastLayerTiming {
+    pub classifier_ms: Option<u64>,
+    pub heuristic_ms: Option<u64>,
+}
+
 pub fn screen_fast_layers(
     config: &LoopbackConfig,
     content: &str,
     holster_profile: Option<&HolsterProfile>,
     classifier_blocking: bool,
-) -> (Option<ScreeningResult>, Option<String>) {
+) -> (Option<ScreeningResult>, Option<String>, FastLayerTiming) {
     use std::time::Instant;
     let pipeline_start = Instant::now();
 
@@ -140,6 +147,7 @@ pub fn screen_fast_layers(
                 },
             }),
             None,
+            FastLayerTiming::default(),
         );
     }
 
@@ -199,6 +207,10 @@ pub fn screen_fast_layers(
                         },
                     }),
                     None,
+                    FastLayerTiming {
+                        classifier_ms: None,
+                        heuristic_ms,
+                    },
                 );
             }
         }
@@ -240,6 +252,10 @@ pub fn screen_fast_layers(
                     },
                 }),
                 None,
+                FastLayerTiming {
+                    classifier_ms,
+                    heuristic_ms,
+                },
             );
         } else {
             info!(
@@ -253,7 +269,14 @@ pub fn screen_fast_layers(
     }
 
     // Fast layers clean (or advisory only) — needs deep SLM analysis (Layer 3)
-    (None, classifier_advisory)
+    (
+        None,
+        classifier_advisory,
+        FastLayerTiming {
+            classifier_ms,
+            heuristic_ms,
+        },
+    )
 }
 
 /// Run only the deep SLM layer (2-3s). Call only after screen_fast_layers returns None.
