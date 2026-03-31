@@ -93,6 +93,7 @@ pub type TrafficRecorder = dyn Fn(
         Option<&str>,                    // context (OpenClaw)
         Option<serde_json::Value>,       // slm_detail
         Option<serde_json::Value>,       // response_screen
+        Option<&str>,                    // request_id (pipeline UUID v7)
     ) -> Option<u64>
     + Send
     + Sync;
@@ -339,6 +340,7 @@ async fn recording_middleware(
                 context,
                 slm_v.as_ref().and_then(|v| serde_json::to_value(v).ok()),
                 None, // no response screening on early rejections
+                None, // no request_id on early rejections
             );
         }
     }
@@ -1343,6 +1345,7 @@ async fn forward_request(
                                 None
                             }
                         }),
+                    Some(stream_request_id.as_str()),
                 )
             } else {
                 None
@@ -1547,6 +1550,7 @@ async fn forward_request(
             response_screen_result
                 .as_ref()
                 .and_then(|r| serde_json::to_value(r).ok()),
+            Some(req_info.request_id.as_str()),
         )
     } else {
         None

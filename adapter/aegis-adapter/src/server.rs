@@ -908,7 +908,8 @@ pub async fn start(config: AdapterConfig, mode_override: Option<Mode>) -> Result
                   model: Option<&str>,
                   context: Option<&str>,
                   slm_detail: Option<serde_json::Value>,
-                  response_screen: Option<serde_json::Value>| {
+                  response_screen: Option<serde_json::Value>,
+                  request_id: Option<&str>| {
                 let (slm_dur, slm_action, slm_score) = match slm_verdict {
                     Some(v) => (
                         Some(v.screening_ms),
@@ -935,7 +936,11 @@ pub async fn start(config: AdapterConfig, mode_override: Option<Mode>) -> Result
                     slm_detail,
                     response_screen,
                 );
-                ts.last_id()
+                let entry_id = ts.last_id();
+                if let (Some(id), Some(rid)) = (entry_id, request_id) {
+                    ts.update_request_id(id, rid);
+                }
+                entry_id
             },
         )
     };
