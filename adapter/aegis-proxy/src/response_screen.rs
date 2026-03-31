@@ -40,6 +40,13 @@ pub struct ResponseFinding {
     /// never sent to the client.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub matched_values: Vec<String>,
+    /// Where in the response this finding was located.
+    /// "message_content" = in the assistant's actual reply
+    /// "api_protocol" = in JSON metadata (id, model, system_fingerprint, etc.)
+    /// "tool_call" = in a tool call argument
+    /// "unknown" = could not determine location
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub location: Option<String>,
 }
 
 impl ResponseScreenResult {
@@ -104,6 +111,7 @@ pub fn screen_response_with_policy(
                 category: p.category.to_string(),
                 description: p.description.to_string(),
                 matched_values: matches,
+                location: None,
             });
             text = new_text;
         }
@@ -207,6 +215,7 @@ pub fn screen_response_with_policy(
                     category: category.to_string(),
                     description,
                     matched_values: vec![entity.text.clone()],
+                    location: None,
                 });
                 // Redact the entity text
                 text = text.replace(
@@ -218,6 +227,13 @@ pub fn screen_response_with_policy(
     }
 
     result.screened = result.redaction_count > 0;
+
+    // Classify the location of each finding post-hoc
+    for finding in &mut result.findings {
+        if finding.location.is_none() {
+            finding.location = Some(classify_finding_location(finding, body));
+        }
+    }
 
     // Apply DLP mode based on trust policy
     match policy.dlp_mode {
@@ -257,6 +273,61 @@ pub fn screen_response_with_policy(
             (text, result)
         }
     }
+}
+
+/// Classify where in the response a finding was located.
+/// Checks matched values against message content, tool call arguments,
+/// and falls back to "api_protocol" for metadata fields.
+fn classify_finding_location(finding: &ResponseFinding, body: &str) -> String {
+    // Try to parse as OpenAI chat completion JSON
+    let Ok(json) = serde_json::from_str::<serde_json::Value>(body) else {
+        return "unknown".to_string();
+    };
+
+    // Extract message content from all choices
+    let content: String = json
+        .get("choices")
+        .and_then(|c| c.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|c| c.get("message"))
+                .filter_map(|m| m.get("content"))
+                .filter_map(|c| c.as_str())
+                .collect::<Vec<_>>()
+                .join(" ")
+        })
+        .unwrap_or_default();
+
+    // Extract tool call arguments
+    let tool_args: Vec<&str> = json
+        .get("choices")
+        .and_then(|c| c.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|c| c.get("message"))
+                .filter_map(|m| m.get("tool_calls"))
+                .filter_map(|tc| tc.as_array())
+                .flat_map(|calls| calls.iter())
+                .filter_map(|call| call.get("function"))
+                .filter_map(|f| f.get("arguments"))
+                .filter_map(|a| a.as_str())
+                .collect()
+        })
+        .unwrap_or_default();
+
+    // Check each matched value against content and tool args
+    for val in &finding.matched_values {
+        if content.contains(val.as_str()) {
+            return "message_content".to_string();
+        }
+        for arg in &tool_args {
+            if arg.contains(val.as_str()) {
+                return "tool_call".to_string();
+            }
+        }
+    }
+
+    "api_protocol".to_string()
 }
 
 /// Check tool calls against trust policy.
@@ -307,6 +378,7 @@ fn check_tools_with_policy(
                 category: "blocked_tool".to_string(),
                 description: reason,
                 matched_values: vec![name.clone()],
+                location: Some("tool_call".to_string()),
             });
         }
     }
@@ -367,6 +439,7 @@ fn check_dangerous_tools(body: &str) -> Option<ResponseFinding> {
                     category: "dangerous_tool".to_string(),
                     description: format!("dangerous tool call: {name}"),
                     matched_values: vec![name.to_string()],
+                    location: Some("tool_call".to_string()),
                 });
             }
         }
@@ -382,6 +455,7 @@ fn check_dangerous_tools(body: &str) -> Option<ResponseFinding> {
                     category: "dangerous_tool".to_string(),
                     description: format!("dangerous tool call: {name}"),
                     matched_values: vec![name.to_string()],
+                    location: Some("tool_call".to_string()),
                 });
             }
         }

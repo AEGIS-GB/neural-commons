@@ -802,7 +802,13 @@ fn show_detail(base: &str, id: u64, show_body: bool, section: Option<&str>, json
                 for f in findings {
                     let cat = f.get("category").and_then(|v| v.as_str()).unwrap_or("?");
                     let desc = f.get("description").and_then(|v| v.as_str()).unwrap_or("");
-                    println!("    {:<10} {}", cat, desc);
+                    let loc_suffix = match f.get("location").and_then(|v| v.as_str()) {
+                        Some("message_content") => "  [message]",
+                        Some("tool_call") => "  [tool call]",
+                        Some("api_protocol") => "  [API metadata]",
+                        _ => "",
+                    };
+                    println!("    {:<10} {}{}", cat, desc, loc_suffix);
                 }
             }
         }
