@@ -64,6 +64,7 @@ struct TrafficDetailEntry {
     context: Option<String>,
     response_screen: Option<serde_json::Value>,
     request_id: Option<String>,
+    slm_detail: Option<serde_json::Value>,
 }
 
 #[derive(Deserialize, Debug)]
@@ -164,6 +165,8 @@ pub fn run(
     show_health: bool,
     num: usize,
     watch: bool,
+    section: Option<&str>,
+    json: bool,
 ) {
     if watch {
         run_watch(aegis_url, channel_filter, verdict_filter, num);
@@ -173,7 +176,7 @@ pub fn run(
     let dashboard_base = format!("{}/dashboard/api", aegis_url.trim_end_matches('/'));
 
     if let Some(entry_id) = id {
-        show_detail(&dashboard_base, entry_id, show_body);
+        show_detail(&dashboard_base, entry_id, show_body, section, json);
     } else {
         show_table(
             &dashboard_base,
@@ -223,6 +226,20 @@ fn fetch_json<T: for<'de> Deserialize<'de>>(url: &str) -> Option<T> {
         return None;
     }
     resp.json().ok()
+}
+
+/// Fetch a URL and return the raw JSON string.
+fn fetch_raw_json(url: &str) -> Option<String> {
+    let client = reqwest::blocking::Client::new();
+    let mut req = client.get(url);
+    if let Some(token) = get_dashboard_token() {
+        req = req.header("Authorization", format!("Bearer {token}"));
+    }
+    let resp = req.send().ok()?;
+    if !resp.status().is_success() {
+        return None;
+    }
+    resp.text().ok()
 }
 
 /// Color an SLM verdict string with ANSI escapes.
@@ -368,7 +385,56 @@ fn show_table(
     println!();
 }
 
-fn show_detail(base: &str, id: u64, show_body: bool) {
+/// Format a byte size as a human-readable string (e.g. 75454 -> "74KB").
+fn format_size(bytes: usize) -> String {
+    if bytes >= 1_048_576 {
+        format!("{}MB", bytes / 1_048_576)
+    } else if bytes >= 1024 {
+        format!("{}KB", bytes / 1024)
+    } else {
+        format!("{}B", bytes)
+    }
+}
+
+/// Render a dimension bar: filled blocks + empty blocks scaled to 10 chars.
+fn dimension_bar(value: u64, max: u64) -> String {
+    let filled = if max == 0 {
+        0
+    } else {
+        ((value as f64 / max as f64) * 10.0).round() as usize
+    };
+    let filled = filled.min(10);
+    let empty = 10 - filled;
+    format!("{}{}", "\u{2588}".repeat(filled), "\u{2591}".repeat(empty))
+}
+
+/// Section header with consistent width.
+fn section_header(title: &str) {
+    let prefix = format!("  \u{2500}\u{2500} {} ", title);
+    let padding = if prefix.len() < 75 {
+        75 - prefix.len()
+    } else {
+        3
+    };
+    println!("{}{}", prefix, "\u{2500}".repeat(padding));
+}
+
+fn show_detail(base: &str, id: u64, show_body: bool, section: Option<&str>, json: bool) {
+    // --- JSON mode: dump raw API responses and return ---
+    if json {
+        let traffic_url = format!("{}/traffic/{}", base, id);
+        let receipts_url = format!("{}/traffic/{}/receipts", base, id);
+        if let Some(raw) = fetch_raw_json(&traffic_url) {
+            println!("{}", raw);
+        } else {
+            eprintln!("Failed to fetch traffic entry #{id}.");
+        }
+        if let Some(raw) = fetch_raw_json(&receipts_url) {
+            println!("{}", raw);
+        }
+        return;
+    }
+
     let detail: TrafficDetail = match fetch_json(&format!("{}/traffic/{}", base, id)) {
         Some(d) => d,
         None => {
@@ -378,250 +444,452 @@ fn show_detail(base: &str, id: u64, show_body: bool) {
     };
 
     let e = &detail.entry;
-    let model = e
-        .model
-        .as_deref()
-        .or_else(|| {
-            e.request_body
-                .as_deref()
-                .and_then(extract_model)
-                .as_deref()
-                .map(|_| "")
-        })
-        .unwrap_or("\u{2014}");
-    let model_display = if model.is_empty() {
-        e.request_body
-            .as_deref()
-            .and_then(extract_model)
-            .unwrap_or_else(|| "\u{2014}".to_string())
-    } else {
-        model.to_string()
-    };
-    let req_tok = estimate_tokens(e.request_size);
-    let resp_tok = estimate_tokens(e.response_size);
-    let total_tok = req_tok + resp_tok;
-    let streaming = if e.is_streaming { "yes" } else { "no" };
-    let channel = e.channel.as_deref().unwrap_or("\u{2014}");
-    let trust = e.trust_level.as_deref().unwrap_or("\u{2014}");
-    let context = e.context.as_deref().unwrap_or("\u{2014}");
-    let req_id_display = e.request_id.as_deref().unwrap_or("\u{2014}");
 
-    let upstream = if e.status == 403 {
-        "BLOCKED (never forwarded)".to_string()
-    } else {
-        format!("\u{2192} {}", e.status)
-    };
+    // Fetch receipts once for all sections that need them
+    let receipts_url = format!("{}/traffic/{}/receipts", base, id);
+    let receipts_resp: Option<ReceiptsResponse> = fetch_json(&receipts_url);
+    let receipts: Vec<&ReceiptInfo> = receipts_resp
+        .as_ref()
+        .and_then(|r| r.receipts.as_ref())
+        .map(|v| v.iter().collect())
+        .unwrap_or_default();
 
-    println!();
-    println!(
-        "\u{2501}\u{2501}\u{2501} Request #{} {}",
-        e.id,
-        "\u{2501}".repeat(58)
-    );
-    println!(
-        "  Time       {}                Duration   {}ms",
-        format_ts(e.ts_ms),
-        e.duration_ms
-    );
-    println!("  Channel    {:<28} Trust      {}", channel, trust);
-    println!("  Context    {}", context);
-    println!("  RequestID  {}", req_id_display);
-    println!("  Route      {} {} {}", e.method, e.path, upstream);
-    println!(
-        "  Model      {:<28} Streaming  {}",
-        model_display, streaming
-    );
+    let show_all = section.is_none();
+    let sec = section.unwrap_or("");
 
-    // Tokens
-    println!();
-    println!(
-        "  \u{2500}\u{2500} Tokens \u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}"
-    );
-    println!(
-        "  Prompt     {:<10} Completion   {:<10} Total   {}",
-        req_tok, resp_tok, total_tok
-    );
-
-    // SLM Screening
-    let verdict_label = match e.slm_verdict.as_deref() {
-        Some("admit") => "ADMIT",
-        Some("reject") => "REJECT",
-        Some("quarantine") => "QUARANTINE",
-        Some(v) => v,
-        None => "NOT RUN",
-    };
-    println!();
-    println!(
-        "  \u{2500}\u{2500} SLM Screening \u{2500}\u{2500} verdict: {} \u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}",
-        verdict_label
-    );
-
-    if let Some(dur) = e.slm_duration_ms {
-        println!(
-            "  Deep SLM     {}  {}ms   threat={}/10000",
-            verdict_label.to_lowercase(),
-            dur,
-            e.slm_threat_score.unwrap_or(0)
-        );
-    } else {
-        println!("  (SLM screening not recorded for this entry)");
-    }
-
-    // Response Screening (DLP)
-    if let Some(ref rs) = e.response_screen {
-        let screened = rs
-            .get("screened")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false);
-        let blocked = rs.get("blocked").and_then(|v| v.as_bool()).unwrap_or(false);
-        let redactions = rs
-            .get("redaction_count")
-            .and_then(|v| v.as_u64())
-            .unwrap_or(0);
-
-        if blocked {
-            let reason = rs
-                .get("block_reason")
-                .and_then(|v| v.as_str())
-                .unwrap_or("dangerous operation");
-            println!();
-            println!(
-                "  \u{2500}\u{2500} Response Screening \u{2500}\u{2500} \x1b[31mBLOCKED\x1b[0m \u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}"
-            );
-            println!("  Reason     {}", reason);
-        } else if screened {
-            println!();
-            println!(
-                "  \u{2500}\u{2500} Response Screening \u{2500}\u{2500} \x1b[33m{} redaction{}\x1b[0m \u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}",
-                redactions,
-                if redactions > 1 { "s" } else { "" }
-            );
-        } else {
-            println!();
-            println!(
-                "  \u{2500}\u{2500} Response Screening \u{2500}\u{2500} \x1b[32mclean\x1b[0m \u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}"
-            );
-        }
-
-        if let Some(findings) = rs.get("findings").and_then(|v| v.as_array()) {
-            for f in findings {
-                let cat = f.get("category").and_then(|v| v.as_str()).unwrap_or("?");
-                let desc = f.get("description").and_then(|v| v.as_str()).unwrap_or("");
-                println!("  \x1b[33m{:<20}\x1b[0m {}", cat, desc);
-            }
-        }
-    }
-
-    // Last user message
-    if let Some(ref body) = e.request_body
-        && let Some(msg) = extract_last_user_message(body)
-    {
+    // === Top banner ===
+    if show_all {
         println!();
         println!(
-            "  \u{2500}\u{2500} Last User Message \u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}"
+            "\u{2501}\u{2501}\u{2501} Request #{} {}",
+            e.id,
+            "\u{2501}".repeat(58)
         );
-        // Word-wrap at ~70 chars with indent
-        for line in textwrap(&msg, 68) {
-            println!("  {}", line);
-        }
     }
 
-    // Pipeline & Evidence Receipts
-    println!();
-    let pipeline_req_id = e.request_id.as_deref().unwrap_or("\u{2014}");
-    println!(
-        "  \u{2500}\u{2500} Pipeline \u{2500}\u{2500} request_id: {} {}",
-        pipeline_req_id,
-        "\u{2500}".repeat(40)
-    );
+    // === Overview ===
+    if show_all || sec == "overview" {
+        let model_display = e
+            .model
+            .as_deref()
+            .map(|s| s.to_string())
+            .or_else(|| e.request_body.as_deref().and_then(extract_model))
+            .unwrap_or_else(|| "\u{2014}".to_string());
+        let streaming = if e.is_streaming { "yes" } else { "no" };
+        let channel = e.channel.as_deref().unwrap_or("\u{2014}");
+        let trust = e.trust_level.as_deref().unwrap_or("\u{2014}");
+        let req_id_display = e.request_id.as_deref().unwrap_or("\u{2014}");
+        let route = if e.status == 403 {
+            format!("{} {} \u{2192} BLOCKED", e.method, e.path)
+        } else {
+            format!("{} {} \u{2192} {}", e.method, e.path, e.status)
+        };
 
-    // Fetch linked receipts
-    let receipts_url = format!("{}/traffic/{}/receipts", base, id);
-    if let Some(receipts_resp) = fetch_json::<ReceiptsResponse>(&receipts_url) {
-        if let Some(ref receipts) = receipts_resp.receipts {
-            // Per-layer breakdown
-            let mut has_layer_info = false;
-            for r in receipts {
-                let rtype = r.receipt_type.as_deref().unwrap_or("");
-                let action = r.action.as_deref().unwrap_or("");
-                let outcome = r.outcome.as_deref().unwrap_or("");
+        println!();
+        section_header("Overview");
+        println!("  {:<13}{}", "Request ID", req_id_display);
+        println!("  {:<13}{}", "Time", format_ts(e.ts_ms));
+        println!("  {:<13}{}", "Route", route);
+        println!(
+            "  {:<13}{:<26}{:<13}{}",
+            "Model", model_display, "Streaming", streaming
+        );
+        println!("  {:<13}{:<26}{:<13}{}", "Channel", channel, "Trust", trust);
+        println!(
+            "  {:<13}{:<26}{:<13}{} \u{2192} {}",
+            "Duration",
+            format!("{}ms", e.duration_ms),
+            "Body",
+            format_size(e.request_size),
+            format_size(e.response_size)
+        );
+    }
 
-                match rtype {
-                    "slm_analysis" => {
-                        has_layer_info = true;
-                        println!("  SlmAnalysis     {} {}", action, outcome);
+    // === Screening Layers (SLM section) ===
+    if show_all || sec == "slm" {
+        let slm = e.slm_detail.as_ref();
+        let engine = slm
+            .and_then(|s| s.get("engine"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        let action_str = slm
+            .and_then(|s| s.get("action"))
+            .and_then(|v| v.as_str())
+            .unwrap_or(e.slm_verdict.as_deref().unwrap_or(""));
+        let threat_score = slm
+            .and_then(|s| s.get("threat_score"))
+            .and_then(|v| v.as_u64())
+            .unwrap_or(e.slm_threat_score.map(|s| s as u64).unwrap_or(0));
+        let annotation_count = slm
+            .and_then(|s| s.get("annotation_count"))
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
+        let screening_ms = slm
+            .and_then(|s| s.get("screening_ms"))
+            .and_then(|v| v.as_u64())
+            .or(e.slm_duration_ms)
+            .unwrap_or(0);
+        let pass_a_ms = slm
+            .and_then(|s| s.get("pass_a_ms"))
+            .and_then(|v| v.as_u64());
+        let classifier_ms = slm
+            .and_then(|s| s.get("classifier_ms"))
+            .and_then(|v| v.as_u64());
+        let classifier_advisory = slm
+            .and_then(|s| s.get("classifier_advisory"))
+            .and_then(|v| v.as_bool());
+
+        let has_slm = e.slm_verdict.is_some() || slm.is_some();
+
+        if has_slm {
+            println!();
+            section_header("Screening Layers");
+
+            // Layer 1: Heuristic
+            let heuristic_ran = engine == "heuristic" || pass_a_ms.is_some();
+            if heuristic_ran {
+                let verdict_display = match action_str {
+                    "reject" => "\x1b[31m\u{2588}\u{2588} REJECT\x1b[0m",
+                    "admit" => "\x1b[32m\u{2588}\u{2588} ADMIT\x1b[0m",
+                    "quarantine" => "\x1b[33m\u{2588}\u{2588} QUARANTINE\x1b[0m",
+                    _ => action_str,
+                };
+                let time_display = if screening_ms < 1 {
+                    "<1ms".to_string()
+                } else {
+                    format!("{}ms", screening_ms)
+                };
+                let pattern_display = if annotation_count > 0 {
+                    format!("  {} patterns", annotation_count)
+                } else {
+                    String::new()
+                };
+                println!(
+                    "  Layer 1  {:<16}{}   score={}{}   {}",
+                    "Heuristic", verdict_display, threat_score, pattern_display, time_display
+                );
+
+                // Show annotations
+                if let Some(annotations) = slm
+                    .and_then(|s| s.get("annotations"))
+                    .and_then(|v| v.as_array())
+                {
+                    for (i, ann) in annotations.iter().enumerate() {
+                        let pattern = ann.get("pattern").and_then(|v| v.as_str()).unwrap_or("?");
+                        let severity = ann.get("severity").and_then(|v| v.as_u64()).unwrap_or(0);
+                        let excerpt = ann.get("excerpt").and_then(|v| v.as_str()).unwrap_or("");
+                        let excerpt_trunc: String = excerpt.chars().take(50).collect();
+                        let connector = if i == annotations.len() - 1 {
+                            "\u{2514}\u{2500}"
+                        } else {
+                            "\u{251c}\u{2500}"
+                        };
+                        println!(
+                            "    {} {:<20}({})  \"{}\"",
+                            connector, pattern, severity, excerpt_trunc
+                        );
                     }
-                    "vault_detection" => {
-                        has_layer_info = true;
-                        println!("  VaultDetection  {} {}", action, outcome);
-                    }
-                    "write_barrier" => {
-                        has_layer_info = true;
-                        println!("  WriteBarrier    {} {}", action, outcome);
-                    }
-                    "api_call" => {
-                        has_layer_info = true;
-                        println!("  ApiCall         {} {}", action, outcome);
-                    }
-                    _ => {}
                 }
             }
 
-            if !has_layer_info {
-                println!("  (no per-layer breakdown available)");
+            // Layer 2: Classifier
+            if let Some(cms) = classifier_ms {
+                let advisory = classifier_advisory.unwrap_or(false);
+                let mode = if advisory { " (advisory)" } else { "" };
+                println!(
+                    "  Layer 2  {:<16}\u{2713} ran   {}ms{}",
+                    "Classifier", cms, mode
+                );
+            } else if engine == "heuristic"
+                && (action_str == "reject" || action_str == "quarantine")
+            {
+                println!(
+                    "  Layer 2  {:<16}\u{2500}\u{2500} not run (heuristic caught first) \u{2500}\u{2500}",
+                    "Classifier"
+                );
             }
 
-            // Evidence receipts listing
+            // Layer 3: Deep SLM
+            if engine != "heuristic" && pass_a_ms.is_some() {
+                println!(
+                    "  Layer 3  {:<16}\u{2713} ran   {}ms",
+                    "Deep SLM",
+                    pass_a_ms.unwrap_or(0)
+                );
+            } else if engine == "heuristic"
+                && (action_str == "reject" || action_str == "quarantine")
+            {
+                println!(
+                    "  Layer 3  {:<16}\u{2500}\u{2500} not run (heuristic caught first) \u{2500}\u{2500}",
+                    "Deep SLM"
+                );
+            }
+
+            // Layer 4: Metaprompt (check receipts for hints)
+            let has_metaprompt = receipts.iter().any(|r| {
+                r.receipt_type.as_deref() == Some("MetapromptInjection")
+                    || r.outcome
+                        .as_deref()
+                        .map(|o| o.contains("metaprompt"))
+                        .unwrap_or(false)
+            });
+            if has_metaprompt {
+                println!("  Layer 4  {:<16}\u{2713} injected", "Metaprompt");
+            }
+
+            // === Threat Dimensions ===
+            if let Some(dims) = slm.and_then(|s| s.get("dimensions")) {
+                println!();
+                section_header("Threat Dimensions");
+                let dim_names = [
+                    ("injection", "manipulation"),
+                    ("exfiltration", "persistence"),
+                    ("evasion", ""),
+                ];
+                for (left, right) in &dim_names {
+                    let lv = dims.get(*left).and_then(|v| v.as_u64()).unwrap_or(0);
+                    let left_bar = dimension_bar(lv, 10000);
+                    let left_str = format!("  {:<14}{} {:>5}", left, left_bar, lv);
+                    if !right.is_empty() {
+                        let rv = dims.get(*right).and_then(|v| v.as_u64()).unwrap_or(0);
+                        let right_bar = dimension_bar(rv, 10000);
+                        println!("{}    {:<14}{} {:>5}", left_str, right, right_bar, rv);
+                    } else {
+                        println!("{}", left_str);
+                    }
+                }
+            }
+
+            // === Holster Decision ===
+            let holster_profile = slm
+                .and_then(|s| s.get("holster_profile"))
+                .and_then(|v| v.as_str());
+            let holster_action = slm
+                .and_then(|s| s.get("holster_action"))
+                .and_then(|v| v.as_str());
+            if holster_profile.is_some() || holster_action.is_some() {
+                let threshold = slm
+                    .and_then(|s| s.get("threshold_exceeded"))
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
+                let confidence = slm
+                    .and_then(|s| s.get("confidence"))
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0);
+                let explanation = slm
+                    .and_then(|s| s.get("explanation"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+
+                println!();
+                section_header("Holster Decision");
+                println!(
+                    "  {:<13}{}",
+                    "Profile",
+                    holster_profile.unwrap_or("\u{2014}")
+                );
+                let action_suffix = if threshold {
+                    " (threshold exceeded)"
+                } else {
+                    ""
+                };
+                println!(
+                    "  {:<13}{}{}",
+                    "Action",
+                    holster_action.unwrap_or("\u{2014}"),
+                    action_suffix
+                );
+                println!("  {:<13}{}/10000", "Confidence", confidence);
+                if !explanation.is_empty() {
+                    println!("  {:<13}{}", "Explanation", explanation);
+                }
+            }
+        } else {
             println!();
+            section_header("Screening Layers");
+            println!("  (SLM screening not recorded for this entry)");
+        }
+    }
+
+    // === Vault Scanning ===
+    if show_all || sec == "vault" {
+        let vault_receipts: Vec<&&ReceiptInfo> = receipts
+            .iter()
+            .filter(|r| {
+                r.receipt_type
+                    .as_deref()
+                    .map(|t| t.eq_ignore_ascii_case("VaultDetection"))
+                    .unwrap_or(false)
+            })
+            .collect();
+
+        if !vault_receipts.is_empty() || show_all {
+            println!();
+            section_header("Vault Scanning");
+            if vault_receipts.is_empty() {
+                println!("  Request      \u{2713} clean");
+                println!("  Response     \u{2713} clean");
+            } else {
+                for vr in &vault_receipts {
+                    let outcome = vr.outcome.as_deref().unwrap_or("detected");
+                    let action = vr.action.as_deref().unwrap_or("");
+                    let label = if action.contains("response") {
+                        "Response"
+                    } else {
+                        "Request"
+                    };
+                    println!("  {:<13}\u{26a0} {}", label, outcome);
+                }
+            }
+        }
+    }
+
+    // === Write Barrier ===
+    if show_all || sec == "barrier" {
+        let barrier_receipts: Vec<&&ReceiptInfo> = receipts
+            .iter()
+            .filter(|r| {
+                r.receipt_type
+                    .as_deref()
+                    .map(|t| t.eq_ignore_ascii_case("WriteBarrier"))
+                    .unwrap_or(false)
+            })
+            .collect();
+
+        if !barrier_receipts.is_empty() {
+            println!();
+            section_header("Write Barrier");
+            for br in &barrier_receipts {
+                let outcome = br.outcome.as_deref().unwrap_or("barrier triggered");
+                println!("  \u{26a0} {}", outcome);
+            }
+        }
+    }
+
+    // === Response Screening (DLP) ===
+    if show_all || sec == "dlp" {
+        if let Some(ref rs) = e.response_screen {
+            let blocked = rs.get("blocked").and_then(|v| v.as_bool()).unwrap_or(false);
+            let redactions = rs
+                .get("redaction_count")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0);
+
+            println!();
+            section_header("Response Screening (DLP)");
+
+            if blocked {
+                let reason = rs
+                    .get("block_reason")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("dangerous operation");
+                println!(
+                    "  {:<13}\x1b[31mBLOCKED\x1b[0m \u{2014} {}",
+                    "Status", reason
+                );
+            } else if redactions > 0 {
+                println!(
+                    "  {:<13}{} redaction{}",
+                    "Status",
+                    redactions,
+                    if redactions > 1 { "s" } else { "" }
+                );
+            } else {
+                println!("  {:<13}\x1b[32mclean\x1b[0m", "Status");
+            }
+
+            if let Some(findings) = rs.get("findings").and_then(|v| v.as_array()) {
+                for f in findings {
+                    let cat = f.get("category").and_then(|v| v.as_str()).unwrap_or("?");
+                    let desc = f.get("description").and_then(|v| v.as_str()).unwrap_or("");
+                    println!("    {:<10} {}", cat, desc);
+                }
+            }
+        }
+    }
+
+    // === Conversation ===
+    if show_all || sec == "conversation" {
+        if let Some(ref chat) = detail.chat {
+            if let Some(messages) = chat.as_array() {
+                if !messages.is_empty() {
+                    println!();
+                    section_header("Conversation");
+                    for msg in messages {
+                        let role = msg.get("role").and_then(|v| v.as_str()).unwrap_or("?");
+                        let content = msg.get("content").and_then(|v| v.as_str()).unwrap_or("");
+                        let display = if role == "system" {
+                            // Truncate system message to first line
+                            let first_line = content.lines().next().unwrap_or(content);
+                            let trunc: String = first_line.chars().take(80).collect();
+                            if content.len() > trunc.len() {
+                                format!("{}...", trunc)
+                            } else {
+                                trunc
+                            }
+                        } else {
+                            let trunc: String = content.chars().take(200).collect();
+                            if content.len() > trunc.len() {
+                                format!("{}...", trunc)
+                            } else {
+                                trunc
+                            }
+                        };
+                        println!("  \x1b[2m[{}]\x1b[0m     {}", role, display);
+                    }
+                }
+            }
+        }
+    }
+
+    // === Evidence Chain ===
+    if show_all || sec == "evidence" {
+        println!();
+        section_header("Evidence Chain");
+        if receipts.is_empty() {
+            println!("  (no receipts found)");
+        } else {
+            let short_req_id = e
+                .request_id
+                .as_deref()
+                .map(|r| r.chars().take(12).collect::<String>())
+                .unwrap_or_else(|| "\u{2014}".to_string());
             println!(
-                "  \u{2500}\u{2500} Evidence Receipts ({}) {}",
+                "  {} receipts linked by request_id {}",
                 receipts.len(),
-                "\u{2500}".repeat(50)
+                short_req_id
             );
             for (i, r) in receipts.iter().enumerate() {
                 let rtype = r.receipt_type.as_deref().unwrap_or("unknown");
-                let action = r.action.as_deref().unwrap_or("");
-                let rid = r.id.as_deref().unwrap_or("");
-                let short_id: String = rid.chars().take(8).collect();
-                println!(
-                    "  {:>3}  {:<18} {:<40} [{}]",
-                    i + 1,
-                    rtype,
-                    action,
-                    short_id
-                );
+                let outcome = r.outcome.as_deref().unwrap_or("");
+                let short_outcome: String = outcome.chars().take(60).collect();
+                println!("  #{:<2} {:<18} {}", i + 1, rtype, short_outcome);
             }
-        } else {
-            println!("  (no receipts found)");
         }
-    } else {
-        println!("  Chain: recorded");
     }
 
-    // Body
+    // === Raw bodies (existing --body flag) ===
     if show_body {
         if let Some(ref body) = e.request_body {
             println!();
-            println!(
-                "  \u{2500}\u{2500} Request Body ({} bytes) \u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}",
-                e.request_size
-            );
+            section_header(&format!("Request Body ({} bytes)", e.request_size));
             let truncated: String = body.chars().take(2000).collect();
             println!("{}", truncated);
         }
         if let Some(ref body) = e.response_body {
             println!();
-            println!(
-                "  \u{2500}\u{2500} Response Body ({} bytes) \u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}",
-                e.response_size
-            );
+            section_header(&format!("Response Body ({} bytes)", e.response_size));
             let truncated: String = body.chars().take(2000).collect();
             println!("{}", truncated);
         }
     }
 
-    println!("{}", "\u{2501}".repeat(70));
-    println!();
+    // === Footer ===
+    if show_all {
+        println!();
+        println!("{}", "\u{2501}".repeat(75));
+        println!();
+    }
 }
 
 fn run_watch(
