@@ -730,7 +730,9 @@ async fn forward_request(
                     "vault detected credentials in request"
                 );
                 if let Some(ref evidence) = state.hooks.evidence
-                    && let Err(e) = evidence.on_vault_detection(&path, "request", secrets).await
+                    && let Err(e) = evidence
+                        .on_vault_detection(&path, "request", secrets, &req_info.request_id)
+                        .await
                 {
                     warn!("evidence hook error on vault detection: {e}");
                 }
@@ -850,7 +852,11 @@ async fn forward_request(
                     };
 
                 let (fast_result, classifier_advisory) = slm
-                    .screen_fast(&screen_content, !trust_policy.classifier_advisory)
+                    .screen_fast(
+                        &screen_content,
+                        !trust_policy.classifier_advisory,
+                        &req_info.request_id,
+                    )
                     .await;
                 if let Some((decision, verdict)) = fast_result {
                     slm_verdict = verdict;
@@ -921,7 +927,12 @@ async fn forward_request(
                             source_ip
                         ));
                         let (decision, verdict) = slm
-                            .screen_deep(&screen_content, classifier_advisory.clone(), trust_ctx)
+                            .screen_deep(
+                                &screen_content,
+                                classifier_advisory.clone(),
+                                trust_ctx,
+                                &req_info.request_id,
+                            )
                             .await;
                         slm_verdict = verdict;
 
@@ -1158,6 +1169,7 @@ async fn forward_request(
             None
         };
         let stream_path_for_vault = path.clone();
+        let stream_request_id = req_info.request_id.clone();
         tokio::spawn(async move {
             use tokio_stream::StreamExt;
             let mut hasher = Sha256::new();
@@ -1209,6 +1221,7 @@ async fn forward_request(
                                                 &stream_path_for_vault,
                                                 "response",
                                                 secrets,
+                                                &stream_request_id,
                                             )
                                             .await
                                     {
@@ -1271,7 +1284,12 @@ async fn forward_request(
                     );
                     if let Some(ref evidence) = stream_evidence
                         && let Err(e) = evidence
-                            .on_vault_detection(&stream_path_for_vault, "response", secrets)
+                            .on_vault_detection(
+                                &stream_path_for_vault,
+                                "response",
+                                secrets,
+                                &stream_request_id,
+                            )
                             .await
                     {
                         warn!("evidence hook error on streaming vault final detection: {e}");
@@ -1365,6 +1383,7 @@ async fn forward_request(
             let slm_clone: Arc<dyn middleware::SlmHook> = Arc::clone(slm);
             let trust_channel = req_info.channel_trust.channel.clone();
             let trust_level = req_info.channel_trust.trust_level;
+            let deferred_request_id = req_info.request_id.clone();
             let trust_ctx = Some(format!(
                 "trust={}, source={}",
                 format!("{:?}", trust_level).to_lowercase(),
@@ -1372,7 +1391,9 @@ async fn forward_request(
             ));
             let updater = state.traffic_slm_updater.clone();
             tokio::spawn(async move {
-                let (_decision, verdict) = slm_clone.screen_deep(&content, None, trust_ctx).await;
+                let (_decision, verdict) = slm_clone
+                    .screen_deep(&content, None, trust_ctx, &deferred_request_id)
+                    .await;
                 info!(
                     channel = ?trust_channel,
                     trust = ?trust_level,
@@ -1443,7 +1464,7 @@ async fn forward_request(
                 // Record vault detection in evidence chain
                 if let Some(ref evidence) = state.hooks.evidence
                     && let Err(e) = evidence
-                        .on_vault_detection(&path, "response", secrets)
+                        .on_vault_detection(&path, "response", secrets, &req_info.request_id)
                         .await
                 {
                     warn!("evidence hook error on vault detection: {e}");
@@ -1538,6 +1559,7 @@ async fn forward_request(
         let slm_clone: Arc<dyn middleware::SlmHook> = Arc::clone(slm);
         let trust_channel = req_info.channel_trust.channel.clone();
         let trust_level = req_info.channel_trust.trust_level;
+        let deferred_request_id = req_info.request_id.clone();
         let trust_ctx = Some(format!(
             "trust={}, source={}",
             format!("{:?}", trust_level).to_lowercase(),
@@ -1545,7 +1567,9 @@ async fn forward_request(
         ));
         let updater = state.traffic_slm_updater.clone();
         tokio::spawn(async move {
-            let (_decision, verdict) = slm_clone.screen_deep(&content, None, trust_ctx).await;
+            let (_decision, verdict) = slm_clone
+                .screen_deep(&content, None, trust_ctx, &deferred_request_id)
+                .await;
             info!(
                 channel = ?trust_channel,
                 trust = ?trust_level,
@@ -1556,6 +1580,23 @@ async fn forward_request(
                 updater(entry_id, v);
             }
         });
+    }
+
+    // Debug: validate pipeline receipt generation for migration readiness.
+    // This logs the receipt count without changing behavior — hooks still do the recording.
+    if tracing::enabled!(tracing::Level::DEBUG) {
+        let pipeline_receipts = pipeline.to_receipts(
+            &req_info.body_hash,
+            req_info.body_size,
+            pipeline.response_status,
+            Some(final_body.len()),
+            pipeline.response_duration_ms,
+        );
+        debug!(
+            pipeline_receipt_count = pipeline_receipts.len(),
+            request_id = %pipeline.request_id_str(),
+            "pipeline receipt validation"
+        );
     }
 
     // Build response
