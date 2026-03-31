@@ -240,3 +240,73 @@ impl TrafficStore {
         self.entries.read().ok()?.back().map(|e| e.id)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_store() -> TrafficStore {
+        TrafficStore::new(100)
+    }
+
+    fn record_dummy(store: &TrafficStore) {
+        store.record(
+            "POST",
+            "/v1/chat/completions",
+            200,
+            b"{\"messages\":[]}",
+            b"{\"choices\":[]}",
+            42,
+            false,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        );
+    }
+
+    #[test]
+    fn test_record_and_get() {
+        let store = make_store();
+        record_dummy(&store);
+        assert_eq!(store.len(), 1);
+        let entry = store.get(1).unwrap();
+        assert_eq!(entry.method, "POST");
+        assert_eq!(entry.path, "/v1/chat/completions");
+        assert_eq!(entry.status, 200);
+        assert_eq!(entry.request_id, None);
+    }
+
+    #[test]
+    fn test_update_request_id() {
+        let store = make_store();
+        record_dummy(&store);
+        let id = store.last_id().unwrap();
+        assert_eq!(store.get(id).unwrap().request_id, None);
+
+        store.update_request_id(id, "01964a2b-7c00-7def-8000-000000000001");
+        let entry = store.get(id).unwrap();
+        assert_eq!(
+            entry.request_id.as_deref(),
+            Some("01964a2b-7c00-7def-8000-000000000001")
+        );
+    }
+
+    #[test]
+    fn test_ring_buffer_eviction() {
+        let store = TrafficStore::new(2);
+        record_dummy(&store);
+        record_dummy(&store);
+        record_dummy(&store);
+        assert_eq!(store.len(), 2);
+        // First entry (id=1) should be evicted
+        assert!(store.get(1).is_none());
+        assert!(store.get(2).is_some());
+        assert!(store.get(3).is_some());
+    }
+}
