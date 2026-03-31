@@ -234,6 +234,14 @@ enum Commands {
         /// Live monitoring mode — refreshes like 'top' (Ctrl+C to exit)
         #[arg(short, long)]
         watch: bool,
+
+        /// Show only a specific section: overview, slm, vault, barrier, dlp, conversation, evidence
+        #[arg(long)]
+        section: Option<String>,
+
+        /// Output raw JSON (for piping to jq or other tools)
+        #[arg(long)]
+        json: bool,
     },
 
     /// Show version information
@@ -1077,6 +1085,8 @@ fn main() {
             aegis_url,
             num,
             watch,
+            section,
+            json,
         }) => {
             trace::run(
                 &aegis_url,
@@ -1088,6 +1098,8 @@ fn main() {
                 health,
                 num,
                 watch,
+                section.as_deref(),
+                json,
             );
         }
 
