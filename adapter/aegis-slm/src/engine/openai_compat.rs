@@ -68,8 +68,12 @@ impl OpenAiCompatEngine {
             .build()
             .expect("failed to build reqwest blocking client");
 
+        // Normalize: strip trailing /v1 or /v1/ if present — we append it ourselves.
+        let cleaned = base_url.trim_end_matches('/');
+        let cleaned = cleaned.strip_suffix("/v1").unwrap_or(cleaned);
+
         Self {
-            url: base_url.trim_end_matches('/').to_string(),
+            url: cleaned.to_string(),
             model: model.to_string(),
             client,
         }
