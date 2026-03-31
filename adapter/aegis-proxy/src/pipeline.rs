@@ -293,6 +293,50 @@ impl PipelineState {
     }
 }
 
+/// Fields extracted from the pipeline for traffic recording.
+/// Maps directly to TrafficEntry fields without depending on aegis-dashboard.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct TrafficFields {
+    pub request_id: String,
+    pub method: String,
+    pub path: String,
+    pub source_ip: String,
+    pub slm_verdict: Option<String>,
+    pub slm_threat_score: Option<u32>,
+    pub slm_duration_ms: Option<u64>,
+    pub slm_detail: Option<serde_json::Value>,
+    pub channel: Option<String>,
+    pub trust_level: Option<String>,
+    pub response_screen: Option<serde_json::Value>,
+}
+
+impl PipelineState {
+    /// Extract traffic recording fields from the pipeline.
+    /// Called when recording to the dashboard traffic store.
+    pub fn to_traffic_fields(&self, channel_trust: &aegis_schemas::ChannelTrust) -> TrafficFields {
+        // Pick the most relevant SLM verdict (deep overrides fast)
+        let slm = self.slm_deep.as_ref().or(self.slm_fast.as_ref());
+
+        TrafficFields {
+            request_id: self.request_id_str(),
+            method: self.method.clone(),
+            path: self.path.clone(),
+            source_ip: self.source_ip.clone(),
+            slm_verdict: slm.map(|s| s.decision.clone()),
+            slm_threat_score: slm.and_then(|s| s.verdict.as_ref().map(|v| v.threat_score)),
+            slm_duration_ms: slm.and_then(|s| s.verdict.as_ref().map(|v| v.screening_ms)),
+            slm_detail: slm.and_then(|s| {
+                s.verdict
+                    .as_ref()
+                    .and_then(|v| serde_json::to_value(v).ok())
+            }),
+            channel: channel_trust.channel.clone(),
+            trust_level: Some(format!("{:?}", channel_trust.trust_level).to_lowercase()),
+            response_screen: self.dlp.as_ref().and_then(|d| d.detail.clone()),
+        }
+    }
+}
+
 fn now_ms() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -363,6 +407,42 @@ mod tests {
         assert_eq!(receipts[1].receipt_type, "api_call");
         assert_eq!(receipts[2].receipt_type, "slm_analysis");
         assert_eq!(receipts[3].receipt_type, "api_call");
+    }
+
+    #[test]
+    fn to_traffic_fields_extracts_slm() {
+        let mut p = PipelineState::new("POST", "/v1/messages", "127.0.0.1");
+        p.slm_fast = Some(SlmStepResult {
+            layer: "fast".to_string(),
+            decision: "admit".to_string(),
+            verdict: None,
+        });
+
+        let trust = aegis_schemas::ChannelTrust::default();
+        let fields = p.to_traffic_fields(&trust);
+        assert_eq!(fields.request_id, p.request_id_str());
+        assert_eq!(fields.slm_verdict, Some("admit".to_string()));
+        assert_eq!(fields.trust_level, Some("unknown".to_string()));
+    }
+
+    #[test]
+    fn to_traffic_fields_deep_overrides_fast() {
+        let mut p = PipelineState::new("POST", "/v1/messages", "127.0.0.1");
+        p.slm_fast = Some(SlmStepResult {
+            layer: "fast".to_string(),
+            decision: "admit".to_string(),
+            verdict: None,
+        });
+        p.slm_deep = Some(SlmStepResult {
+            layer: "deep".to_string(),
+            decision: "quarantine".to_string(),
+            verdict: None,
+        });
+
+        let trust = aegis_schemas::ChannelTrust::default();
+        let fields = p.to_traffic_fields(&trust);
+        // Deep should override fast
+        assert_eq!(fields.slm_verdict, Some("quarantine".to_string()));
     }
 
     #[test]
