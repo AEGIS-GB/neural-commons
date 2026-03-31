@@ -256,6 +256,17 @@ impl EvidenceRecorder {
             .unwrap_or_else(|_| chain::init_genesis())
     }
 
+    /// Get all receipts matching a request_id.
+    ///
+    /// Delegates to [`EvidenceStore::get_receipts_by_request_id`].
+    pub fn get_by_request_id(&self, request_id: &str) -> Result<Vec<Receipt>, EvidenceError> {
+        let store = self
+            .store
+            .lock()
+            .map_err(|e| EvidenceError::StoreError(format!("lock poisoned: {e}")))?;
+        store.get_receipts_by_request_id(request_id)
+    }
+
     /// Get the bot ID (public key hex).
     pub fn bot_id(&self) -> &str {
         &self.bot_id
@@ -368,6 +379,40 @@ mod tests {
         assert_eq!(partial.len(), 3);
         assert_eq!(partial[0].core.seq, 2);
         assert_eq!(partial[2].core.seq, 4);
+    }
+
+    #[test]
+    fn recorder_get_by_request_id() {
+        let key = generate_keypair();
+        let recorder = EvidenceRecorder::new_in_memory(key).unwrap();
+
+        let rid = "01964a2b-7c00-7def-8000-000000000042";
+
+        // Record with request_id
+        let ctx = ReceiptContext {
+            blinding_nonce: generate_blinding_nonce(),
+            enforcement_mode: None,
+            action: Some("chat_completion".to_string()),
+            subject: None,
+            trigger: None,
+            outcome: Some("forwarded".to_string()),
+            detail: None,
+            enterprise: None,
+            request_id: Some(rid.to_string()),
+        };
+        recorder.record(ReceiptType::ApiCall, ctx).unwrap();
+
+        // Record without request_id
+        recorder
+            .record_simple(ReceiptType::SlmAnalysis, "screen", "admitted")
+            .unwrap();
+
+        let matched = recorder.get_by_request_id(rid).unwrap();
+        assert_eq!(matched.len(), 1);
+        assert_eq!(matched[0].context.request_id.as_deref(), Some(rid));
+
+        let empty = recorder.get_by_request_id("nonexistent").unwrap();
+        assert!(empty.is_empty());
     }
 
     #[test]
