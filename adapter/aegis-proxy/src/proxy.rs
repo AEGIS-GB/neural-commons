@@ -125,6 +125,10 @@ pub struct AppState {
     pub trust_config: Arc<std::sync::RwLock<crate::channel_trust::TrustConfig>>,
     /// Semaphore limiting concurrent SLM screenings (prevents GPU exhaustion via DDoS).
     pub slm_semaphore: Arc<tokio::sync::Semaphore>,
+    /// Whether the TRUSTMARK score is degraded (below min_score).
+    /// Updated by the adapter's TRUSTMARK snapshot task.
+    /// When true, Permissive holster is downgraded to Balanced.
+    pub trustmark_degraded: Arc<std::sync::atomic::AtomicBool>,
 }
 
 /// Build the axum router for the proxy server.
@@ -203,6 +207,28 @@ pub async fn start_with_traffic_full(
     traffic_slm_updater: Option<Arc<TrafficSlmUpdater>>,
     trust_config: crate::channel_trust::TrustConfig,
 ) -> Result<(), ProxyError> {
+    start_with_traffic_full_ex(
+        config,
+        hooks,
+        dashboard,
+        traffic_recorder,
+        traffic_slm_updater,
+        trust_config,
+        Arc::new(std::sync::atomic::AtomicBool::new(false)),
+    )
+    .await
+}
+
+/// Start the proxy server with full traffic recording and TRUSTMARK degradation flag.
+pub async fn start_with_traffic_full_ex(
+    config: ProxyConfig,
+    hooks: MiddlewareHooks,
+    dashboard: Option<(String, Router)>,
+    traffic_recorder: Option<Arc<TrafficRecorder>>,
+    traffic_slm_updater: Option<Arc<TrafficSlmUpdater>>,
+    trust_config: crate::channel_trust::TrustConfig,
+    trustmark_degraded: Arc<std::sync::atomic::AtomicBool>,
+) -> Result<(), ProxyError> {
     let client = Client::builder()
         .timeout(std::time::Duration::from_secs(300)) // 5 min for long LLM responses
         .build()
@@ -227,6 +253,7 @@ pub async fn start_with_traffic_full(
         traffic_slm_updater,
         trust_config: Arc::new(std::sync::RwLock::new(trust_config)),
         slm_semaphore: Arc::new(tokio::sync::Semaphore::new(4)),
+        trustmark_degraded,
     };
 
     let app = build_router(state, dashboard);
@@ -665,7 +692,9 @@ async fn forward_request(
         body_text,
         channel_trust,
         request_id: pipeline.request_id_str(),
-        trustmark_degraded: false,
+        trustmark_degraded: state
+            .trustmark_degraded
+            .load(std::sync::atomic::Ordering::Relaxed),
     };
 
     // Recording is handled by recording_middleware — no manual recording needed.
@@ -1660,6 +1689,7 @@ mod tests {
                 crate::channel_trust::TrustConfig::default(),
             )),
             slm_semaphore: Arc::new(tokio::sync::Semaphore::new(4)),
+            trustmark_degraded: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         };
         let _router = build_router(state, None);
         // If it doesn't panic, it works
@@ -1679,7 +1709,38 @@ mod tests {
                 crate::channel_trust::TrustConfig::default(),
             )),
             slm_semaphore: Arc::new(tokio::sync::Semaphore::new(4)),
+            trustmark_degraded: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         };
         assert_eq!(state.identity_fingerprint.as_deref(), Some("abc123def456"));
+    }
+
+    #[test]
+    fn trustmark_degraded_flag_wired() {
+        let degraded = Arc::new(std::sync::atomic::AtomicBool::new(true));
+        let state = AppState {
+            config: ProxyConfig::default(),
+            client: Client::new(),
+            hooks: Arc::new(MiddlewareHooks::default()),
+            identity_fingerprint: None,
+            rate_limiter: None,
+            traffic_recorder: None,
+            traffic_slm_updater: None,
+            trust_config: Arc::new(std::sync::RwLock::new(
+                crate::channel_trust::TrustConfig::default(),
+            )),
+            slm_semaphore: Arc::new(tokio::sync::Semaphore::new(4)),
+            trustmark_degraded: degraded.clone(),
+        };
+        assert!(
+            state
+                .trustmark_degraded
+                .load(std::sync::atomic::Ordering::Relaxed)
+        );
+        degraded.store(false, std::sync::atomic::Ordering::Relaxed);
+        assert!(
+            !state
+                .trustmark_degraded
+                .load(std::sync::atomic::Ordering::Relaxed)
+        );
     }
 }
