@@ -158,7 +158,8 @@ pub struct AdapterState {
 
     /// Cached TRUSTMARK score with freshness tracking.
     /// Auto-recomputed when stale (>5 minutes).
-    pub trustmark_cache: std::sync::RwLock<Option<TrustmarkCache>>,
+    /// Wrapped in Arc so it can be shared with the gateway WSS handler.
+    pub trustmark_cache: Arc<std::sync::RwLock<Option<TrustmarkCache>>>,
 
     /// TRUSTMARK scoring mode ("warden" or "mesh").
     pub trustmark_mode: String,
@@ -301,7 +302,7 @@ mod tests {
             upstream_url: "https://api.anthropic.com".into(),
             dashboard_path: "/dashboard".into(),
             alert_tx,
-            trustmark_cache: std::sync::RwLock::new(None),
+            trustmark_cache: Arc::new(std::sync::RwLock::new(None)),
             trustmark_mode: "warden".to_string(),
         }
     }
