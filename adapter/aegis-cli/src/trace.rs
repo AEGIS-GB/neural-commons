@@ -876,7 +876,7 @@ fn show_detail(base: &str, id: u64, show_body: bool, section: Option<&str>, json
 
     // === TRUSTMARK ===
     if sec == "trustmark" {
-        let tm_url = format!("{}/api/trustmark", base);
+        let tm_url = format!("{}/trustmark", base);
         let tm_data: Option<serde_json::Value> = fetch_json(&tm_url);
         println!();
         section_header("TRUSTMARK");
