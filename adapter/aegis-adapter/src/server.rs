@@ -946,6 +946,26 @@ pub async fn start(config: AdapterConfig, mode_override: Option<Mode>) -> Result
         info!("TRUSTMARK scoring started (snapshot every 1h)");
     }
 
+    // 10c. Optionally spawn gateway evidence push task
+    if let Some(ref gw_url) = config.gateway_url {
+        // Re-derive signing key from identity file (same key used for evidence signing)
+        let gw_signing_key = {
+            let key_path = data_dir.join("identity.key");
+            let key_bytes = std::fs::read(&key_path).map_err(|e| {
+                StartupError::KeyGen(format!("failed to read key for gateway client: {e}"))
+            })?;
+            let mut arr = [0u8; 32];
+            arr.copy_from_slice(&key_bytes);
+            Arc::new(SigningKey::from_bytes(&arr))
+        };
+        let gw_client = Arc::new(crate::gateway_client::GatewayClient::new(
+            gw_url,
+            gw_signing_key,
+        ));
+        crate::gateway_client::spawn_evidence_push_task(gw_client, recorder.clone());
+        info!(gateway_url = %gw_url, "gateway client configured");
+    }
+
     // 11. Start proxy server (blocks until shutdown)
     info!(
         listen = %proxy_config.listen_addr,
