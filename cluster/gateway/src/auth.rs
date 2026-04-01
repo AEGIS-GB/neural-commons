@@ -2,29 +2,38 @@
 //!
 //! HTTP: `Authorization: NC-Ed25519 <pubkey>:<sig>`
 //!   sig = Ed25519(transport_key, JCS({method, path, ts_ms, body_hash}))
-//!   Gateway validates statelessly, rejects ts_ms outside ±15s.
+//!   Timestamp via `X-Aegis-Timestamp: <epoch_ms>` header.
+//!   Gateway validates statelessly, rejects ts_ms outside +/-15s.
 //!
 //! WSS: Challenge-response on upgrade handshake only (one-time).
 //!
 //! Transport auth key: derived via m/44'/784'/3'/0' (D0).
-//! Verifiers map transport pubkey → bot identity via cluster-registered key hierarchy.
+//! Verifiers map transport pubkey -> bot identity via cluster-registered key hierarchy.
 
+use axum::{
+    body::Body,
+    extract::Request,
+    http::StatusCode,
+    middleware::Next,
+    response::{IntoResponse, Response},
+};
+use ed25519_dalek::Verifier;
 use serde::{Deserialize, Serialize};
 
-/// Maximum clock skew for request timestamps (±15 seconds)
+/// Maximum clock skew for request timestamps (+/-15 seconds)
 pub const MAX_CLOCK_SKEW_MS: i64 = 15_000;
 
-/// Request signing input — JCS-canonicalized before signing
+/// Request signing input -- JCS-canonicalized before signing
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SigningInput {
+    /// SHA-256 of request body, lowercase hex. Empty body = hash of empty bytes.
+    pub body_hash: String,
     /// HTTP method (uppercase: GET, POST, etc.)
     pub method: String,
     /// Request path (e.g., "/evidence/batch")
     pub path: String,
     /// Unix epoch milliseconds
     pub ts_ms: i64,
-    /// SHA-256 of request body, lowercase hex. Empty body = hash of empty bytes.
-    pub body_hash: String,
 }
 
 /// Parsed NC-Ed25519 authorization header
@@ -34,6 +43,13 @@ pub struct NcAuth {
     pub pubkey: String,
     /// Ed25519 signature, lowercase hex (64 bytes = 128 hex chars)
     pub sig: String,
+}
+
+/// Verified identity extracted by auth middleware, available to handlers.
+#[derive(Debug, Clone)]
+pub struct VerifiedIdentity {
+    /// Transport public key, lowercase hex
+    pub pubkey: String,
 }
 
 /// WSS challenge for upgrade handshake
@@ -77,15 +93,313 @@ pub fn parse_auth_header(header: &str) -> Option<NcAuth> {
     })
 }
 
-/// Validate request timestamp is within ±15s of current time
+/// Validate request timestamp is within +/-15s of current time
 pub fn validate_timestamp(request_ts_ms: i64, current_ts_ms: i64) -> bool {
     let diff = (request_ts_ms - current_ts_ms).abs();
     diff <= MAX_CLOCK_SKEW_MS
 }
 
+/// Verify an NC-Ed25519 signed request.
+///
+/// 1. Parse pubkey from hex
+/// 2. Parse signature from hex
+/// 3. Compute body_hash = SHA-256(body)
+/// 4. Build SigningInput = {method, path, ts_ms, body_hash}
+/// 5. JCS-canonicalize the SigningInput
+/// 6. Verify Ed25519 signature over canonical bytes
+pub fn verify_request(
+    auth: &NcAuth,
+    method: &str,
+    path: &str,
+    ts_ms: i64,
+    body: &[u8],
+) -> Result<(), String> {
+    // 1. Parse pubkey from hex
+    let pubkey_bytes = hex::decode(&auth.pubkey).map_err(|e| format!("invalid pubkey hex: {e}"))?;
+    let pubkey_array: [u8; 32] = pubkey_bytes
+        .try_into()
+        .map_err(|_| "pubkey must be 32 bytes".to_string())?;
+    let verifying_key = ed25519_dalek::VerifyingKey::from_bytes(&pubkey_array)
+        .map_err(|e| format!("invalid Ed25519 key: {e}"))?;
+
+    // 2. Parse signature from hex
+    let sig_bytes = hex::decode(&auth.sig).map_err(|e| format!("invalid sig hex: {e}"))?;
+    let sig_array: [u8; 64] = sig_bytes
+        .try_into()
+        .map_err(|_| "sig must be 64 bytes".to_string())?;
+    let signature = ed25519_dalek::Signature::from_bytes(&sig_array);
+
+    // 3. Compute body hash
+    let body_hash = hex::encode(aegis_crypto::hash(body));
+
+    // 4. Build signing input
+    let signing_input = SigningInput {
+        body_hash,
+        method: method.to_string(),
+        path: path.to_string(),
+        ts_ms,
+    };
+
+    // 5. JCS-canonicalize
+    let canonical = aegis_crypto::canonicalize(&signing_input)
+        .map_err(|e| format!("canonicalization failed: {e}"))?;
+
+    // 6. Verify signature
+    verifying_key
+        .verify(&canonical, &signature)
+        .map_err(|_| "signature verification failed".to_string())
+}
+
+fn current_ts_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as i64
+}
+
+/// Axum middleware that enforces NC-Ed25519 authentication.
+///
+/// Extracts:
+///   - `Authorization: NC-Ed25519 <pubkey>:<sig>` header
+///   - `X-Aegis-Timestamp: <epoch_ms>` header
+///
+/// On success, inserts `VerifiedIdentity` into request extensions.
+/// On failure, returns 401 Unauthorized.
+pub async fn auth_middleware(request: Request, next: Next) -> Response {
+    let (parts, body) = request.into_parts();
+
+    // Extract Authorization header
+    let auth_header = match parts.headers.get("authorization") {
+        Some(v) => match v.to_str() {
+            Ok(s) => s.to_string(),
+            Err(_) => return auth_error("invalid authorization header encoding"),
+        },
+        None => return auth_error("missing Authorization header"),
+    };
+
+    let auth = match parse_auth_header(&auth_header) {
+        Some(a) => a,
+        None => return auth_error("malformed NC-Ed25519 authorization header"),
+    };
+
+    // Extract X-Aegis-Timestamp header
+    let ts_ms: i64 = match parts.headers.get("x-aegis-timestamp") {
+        Some(v) => match v.to_str() {
+            Ok(s) => match s.parse() {
+                Ok(t) => t,
+                Err(_) => return auth_error("invalid X-Aegis-Timestamp value"),
+            },
+            Err(_) => return auth_error("invalid X-Aegis-Timestamp encoding"),
+        },
+        None => return auth_error("missing X-Aegis-Timestamp header"),
+    };
+
+    // Validate timestamp
+    let now = current_ts_ms();
+    if !validate_timestamp(ts_ms, now) {
+        return auth_error("request timestamp outside allowed window (+/-15s)");
+    }
+
+    // Read body bytes
+    let body_bytes = match axum::body::to_bytes(body, 2 * 1024 * 1024).await {
+        Ok(b) => b,
+        Err(_) => return auth_error("failed to read request body"),
+    };
+
+    // Verify signature
+    let method = parts.method.as_str();
+    let path = parts.uri.path();
+    if let Err(e) = verify_request(&auth, method, path, ts_ms, &body_bytes) {
+        return auth_error(&format!("signature verification failed: {e}"));
+    }
+
+    // Inject verified identity and reconstruct request
+    let mut request = Request::from_parts(parts, Body::from(body_bytes));
+    request.extensions_mut().insert(VerifiedIdentity {
+        pubkey: auth.pubkey,
+    });
+
+    next.run(request).await
+}
+
+fn auth_error(msg: &str) -> Response {
+    (
+        StatusCode::UNAUTHORIZED,
+        axum::Json(serde_json::json!({ "error": msg })),
+    )
+        .into_response()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use axum::routing::{get, post};
+    use axum::{Extension, Router, middleware};
+    use ed25519_dalek::Signer;
+    use tower::ServiceExt;
+
+    /// Helper: sign a request and return (pubkey_hex, sig_hex, ts_ms)
+    fn sign_request(
+        signing_key: &ed25519_dalek::SigningKey,
+        method: &str,
+        path: &str,
+        body: &[u8],
+    ) -> (String, String, i64) {
+        let ts_ms = current_ts_ms();
+        let body_hash = hex::encode(aegis_crypto::hash(body));
+        let input = SigningInput {
+            body_hash,
+            method: method.to_string(),
+            path: path.to_string(),
+            ts_ms,
+        };
+        let canonical = aegis_crypto::canonicalize(&input).unwrap();
+        let sig = signing_key.sign(&canonical);
+        let pubkey_hex = hex::encode(signing_key.verifying_key().as_bytes());
+        let sig_hex = hex::encode(sig.to_bytes());
+        (pubkey_hex, sig_hex, ts_ms)
+    }
+
+    fn test_app() -> Router {
+        let authed =
+            Router::new()
+                .route(
+                    "/protected",
+                    get(|ext: Extension<VerifiedIdentity>| async move {
+                        format!("hello {}", ext.pubkey)
+                    }),
+                )
+                .route(
+                    "/echo",
+                    post(
+                        |ext: Extension<VerifiedIdentity>, body: String| async move {
+                            format!("from {} body={}", ext.pubkey, body)
+                        },
+                    ),
+                )
+                .layer(middleware::from_fn(auth_middleware));
+
+        Router::new()
+            .route("/health", get(|| async { "ok" }))
+            .merge(authed)
+    }
+
+    #[tokio::test]
+    async fn valid_signed_get_request() {
+        let app = test_app();
+        let sk = aegis_crypto::ed25519::generate_keypair();
+        let (pubkey, sig, ts_ms) = sign_request(&sk, "GET", "/protected", b"");
+
+        let req = Request::builder()
+            .method("GET")
+            .uri("/protected")
+            .header("authorization", format!("NC-Ed25519 {pubkey}:{sig}"))
+            .header("x-aegis-timestamp", ts_ms.to_string())
+            .body(Body::empty())
+            .unwrap();
+
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), 1024).await.unwrap();
+        assert!(String::from_utf8_lossy(&body).contains(&pubkey));
+    }
+
+    #[tokio::test]
+    async fn valid_signed_post_request() {
+        let app = test_app();
+        let sk = aegis_crypto::ed25519::generate_keypair();
+        let body_bytes = b"test body content";
+        let (pubkey, sig, ts_ms) = sign_request(&sk, "POST", "/echo", body_bytes);
+
+        let req = Request::builder()
+            .method("POST")
+            .uri("/echo")
+            .header("authorization", format!("NC-Ed25519 {pubkey}:{sig}"))
+            .header("x-aegis-timestamp", ts_ms.to_string())
+            .body(Body::from(&body_bytes[..]))
+            .unwrap();
+
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), 1024).await.unwrap();
+        let text = String::from_utf8_lossy(&body);
+        assert!(text.contains(&pubkey));
+        assert!(text.contains("test body content"));
+    }
+
+    #[tokio::test]
+    async fn missing_auth_header_returns_401() {
+        let app = test_app();
+        let req = Request::builder()
+            .method("GET")
+            .uri("/protected")
+            .body(Body::empty())
+            .unwrap();
+
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn expired_timestamp_returns_401() {
+        let app = test_app();
+        let sk = aegis_crypto::ed25519::generate_keypair();
+        let old_ts = current_ts_ms() - 30_000; // 30s ago
+        let body_hash = hex::encode(aegis_crypto::hash(b""));
+        let input = SigningInput {
+            body_hash,
+            method: "GET".to_string(),
+            path: "/protected".to_string(),
+            ts_ms: old_ts,
+        };
+        let canonical = aegis_crypto::canonicalize(&input).unwrap();
+        let sig = sk.sign(&canonical);
+        let pubkey = hex::encode(sk.verifying_key().as_bytes());
+        let sig_hex = hex::encode(sig.to_bytes());
+
+        let req = Request::builder()
+            .method("GET")
+            .uri("/protected")
+            .header("authorization", format!("NC-Ed25519 {pubkey}:{sig_hex}"))
+            .header("x-aegis-timestamp", old_ts.to_string())
+            .body(Body::empty())
+            .unwrap();
+
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn tampered_body_returns_401() {
+        let app = test_app();
+        let sk = aegis_crypto::ed25519::generate_keypair();
+        // Sign with original body
+        let (pubkey, sig, ts_ms) = sign_request(&sk, "POST", "/echo", b"original");
+
+        // But send different body
+        let req = Request::builder()
+            .method("POST")
+            .uri("/echo")
+            .header("authorization", format!("NC-Ed25519 {pubkey}:{sig}"))
+            .header("x-aegis-timestamp", ts_ms.to_string())
+            .body(Body::from("tampered"))
+            .unwrap();
+
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn health_bypasses_auth() {
+        let app = test_app();
+        let req = Request::builder()
+            .uri("/health")
+            .body(Body::empty())
+            .unwrap();
+
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
 
     #[test]
     fn test_parse_valid_auth_header() {
@@ -116,5 +430,48 @@ mod tests {
         assert!(validate_timestamp(now - 14_000, now)); // within window
         assert!(!validate_timestamp(now + 16_000, now)); // outside window
         assert!(!validate_timestamp(now - 16_000, now)); // outside window
+    }
+
+    #[test]
+    fn test_verify_request_roundtrip() {
+        let sk = aegis_crypto::ed25519::generate_keypair();
+        let ts_ms = current_ts_ms();
+        let body = b"hello world";
+        let body_hash = hex::encode(aegis_crypto::hash(body));
+        let input = SigningInput {
+            body_hash,
+            method: "POST".to_string(),
+            path: "/evidence".to_string(),
+            ts_ms,
+        };
+        let canonical = aegis_crypto::canonicalize(&input).unwrap();
+        let sig = sk.sign(&canonical);
+        let auth = NcAuth {
+            pubkey: hex::encode(sk.verifying_key().as_bytes()),
+            sig: hex::encode(sig.to_bytes()),
+        };
+        assert!(verify_request(&auth, "POST", "/evidence", ts_ms, body).is_ok());
+    }
+
+    #[test]
+    fn test_verify_request_wrong_body() {
+        let sk = aegis_crypto::ed25519::generate_keypair();
+        let ts_ms = current_ts_ms();
+        let body = b"hello world";
+        let body_hash = hex::encode(aegis_crypto::hash(body));
+        let input = SigningInput {
+            body_hash,
+            method: "POST".to_string(),
+            path: "/evidence".to_string(),
+            ts_ms,
+        };
+        let canonical = aegis_crypto::canonicalize(&input).unwrap();
+        let sig = sk.sign(&canonical);
+        let auth = NcAuth {
+            pubkey: hex::encode(sk.verifying_key().as_bytes()),
+            sig: hex::encode(sig.to_bytes()),
+        };
+        // Verify with different body
+        assert!(verify_request(&auth, "POST", "/evidence", ts_ms, b"different").is_err());
     }
 }

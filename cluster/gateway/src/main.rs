@@ -6,11 +6,13 @@
 use std::net::SocketAddr;
 use std::path::PathBuf;
 
-use axum::{Router, routing::get};
+use axum::{Router, middleware, routing::get};
 use clap::Parser;
 use serde::Deserialize;
 use tokio::signal;
 use tracing::info;
+
+use aegis_gateway::auth;
 
 /// Gateway configuration loaded from TOML file.
 #[derive(Debug, Deserialize)]
@@ -110,7 +112,15 @@ async fn main() {
     let cli = Cli::parse();
     let config = load_config(&cli.config);
 
-    let app = Router::new().route("/health", get(health));
+    // Authenticated routes (auth middleware applied)
+    let authed_routes = Router::new()
+        // Future: POST /evidence, POST /evidence/batch, GET /trustmark/:bot_id
+        .layer(middleware::from_fn(auth::auth_middleware));
+
+    // Public routes (no auth) merged with authenticated routes
+    let app = Router::new()
+        .route("/health", get(health))
+        .merge(authed_routes);
 
     let addr: SocketAddr = config.listen_addr.parse().unwrap_or_else(|e| {
         eprintln!(
