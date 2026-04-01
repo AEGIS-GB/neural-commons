@@ -103,6 +103,9 @@ anyhow = "1"
 toml = "0.8"
 notify = "7"
 
+# Async utilities
+futures = "0.3"
+
 # ML inference
 ort = { version = "2.0.0-rc.12", features = ["download-binaries"] }
 tokenizers = { version = "0.22", default-features = false, features = ["onig"] }

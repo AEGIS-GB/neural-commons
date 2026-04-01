@@ -5,6 +5,7 @@
 
 use std::net::SocketAddr;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use axum::{
     Extension, Router, middleware,
@@ -16,6 +17,7 @@ use tokio::signal;
 use tracing::info;
 
 use aegis_gateway::auth;
+use aegis_gateway::nats_bridge::NatsBridge;
 use aegis_gateway::routes;
 use aegis_gateway::store::MemoryStore;
 
@@ -25,6 +27,10 @@ struct GatewayConfig {
     /// Socket address to listen on (default: "0.0.0.0:8080")
     #[serde(default = "default_listen_addr")]
     listen_addr: String,
+
+    /// NATS server URL (optional — Gateway runs without NATS for local/test)
+    #[serde(default)]
+    nats_url: Option<String>,
 }
 
 fn default_listen_addr() -> String {
@@ -35,6 +41,7 @@ impl Default for GatewayConfig {
     fn default() -> Self {
         Self {
             listen_addr: default_listen_addr(),
+            nats_url: None,
         }
     }
 }
@@ -120,6 +127,24 @@ async fn main() {
     // Evidence store (in-memory for now; swap with PostgresStore in production)
     let evidence_store = MemoryStore::new();
 
+    // Optional NATS bridge
+    let nats_bridge: Option<Arc<NatsBridge>> = match &config.nats_url {
+        Some(url) => match NatsBridge::connect(url).await {
+            Ok(bridge) => {
+                info!("NATS bridge connected");
+                Some(Arc::new(bridge))
+            }
+            Err(e) => {
+                tracing::warn!("failed to connect to NATS at {url}: {e}, running without NATS");
+                None
+            }
+        },
+        None => {
+            info!("no nats_url configured, running without NATS");
+            None
+        }
+    };
+
     // Authenticated routes (auth middleware applied)
     let authed_routes = Router::new()
         .route("/evidence", post(routes::post_evidence::<MemoryStore>))
@@ -132,6 +157,7 @@ async fn main() {
             get(routes::get_trustmark::<MemoryStore>),
         )
         .layer(Extension(evidence_store))
+        .layer(Extension(nats_bridge))
         .layer(middleware::from_fn(auth::auth_middleware));
 
     // Public routes (no auth) merged with authenticated routes
@@ -188,6 +214,7 @@ mod tests {
     fn default_config_values() {
         let config = GatewayConfig::default();
         assert_eq!(config.listen_addr, "0.0.0.0:8080");
+        assert!(config.nats_url.is_none());
     }
 
     #[test]
@@ -195,6 +222,25 @@ mod tests {
         let toml_str = r#"listen_addr = "127.0.0.1:9090""#;
         let config: GatewayConfig = toml::from_str(toml_str).unwrap();
         assert_eq!(config.listen_addr, "127.0.0.1:9090");
+        assert!(config.nats_url.is_none());
+    }
+
+    #[test]
+    fn parse_config_with_nats_url() {
+        let toml_str = r#"
+listen_addr = "127.0.0.1:9090"
+nats_url = "nats://localhost:4222"
+"#;
+        let config: GatewayConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.listen_addr, "127.0.0.1:9090");
+        assert_eq!(config.nats_url.as_deref(), Some("nats://localhost:4222"));
+    }
+
+    #[test]
+    fn parse_config_without_nats_url_defaults_to_none() {
+        let toml_str = r#"listen_addr = "0.0.0.0:8080""#;
+        let config: GatewayConfig = toml::from_str(toml_str).unwrap();
+        assert!(config.nats_url.is_none());
     }
 
     #[test]
@@ -202,5 +248,6 @@ mod tests {
         let path = PathBuf::from("/nonexistent/gateway_config.toml");
         let config = load_config(&path);
         assert_eq!(config.listen_addr, "0.0.0.0:8080");
+        assert!(config.nats_url.is_none());
     }
 }
