@@ -88,6 +88,57 @@ pub enum StartupError {
     Io(#[from] std::io::Error),
 }
 
+/// Check TRUSTMARK dimension health and send alerts for degraded dimensions.
+fn check_trustmark_health_alerts(
+    score: &aegis_trustmark::scoring::TrustmarkScore,
+    min_score: f64,
+    alert_tx: &tokio::sync::broadcast::Sender<aegis_dashboard::DashboardAlert>,
+) {
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64;
+
+    for dim in &score.dimensions {
+        let threshold = match dim.name.as_str() {
+            "persona_integrity" => 0.95,
+            "chain_integrity" => 0.95,
+            "vault_hygiene" => 0.90,
+            "temporal_consistency" => 0.80,
+            _ => 0.50,
+        };
+        if dim.value < threshold {
+            let _ = alert_tx.send(aegis_dashboard::DashboardAlert {
+                ts_ms: now_ms,
+                kind: "trustmark_health".to_string(),
+                message: format!(
+                    "TRUSTMARK: {} degraded ({:.2} < {:.2} threshold)",
+                    dim.name, dim.value, threshold
+                ),
+                receipt_seq: 0,
+            });
+            tracing::warn!(
+                dimension = %dim.name,
+                value = dim.value,
+                threshold,
+                "TRUSTMARK health degraded"
+            );
+        }
+    }
+
+    if score.total < min_score {
+        let _ = alert_tx.send(aegis_dashboard::DashboardAlert {
+            ts_ms: now_ms,
+            kind: "trustmark_critical".to_string(),
+            message: format!(
+                "TRUSTMARK score {:.2} below minimum {:.2} \u{2014} holster tightened",
+                score.total, min_score
+            ),
+            receipt_seq: 0,
+        });
+    }
+}
+
 /// Start the full adapter server.
 ///
 /// This is the main entry point called by the CLI when no subcommand
@@ -835,6 +886,8 @@ pub async fn start(config: AdapterConfig, mode_override: Option<Mode>) -> Result
     {
         let tm_data_dir = data_dir.clone();
         let tm_recorder = recorder.clone();
+        let tm_alert_tx = alert_tx.clone();
+        let tm_min_score = config.trustmark.min_score;
         tokio::spawn(async move {
             // Initial snapshot at startup
             let signals = aegis_trustmark::gather::gather_local_signals(&tm_data_dir);
@@ -847,6 +900,7 @@ pub async fn start(config: AdapterConfig, mode_override: Option<Mode>) -> Result
                     "TRUSTMARK snapshot recorded"
                 );
             }
+            check_trustmark_health_alerts(&score, tm_min_score, &tm_alert_tx);
 
             // Hourly snapshots
             let mut interval = tokio::time::interval(std::time::Duration::from_secs(3600));
@@ -863,6 +917,7 @@ pub async fn start(config: AdapterConfig, mode_override: Option<Mode>) -> Result
                         "TRUSTMARK hourly snapshot"
                     );
                 }
+                check_trustmark_health_alerts(&score, tm_min_score, &tm_alert_tx);
             }
         });
         info!("TRUSTMARK scoring started (snapshot every 1h)");
