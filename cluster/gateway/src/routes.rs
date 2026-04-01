@@ -226,7 +226,9 @@ pub async fn post_evidence_batch<S: EvidenceStore>(
 /// This is a simplified cluster-side scoring that works from receipt metadata
 /// only (no adapter-side signals like persona integrity or vault hygiene).
 /// Dimensions backed by adapter-only data are set to conservative defaults.
-fn compute_trustmark_from_evidence(records: &[EvidenceRecord]) -> aegis_schemas::TrustmarkScore {
+pub fn compute_trustmark_from_evidence(
+    records: &[EvidenceRecord],
+) -> aegis_schemas::TrustmarkScore {
     let bp = |v: f64| aegis_schemas::BasisPoints::clamped((v * 10_000.0).round() as u32);
 
     let now_ms = std::time::SystemTime::now()

@@ -131,8 +131,16 @@ async fn main() {
     let nats_bridge: Option<Arc<NatsBridge>> = match &config.nats_url {
         Some(url) => match NatsBridge::connect(url).await {
             Ok(bridge) => {
+                let bridge = Arc::new(bridge);
                 info!("NATS bridge connected");
-                Some(Arc::new(bridge))
+
+                // Start evidence subscriber (recomputes TRUSTMARK on each new receipt)
+                let store_for_sub = evidence_store.clone();
+                if let Err(e) = bridge.subscribe_evidence(Arc::new(store_for_sub)).await {
+                    tracing::warn!("failed to subscribe to evidence.new: {e}");
+                }
+
+                Some(bridge)
             }
             Err(e) => {
                 tracing::warn!("failed to connect to NATS at {url}: {e}, running without NATS");
