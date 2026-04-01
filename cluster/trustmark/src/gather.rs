@@ -59,6 +59,8 @@ fn gather_from_evidence(store: &aegis_evidence::EvidenceStore, signals: &mut Loc
     let batch_size: u64 = 1000;
     let mut vault_detections: u64 = 0;
     let mut api_call_count: u64 = 0;
+    let mut weighted_vault_leaks: f64 = 0.0;
+    let mut weighted_vault_scans: f64 = 0.0;
     let mut timestamps: Vec<u64> = Vec::new();
     let mut seq: u64 = 1;
 
@@ -77,16 +79,21 @@ fn gather_from_evidence(store: &aegis_evidence::EvidenceStore, signals: &mut Loc
         };
 
         for receipt in &receipts {
-            // Count by type
+            let ts = receipt.core.ts_ms as u64;
+            let age_ms = now_ms.saturating_sub(ts);
+            let weight = crate::decay::decay_factor(age_ms);
+
+            // Count by type (raw and decay-weighted)
             if receipt.core.receipt_type == aegis_schemas::ReceiptType::VaultDetection {
                 vault_detections += 1;
+                weighted_vault_leaks += weight;
             }
             if receipt.core.receipt_type == aegis_schemas::ReceiptType::ApiCall {
                 api_call_count += 1;
+                weighted_vault_scans += weight;
             }
 
             // Timestamps for temporal consistency (all receipts)
-            let ts = receipt.core.ts_ms as u64;
             timestamps.push(ts);
 
             // Count receipts in last 24h
@@ -101,6 +108,8 @@ fn gather_from_evidence(store: &aegis_evidence::EvidenceStore, signals: &mut Loc
     signals.vault_leaks_detected = vault_detections;
     // Vault scans happen per API call, not per receipt (other receipt types don't scan)
     signals.vault_scans_total = api_call_count;
+    signals.weighted_vault_leaks = weighted_vault_leaks;
+    signals.weighted_vault_scans = weighted_vault_scans;
 
     // Sort timestamps for temporal consistency scoring
     timestamps.sort();
@@ -345,6 +354,54 @@ mod tests {
         assert_eq!(s1.manifest_signature_valid, s2.manifest_signature_valid);
         assert_eq!(s1.receipt_timestamps.len(), s2.receipt_timestamps.len());
         assert_eq!(s1.receipts_last_24h, s2.receipts_last_24h);
+    }
+
+    #[test]
+    fn old_leaks_decay_improves_score() {
+        // When all receipts are freshly created, the weighted counts are nearly
+        // equal to raw counts — so the score should be the same as before.
+        // The decay itself is tested in the decay module; here we verify the
+        // gather module actually populates the weighted fields.
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("evidence.db");
+
+        let key = aegis_crypto::ed25519::generate_keypair();
+        let recorder = aegis_evidence::EvidenceRecorder::new(&db_path, key).unwrap();
+
+        // 50 normal + 5 vault detections (all recent)
+        for _ in 0..50 {
+            recorder
+                .record_simple(aegis_schemas::ReceiptType::ApiCall, "forward", "200")
+                .unwrap();
+        }
+        for _ in 0..5 {
+            recorder
+                .record_simple(aegis_schemas::ReceiptType::VaultDetection, "vault", "leak")
+                .unwrap();
+        }
+
+        let signals = gather_local_signals(dir.path());
+
+        // Weighted fields should be populated
+        assert!(
+            signals.weighted_vault_scans > 0.0,
+            "weighted scans should be positive"
+        );
+        assert!(
+            signals.weighted_vault_leaks > 0.0,
+            "weighted leaks should be positive"
+        );
+        // For fresh receipts, weighted values are close to raw counts
+        assert!(
+            (signals.weighted_vault_scans - 50.0).abs() < 1.0,
+            "fresh receipts should have weight ~1.0: {}",
+            signals.weighted_vault_scans
+        );
+        assert!(
+            (signals.weighted_vault_leaks - 5.0).abs() < 1.0,
+            "fresh leaks should have weight ~1.0: {}",
+            signals.weighted_vault_leaks
+        );
     }
 
     #[test]
