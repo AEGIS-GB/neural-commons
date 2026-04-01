@@ -214,6 +214,18 @@ struct DashboardStatus {
     observe_mode_checks: Vec<String>,
     /// TRUSTMARK score in basis points (0-10000). 0 if not yet computed.
     trustmark_score_bp: u32,
+    /// TRUSTMARK per-dimension data for the overview gauge.
+    trustmark_dimensions: Vec<TrustmarkDimensionStatus>,
+    /// TRUSTMARK scoring mode ("warden" or "mesh").
+    trustmark_mode: String,
+}
+
+#[derive(Debug, Serialize)]
+struct TrustmarkDimensionStatus {
+    name: String,
+    value: f64,
+    target: f64,
+    status: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -374,6 +386,16 @@ async fn api_status(State(state): State<Arc<DashboardSharedState>>) -> Json<Dash
         aegis_trustmark::scoring::TrustmarkScore::compute(&signals)
     };
     let trustmark_score_bp = (score.total * 10000.0).round() as u32;
+    let trustmark_dimensions = score
+        .dimensions
+        .iter()
+        .map(|d| TrustmarkDimensionStatus {
+            name: d.name.clone(),
+            value: d.value,
+            target: d.target,
+            status: d.status.clone(),
+        })
+        .collect();
 
     Json(DashboardStatus {
         mode: (state.mode_fn)().to_string(),
@@ -385,6 +407,8 @@ async fn api_status(State(state): State<Arc<DashboardSharedState>>) -> Json<Dash
         version: env!("CARGO_PKG_VERSION").to_string(),
         observe_mode_checks: (state.observe_mode_checks_fn)(),
         trustmark_score_bp,
+        trustmark_dimensions,
+        trustmark_mode: state.trustmark_mode.clone(),
     })
 }
 

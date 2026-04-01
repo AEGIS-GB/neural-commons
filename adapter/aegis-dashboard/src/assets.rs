@@ -1070,21 +1070,34 @@ function renderTrustmark(tm){
   const tier=document.getElementById('trustmark-tier');
   const dims=document.getElementById('trustmark-dims');
   if(!total)return;
-  // Summary line (small, at top)
+  // Score gauge with large number, percentage, and progress bar
   const col=tm.total>=0.8?'#3fb950':tm.total>=0.5?'#d29922':'#f85149';
   const statusLabel=tm.total>=0.8?'healthy':tm.total>=0.5?'needs attention':'critical';
-  total.style.cssText='font-size:16px;font-weight:600';
-  total.innerHTML='TRUSTMARK <span style="color:'+col+'">'+tm.total.toFixed(3)+'</span> <span style="color:#8b949e;font-weight:400;font-size:13px">'+statusLabel+'</span>';
-  const tierText=tm.tier?(' · '+tm.tier.current+' · Identity: '+Math.round(tm.identity_age_hours||0)+'h'):'';
+  const scoreBp=Math.round(tm.total*10000);
+  const pct=Math.round(tm.total*100);
+  const modeLabel=tm.mode||'warden';
+  let gh='<div style="display:flex;align-items:center;gap:16px;margin-bottom:8px">';
+  gh+='<div style="font-size:36px;font-weight:700;color:'+col+'">'+scoreBp+'</div>';
+  gh+='<div><div style="font-size:14px;color:#8b949e">/10000 ('+pct+'%)</div>';
+  gh+='<div style="font-size:12px;color:#8b949e">'+statusLabel+' \u00b7 '+modeLabel+' mode</div></div>';
+  gh+='</div>';
+  gh+='<div style="width:100%;height:8px;background:#21262d;border-radius:4px;margin-bottom:4px">';
+  gh+='<div style="width:'+pct+'%;height:100%;background:'+col+';border-radius:4px;transition:width 0.3s"></div>';
+  gh+='</div>';
+  total.style.cssText='';
+  total.innerHTML=gh;
+  const tierText=tm.tier?(' \u00b7 '+tm.tier.current+' \u00b7 Identity: '+Math.round(tm.identity_age_hours||0)+'h'):'';
   tier.innerHTML='<span style="color:#8b949e;font-size:12px">'+tierText+'</span>';
   // Dimension cards
   let h='';
+  const isWarden=(tm.mode||'warden')==='warden';
   for(const d of tm.dimensions||[]){
     const hint=dimHints[d.name]||{icon:'?',label:d.name,desc:''};
-    const st=d.status||'attention';
-    const stCol=st==='healthy'?'#3fb950':st==='attention'?'#d29922':'#f85149';
-    const stIcon=st==='healthy'?'\u2713':st==='attention'?'!':'\u2717';
-    const barCol=st==='healthy'?'#238636':st==='attention'?'#9e6a03':'#da3633';
+    const isExcluded=isWarden&&d.name==='relay_reliability';
+    const st=isExcluded?'excluded':(d.status||'attention');
+    const stCol=st==='healthy'?'#3fb950':st==='excluded'?'#484f58':st==='attention'?'#d29922':'#f85149';
+    const stIcon=st==='healthy'?'\u2713':st==='excluded'?'\u2014':st==='attention'?'!':'\u2717';
+    const barCol=st==='healthy'?'#238636':st==='excluded'?'#21262d':st==='attention'?'#9e6a03':'#da3633';
     const targetPct=Math.round((d.target||0.8)*100);
     const valuePct=Math.round(d.value*100);
     h+='<div style="background:#0d1117;border:1px solid '+(st==='healthy'?'#21262d':st==='attention'?'#9e6a03':'#da3633')+';border-radius:6px;padding:10px 14px;margin-bottom:8px">';
@@ -1092,7 +1105,8 @@ function renderTrustmark(tm){
     h+='<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">';
     h+='<span style="font-size:16px">'+hint.icon+'</span>';
     h+='<span style="font-size:13px;font-weight:600;color:#e1e4e8">'+hint.label+'</span>';
-    h+='<span style="font-size:11px;color:'+stCol+';margin-left:8px">'+stIcon+' '+st+'</span>';
+    const stLabel=isExcluded?'excluded (warden mode)':st;
+    h+='<span style="font-size:11px;color:'+stCol+';margin-left:8px">'+stIcon+' '+stLabel+'</span>';
     h+='<span style="font-size:12px;color:#8b949e;margin-left:auto">';
     h+='<span style="color:'+stCol+';font-weight:600">'+d.value.toFixed(3)+'</span>';
     h+=' / '+d.target.toFixed(2)+' target';
