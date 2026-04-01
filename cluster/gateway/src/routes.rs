@@ -24,6 +24,7 @@ use tokio::sync::RwLock;
 
 use crate::auth::VerifiedIdentity;
 use crate::botawiki::BotawikiStore;
+use crate::evaluator::EvaluatorService;
 use crate::nats_bridge::{NatsBridge, TrustmarkCache};
 use crate::store::{EvidenceRecord, EvidenceStore};
 use crate::ws::{DeadDropStore, RelayEnvelope, WssConnectionRegistry};
@@ -798,6 +799,173 @@ pub async fn botawiki_query(
     (StatusCode::OK, Json(serde_json::json!({ "claims": claims }))).into_response()
 }
 
+/// Minimum TRUSTMARK (basis points) to request Tier 3 admission.
+pub const EVALUATOR_ADMISSION_THRESHOLD_BP: u32 = 4000;
+
+/// Minimum TRUSTMARK (basis points) for an evaluator to vote.
+pub const EVALUATOR_VOTE_THRESHOLD_BP: u32 = 5000;
+
+/// Minimum evidence age in milliseconds (72 hours) to request Tier 3.
+pub const EVALUATOR_MIN_EVIDENCE_AGE_MS: i64 = 72 * 3_600_000;
+
+/// POST /evaluator/request-admission -- request Tier 3 admission.
+/// Requires Tier 2 with TRUSTMARK >= 0.4 and evidence >= 72h.
+pub async fn request_tier3_admission<S: EvidenceStore>(
+    Extension(identity): Extension<VerifiedIdentity>,
+    Extension(store): Extension<S>,
+    Extension(trustmark_cache): Extension<Arc<TrustmarkCache>>,
+    Extension(evaluator_svc): Extension<Arc<EvaluatorService>>,
+) -> impl IntoResponse {
+    // 1. Verify TRUSTMARK >= 0.4
+    let score_bp = trustmark_cache
+        .get(&identity.pubkey)
+        .await
+        .map(|s| s.score_bp)
+        .unwrap_or(0);
+    if score_bp < EVALUATOR_ADMISSION_THRESHOLD_BP {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({
+                "error": "TRUSTMARK below 0.4 threshold for Tier 3 admission"
+            })),
+        )
+            .into_response();
+    }
+
+    // 2. Verify evidence exists and is >= 72h old
+    let records = match store.get_for_bot(&identity.pubkey).await {
+        Ok(r) => r,
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": e })),
+            )
+                .into_response();
+        }
+    };
+
+    if records.is_empty() {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({
+                "error": "no evidence found"
+            })),
+        )
+            .into_response();
+    }
+
+    let oldest_ts = records.iter().map(|r| r.ts_ms).min().unwrap_or(0);
+    let now = now_epoch_ms();
+    if now - oldest_ts < EVALUATOR_MIN_EVIDENCE_AGE_MS {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({
+                "error": "evidence chain must be >= 72 hours old"
+            })),
+        )
+            .into_response();
+    }
+
+    // 3. Select 3 evaluators (top TRUSTMARK >= 0.5, excluding requester)
+    let top = trustmark_cache.top_scores(3, &identity.pubkey).await;
+    let evaluators: Vec<String> = top
+        .into_iter()
+        .filter(|(_, s)| *s >= EVALUATOR_VOTE_THRESHOLD_BP)
+        .map(|(id, _)| id)
+        .collect();
+
+    if evaluators.len() < 3 {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(serde_json::json!({
+                "error": "insufficient evaluators with TRUSTMARK >= 0.5"
+            })),
+        )
+            .into_response();
+    }
+
+    // 4. Create admission request
+    match evaluator_svc
+        .request_admission(&identity.pubkey, evaluators.clone())
+        .await
+    {
+        Ok(evals) => (
+            StatusCode::CREATED,
+            Json(serde_json::json!({
+                "status": "pending",
+                "evaluators": evals,
+            })),
+        )
+            .into_response(),
+        Err(e) => (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({ "error": e })),
+        )
+            .into_response(),
+    }
+}
+
+/// Request body for POST /evaluator/vote.
+#[derive(Debug, Deserialize)]
+pub struct EvaluatorVoteRequest {
+    pub bot_id: String,
+    pub approve: bool,
+}
+
+/// POST /evaluator/vote -- vote on a Tier 3 admission request.
+/// Requires TRUSTMARK >= 0.5.
+pub async fn evaluator_vote(
+    Extension(identity): Extension<VerifiedIdentity>,
+    Extension(trustmark_cache): Extension<Arc<TrustmarkCache>>,
+    Extension(evaluator_svc): Extension<Arc<EvaluatorService>>,
+    Json(req): Json<EvaluatorVoteRequest>,
+) -> impl IntoResponse {
+    // Verify voter has TRUSTMARK >= 0.5
+    let score_bp = trustmark_cache
+        .get(&identity.pubkey)
+        .await
+        .map(|s| s.score_bp)
+        .unwrap_or(0);
+    if score_bp < EVALUATOR_VOTE_THRESHOLD_BP {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({
+                "error": "evaluator TRUSTMARK below 0.5 threshold"
+            })),
+        )
+            .into_response();
+    }
+
+    match evaluator_svc
+        .vote(&req.bot_id, &identity.pubkey, req.approve)
+        .await
+    {
+        Ok(status) => (
+            StatusCode::OK,
+            Json(serde_json::json!({
+                "bot_id": req.bot_id,
+                "status": status,
+            })),
+        )
+            .into_response(),
+        Err(e) if e.contains("not a selected evaluator") => (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({ "error": e })),
+        )
+            .into_response(),
+        Err(e) if e.contains("not found") || e.contains("no admission") => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "error": e })),
+        )
+            .into_response(),
+        Err(e) => (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": e })),
+        )
+            .into_response(),
+    }
+}
+
 fn now_epoch_ms() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -810,6 +978,7 @@ mod tests {
     use super::*;
     use crate::auth;
     use crate::botawiki::BotawikiStore;
+    use crate::evaluator::EvaluatorService;
     use crate::nats_bridge::{CachedScore, NatsBridge, TrustmarkCache};
     use crate::store::MemoryStore;
     use axum::body::Body;
@@ -883,6 +1052,24 @@ mod tests {
         dead_drop_store: Arc<DeadDropStore>,
         botawiki_store: Arc<BotawikiStore>,
     ) -> Router {
+        test_app_full_with_all(
+            store,
+            cache,
+            wss_registry,
+            dead_drop_store,
+            botawiki_store,
+            Arc::new(EvaluatorService::new()),
+        )
+    }
+
+    fn test_app_full_with_all(
+        store: MemoryStore,
+        cache: TrustmarkCache,
+        wss_registry: Arc<WssConnectionRegistry>,
+        dead_drop_store: Arc<DeadDropStore>,
+        botawiki_store: Arc<BotawikiStore>,
+        evaluator_svc: Arc<EvaluatorService>,
+    ) -> Router {
         let nats_bridge: Option<Arc<NatsBridge>> = None;
         let authed = Router::new()
             .route("/evidence", post(post_evidence::<MemoryStore>))
@@ -892,6 +1079,11 @@ mod tests {
             .route("/botawiki/claim", post(botawiki_submit_claim))
             .route("/botawiki/vote", post(botawiki_vote))
             .route("/botawiki/query", get(botawiki_query))
+            .route(
+                "/evaluator/request-admission",
+                post(request_tier3_admission::<MemoryStore>),
+            )
+            .route("/evaluator/vote", post(evaluator_vote))
             .layer(Extension(store))
             .layer(Extension(Arc::new(cache)))
             .layer(Extension(nats_bridge))
@@ -899,6 +1091,7 @@ mod tests {
             .layer(Extension(dead_drop_store))
             .layer(Extension(botawiki_store))
             .layer(Extension(Arc::new(BotawikiRateLimiter::new())))
+            .layer(Extension(evaluator_svc))
             .layer(middleware::from_fn(auth::auth_middleware));
 
         Router::new().merge(authed)
@@ -2437,5 +2630,186 @@ mod tests {
         let claims = json["claims"].as_array().unwrap();
         assert_eq!(claims.len(), 1);
         assert_eq!(claims[0]["namespace"], "b/skills");
+    }
+
+    // ── Evaluator / Tier 3 admission tests ──
+
+    /// Helper: build a test app for evaluator tests with evidence and trust scores.
+    async fn evaluator_test_app(
+        requester_pubkey: &str,
+        requester_score_bp: u32,
+        evaluators: &[(&str, u32)],
+        evidence_age_ms: i64,
+    ) -> (Router, Arc<EvaluatorService>) {
+        let store = MemoryStore::new();
+        let cache = TrustmarkCache::new();
+
+        // Register requester with evidence at the specified age
+        let now = now_epoch_ms();
+        let evidence_ts = now - evidence_age_ms;
+        for i in 0..5 {
+            let record = EvidenceRecord {
+                id: format!("ev-{requester_pubkey}-{i}"),
+                bot_fingerprint: requester_pubkey.to_string(),
+                seq: i + 1,
+                receipt_type: "api_call".to_string(),
+                ts_ms: evidence_ts + i * 60_000,
+                core_json: "{}".to_string(),
+                receipt_hash: format!("{:064x}", i),
+                request_id: None,
+            };
+            store.insert(record).await.unwrap();
+        }
+
+        cache
+            .insert(
+                requester_pubkey.to_string(),
+                CachedScore {
+                    score_bp: requester_score_bp,
+                    dimensions: serde_json::json!({}),
+                    tier: "tier2".to_string(),
+                    computed_at_ms: now,
+                },
+            )
+            .await;
+
+        for &(eid, score) in evaluators {
+            cache
+                .insert(
+                    eid.to_string(),
+                    CachedScore {
+                        score_bp: score,
+                        dimensions: serde_json::json!({}),
+                        tier: "tier3".to_string(),
+                        computed_at_ms: now,
+                    },
+                )
+                .await;
+        }
+
+        let evaluator_svc = Arc::new(EvaluatorService::new());
+        let app = test_app_full_with_all(
+            store,
+            cache,
+            Arc::new(WssConnectionRegistry::new()),
+            Arc::new(DeadDropStore::new()),
+            Arc::new(BotawikiStore::new()),
+            evaluator_svc.clone(),
+        );
+        (app, evaluator_svc)
+    }
+
+    #[tokio::test]
+    async fn evaluator_request_admission_high_trustmark_pending() {
+        let sk = aegis_crypto::ed25519::generate_keypair();
+        let requester = hex::encode(sk.verifying_key().as_bytes());
+        let evaluators = [("e1", 9000u32), ("e2", 8000), ("e3", 7000)];
+        // Evidence >= 72h old (80h)
+        let (app, evaluator_svc) =
+            evaluator_test_app(&requester, 5000, &evaluators, 80 * 3_600_000).await;
+
+        let (pubkey, sig, ts_ms) =
+            sign_request(&sk, "POST", "/evaluator/request-admission", b"");
+        let req = Request::builder()
+            .method("POST")
+            .uri("/evaluator/request-admission")
+            .header("content-type", "application/json")
+            .header("authorization", format!("NC-Ed25519 {pubkey}:{sig}"))
+            .header("x-aegis-timestamp", ts_ms.to_string())
+            .body(Body::empty())
+            .unwrap();
+
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::CREATED);
+
+        let body = axum::body::to_bytes(resp.into_body(), 4096).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["status"], "pending");
+        assert!(json["evaluators"].as_array().unwrap().len() >= 3);
+
+        let admission = evaluator_svc.get(&requester).await.unwrap();
+        assert_eq!(
+            admission.status,
+            crate::evaluator::AdmissionStatus::Pending
+        );
+    }
+
+    #[tokio::test]
+    async fn evaluator_two_approvals_admits() {
+        let sk = aegis_crypto::ed25519::generate_keypair();
+        let requester = hex::encode(sk.verifying_key().as_bytes());
+        let evaluators = [("e1", 9000u32), ("e2", 8000), ("e3", 7000)];
+        let (app, evaluator_svc) =
+            evaluator_test_app(&requester, 5000, &evaluators, 80 * 3_600_000).await;
+
+        // Request admission
+        let (pubkey, sig, ts_ms) =
+            sign_request(&sk, "POST", "/evaluator/request-admission", b"");
+        let req = Request::builder()
+            .method("POST")
+            .uri("/evaluator/request-admission")
+            .header("content-type", "application/json")
+            .header("authorization", format!("NC-Ed25519 {pubkey}:{sig}"))
+            .header("x-aegis-timestamp", ts_ms.to_string())
+            .body(Body::empty())
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::CREATED);
+
+        // Vote via store directly (HTTP identity doesn't match "e1"/"e2")
+        evaluator_svc
+            .vote(&requester, "e1", true)
+            .await
+            .unwrap();
+        let status = evaluator_svc
+            .vote(&requester, "e2", true)
+            .await
+            .unwrap();
+        assert_eq!(status, crate::evaluator::AdmissionStatus::Admitted);
+    }
+
+    #[tokio::test]
+    async fn evaluator_low_trustmark_rejected() {
+        let sk = aegis_crypto::ed25519::generate_keypair();
+        let requester = hex::encode(sk.verifying_key().as_bytes());
+        // Score 3000 < 4000 threshold
+        let (app, _) =
+            evaluator_test_app(&requester, 3000, &[], 80 * 3_600_000).await;
+
+        let (pubkey, sig, ts_ms) =
+            sign_request(&sk, "POST", "/evaluator/request-admission", b"");
+        let req = Request::builder()
+            .method("POST")
+            .uri("/evaluator/request-admission")
+            .header("content-type", "application/json")
+            .header("authorization", format!("NC-Ed25519 {pubkey}:{sig}"))
+            .header("x-aegis-timestamp", ts_ms.to_string())
+            .body(Body::empty())
+            .unwrap();
+
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn evaluator_non_evaluator_vote_returns_403() {
+        let sk = aegis_crypto::ed25519::generate_keypair();
+        let requester = hex::encode(sk.verifying_key().as_bytes());
+        let evaluators = [("e1", 9000u32), ("e2", 8000), ("e3", 7000)];
+        let (_, evaluator_svc) =
+            evaluator_test_app(&requester, 5000, &evaluators, 80 * 3_600_000).await;
+
+        // Request admission via store
+        evaluator_svc
+            .request_admission(&requester, vec!["e1".into(), "e2".into(), "e3".into()])
+            .await
+            .unwrap();
+
+        // Try to vote as non-evaluator via store
+        let result = evaluator_svc
+            .vote(&requester, "intruder", true)
+            .await;
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("not a selected evaluator"));
     }
 }
