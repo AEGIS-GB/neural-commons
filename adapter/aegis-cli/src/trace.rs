@@ -874,6 +874,75 @@ fn show_detail(base: &str, id: u64, show_body: bool, section: Option<&str>, json
         }
     }
 
+    // === TRUSTMARK ===
+    if sec == "trustmark" {
+        let tm_url = format!("{}/api/trustmark", base);
+        let tm_data: Option<serde_json::Value> = fetch_json(&tm_url);
+        println!();
+        section_header("TRUSTMARK");
+        if let Some(tm) = tm_data {
+            let total = tm.get("total").and_then(|v| v.as_f64()).unwrap_or(0.0);
+            let total_bp = (total * 10000.0).round() as u32;
+            let mode = tm.get("mode").and_then(|v| v.as_str()).unwrap_or("warden");
+            let tier = tm
+                .get("tier")
+                .and_then(|v| v.get("current"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown");
+
+            println!("  {:<20}{}/10000 ({} mode)", "Score", total_bp, mode);
+            println!("  {:<20}{}", "Tier", tier);
+            println!();
+            println!("  Dimensions:");
+
+            let thresholds = [
+                ("persona_integrity", 0.95),
+                ("chain_integrity", 0.95),
+                ("vault_hygiene", 0.90),
+                ("temporal_consistency", 0.80),
+                ("contribution_volume", 0.50),
+                ("relay_reliability", 0.50),
+            ];
+
+            if let Some(dims) = tm.get("dimensions").and_then(|v| v.as_array()) {
+                for d in dims {
+                    let name = d.get("name").and_then(|v| v.as_str()).unwrap_or("?");
+                    let value = d.get("value").and_then(|v| v.as_f64()).unwrap_or(0.0);
+                    let value_bp = (value * 10000.0).round() as u32;
+                    let threshold = thresholds
+                        .iter()
+                        .find(|(n, _)| *n == name)
+                        .map(|(_, t)| *t)
+                        .unwrap_or(0.50);
+
+                    // Skip relay in warden mode
+                    if name == "relay_reliability" && mode == "warden" {
+                        let bar = "\u{2591}".repeat(10);
+                        println!(
+                            "  {:<20} {}  {:>5}  excluded (warden mode)",
+                            name, bar, "\u{2014}"
+                        );
+                        continue;
+                    }
+
+                    let filled = ((value * 10.0).round() as usize).min(10);
+                    let empty = 10 - filled;
+                    let bar = format!("{}{}", "\u{2588}".repeat(filled), "\u{2591}".repeat(empty));
+                    let healthy = value >= threshold;
+                    let icon = if healthy { "\u{2713}" } else { "\u{26a0}" };
+                    let health_label = if healthy { "healthy" } else { "degraded" };
+                    let threshold_bp = (threshold * 10000.0).round() as u32;
+                    println!(
+                        "  {:<20} {}  {:>5}  {} {} (>= {})",
+                        name, bar, value_bp, icon, health_label, threshold_bp
+                    );
+                }
+            }
+        } else {
+            println!("  (unable to fetch TRUSTMARK data)");
+        }
+    }
+
     // === Raw bodies (existing --body flag) ===
     if show_body {
         if let Some(ref body) = e.request_body {
@@ -930,7 +999,14 @@ fn run_watch(
                 format!("{}m", uptime / 60)
             };
             let tm_indicator = if trustmark_bp > 0 {
-                format!(" | TRUSTMARK: {}", trustmark_bp)
+                let tm_icon = if trustmark_bp >= 8000 {
+                    "\u{2713}"
+                } else if trustmark_bp >= 6000 {
+                    "\u{26a0}"
+                } else {
+                    "\u{2717}"
+                };
+                format!(" | TRUSTMARK: {} {}", trustmark_bp, tm_icon)
             } else {
                 String::new()
             };
