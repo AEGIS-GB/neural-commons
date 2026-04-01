@@ -10,6 +10,9 @@
 //! Transport auth key: derived via m/44'/784'/3'/0' (D0).
 //! Verifiers map transport pubkey -> bot identity via cluster-registered key hierarchy.
 
+use std::collections::HashMap;
+use std::sync::{Arc, RwLock};
+
 use axum::{
     body::Body,
     extract::Request,
@@ -22,6 +25,47 @@ use serde::{Deserialize, Serialize};
 
 /// Maximum clock skew for request timestamps (+/-15 seconds)
 pub const MAX_CLOCK_SKEW_MS: i64 = 15_000;
+
+/// Replay protection window (30 seconds covers both sides of ±15s skew)
+pub const REPLAY_WINDOW_MS: i64 = 30_000;
+
+/// Replay protection — tracks recent request hashes to prevent replay attacks.
+///
+/// Hash = SHA-256(pubkey + ts_ms + body_hash). Entries older than 30 seconds
+/// are purged inline on each check (no background task).
+pub struct ReplayProtection {
+    /// Recent request hashes: hash → ts_ms
+    seen: RwLock<HashMap<String, i64>>,
+}
+
+impl ReplayProtection {
+    pub fn new() -> Self {
+        Self {
+            seen: RwLock::new(HashMap::new()),
+        }
+    }
+
+    /// Check if this request is a replay. Returns `true` if the request is NEW
+    /// (not a replay), `false` if it has been seen before.
+    pub fn check_and_record(&self, pubkey: &str, ts_ms: i64, body_hash: &str) -> bool {
+        let input = format!("{}:{}:{}", pubkey, ts_ms, body_hash);
+        let request_hash = hex::encode(aegis_crypto::hash(input.as_bytes()));
+
+        let mut seen = self.seen.write().unwrap();
+
+        // Cleanup old entries (>30s from now)
+        let now_ms = current_ts_ms();
+        seen.retain(|_, ts| now_ms - *ts < REPLAY_WINDOW_MS);
+
+        // Check for replay
+        if seen.contains_key(&request_hash) {
+            return false; // Replay detected
+        }
+
+        seen.insert(request_hash, ts_ms);
+        true
+    }
+}
 
 /// Request signing input -- JCS-canonicalized before signing
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -211,6 +255,18 @@ pub async fn auth_middleware(request: Request, next: Next) -> Response {
     let path = parts.uri.path();
     if let Err(e) = verify_request(&auth, method, path, ts_ms, &body_bytes) {
         return auth_error(&format!("signature verification failed: {e}"));
+    }
+
+    // Replay protection: check if this exact request has been seen before
+    if let Some(replay_guard) = parts.extensions.get::<Arc<ReplayProtection>>() {
+        let body_hash = hex::encode(aegis_crypto::hash(&body_bytes));
+        if !replay_guard.check_and_record(&auth.pubkey, ts_ms, &body_hash) {
+            return (
+                StatusCode::CONFLICT,
+                axum::Json(serde_json::json!({ "error": "replay detected" })),
+            )
+                .into_response();
+        }
     }
 
     // Inject verified identity and reconstruct request
@@ -473,5 +529,235 @@ mod tests {
         };
         // Verify with different body
         assert!(verify_request(&auth, "POST", "/evidence", ts_ms, b"different").is_err());
+    }
+
+    // --- Replay protection tests ---
+
+    #[test]
+    fn replay_protection_first_request_accepted() {
+        let rp = ReplayProtection::new();
+        assert!(rp.check_and_record("pubkey1", current_ts_ms(), "hash1"));
+    }
+
+    #[test]
+    fn replay_protection_identical_replay_rejected() {
+        let rp = ReplayProtection::new();
+        let ts = current_ts_ms();
+        assert!(rp.check_and_record("pubkey1", ts, "hash1"));
+        // Exact same request again → replay
+        assert!(!rp.check_and_record("pubkey1", ts, "hash1"));
+    }
+
+    #[test]
+    fn replay_protection_different_ts_accepted() {
+        let rp = ReplayProtection::new();
+        let ts = current_ts_ms();
+        assert!(rp.check_and_record("pubkey1", ts, "hash1"));
+        // Same body_hash but different ts_ms → new request
+        assert!(rp.check_and_record("pubkey1", ts + 1, "hash1"));
+    }
+
+    #[test]
+    fn replay_protection_old_nonce_purged() {
+        let rp = ReplayProtection::new();
+        // Insert with a very old timestamp (31 seconds ago)
+        let old_ts = current_ts_ms() - 31_000;
+        {
+            let mut seen = rp.seen.write().unwrap();
+            let input = format!("pubkey1:{}:hash1", old_ts);
+            let hash = hex::encode(aegis_crypto::hash(input.as_bytes()));
+            seen.insert(hash, old_ts);
+        }
+        // Now a new check should purge old entries and accept
+        assert!(rp.check_and_record("pubkey1", old_ts, "hash1"));
+    }
+
+    fn sign_request_with_ts(
+        signing_key: &ed25519_dalek::SigningKey,
+        method: &str,
+        path: &str,
+        body: &[u8],
+        ts_ms: i64,
+    ) -> (String, String) {
+        let body_hash = hex::encode(aegis_crypto::hash(body));
+        let input = SigningInput {
+            body_hash,
+            method: method.to_string(),
+            path: path.to_string(),
+            ts_ms,
+        };
+        let canonical = aegis_crypto::canonicalize(&input).unwrap();
+        let sig = signing_key.sign(&canonical);
+        let pubkey_hex = hex::encode(signing_key.verifying_key().as_bytes());
+        let sig_hex = hex::encode(sig.to_bytes());
+        (pubkey_hex, sig_hex)
+    }
+
+    fn test_app_with_replay() -> (Router, Arc<ReplayProtection>) {
+        let rp = Arc::new(ReplayProtection::new());
+        let rp_clone = rp.clone();
+        let authed = Router::new()
+            .route(
+                "/protected",
+                get(|ext: Extension<VerifiedIdentity>| async move {
+                    format!("hello {}", ext.pubkey)
+                }),
+            )
+            .route(
+                "/echo",
+                post(
+                    |ext: Extension<VerifiedIdentity>, body: String| async move {
+                        format!("from {} body={}", ext.pubkey, body)
+                    },
+                ),
+            )
+            .layer(middleware::from_fn(auth_middleware))
+            .layer(Extension(rp_clone));
+
+        let router = Router::new()
+            .route("/health", get(|| async { "ok" }))
+            .merge(authed);
+
+        (router, rp)
+    }
+
+    #[tokio::test]
+    async fn replay_middleware_first_request_accepted() {
+        let (app, _rp) = test_app_with_replay();
+        let sk = aegis_crypto::ed25519::generate_keypair();
+        let (pubkey, sig, ts_ms) = sign_request(&sk, "GET", "/protected", b"");
+
+        let req = Request::builder()
+            .method("GET")
+            .uri("/protected")
+            .header("authorization", format!("NC-Ed25519 {pubkey}:{sig}"))
+            .header("x-aegis-timestamp", ts_ms.to_string())
+            .body(Body::empty())
+            .unwrap();
+
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn replay_middleware_identical_replay_returns_409() {
+        let rp = Arc::new(ReplayProtection::new());
+        let sk = aegis_crypto::ed25519::generate_keypair();
+        let ts_ms = current_ts_ms();
+        let (pubkey, sig) = sign_request_with_ts(&sk, "GET", "/protected", b"", ts_ms);
+
+        // First request
+        {
+            let app = {
+                let rp_clone = rp.clone();
+                let authed = Router::new()
+                    .route(
+                        "/protected",
+                        get(|ext: Extension<VerifiedIdentity>| async move {
+                            format!("hello {}", ext.pubkey)
+                        }),
+                    )
+                    .layer(middleware::from_fn(auth_middleware))
+                    .layer(Extension(rp_clone));
+                Router::new().merge(authed)
+            };
+            let req = Request::builder()
+                .method("GET")
+                .uri("/protected")
+                .header("authorization", format!("NC-Ed25519 {pubkey}:{sig}"))
+                .header("x-aegis-timestamp", ts_ms.to_string())
+                .body(Body::empty())
+                .unwrap();
+            let resp = app.oneshot(req).await.unwrap();
+            assert_eq!(resp.status(), StatusCode::OK);
+        }
+
+        // Replay: exact same request
+        {
+            let app = {
+                let rp_clone = rp.clone();
+                let authed = Router::new()
+                    .route(
+                        "/protected",
+                        get(|ext: Extension<VerifiedIdentity>| async move {
+                            format!("hello {}", ext.pubkey)
+                        }),
+                    )
+                    .layer(middleware::from_fn(auth_middleware))
+                    .layer(Extension(rp_clone));
+                Router::new().merge(authed)
+            };
+            let req = Request::builder()
+                .method("GET")
+                .uri("/protected")
+                .header("authorization", format!("NC-Ed25519 {pubkey}:{sig}"))
+                .header("x-aegis-timestamp", ts_ms.to_string())
+                .body(Body::empty())
+                .unwrap();
+            let resp = app.oneshot(req).await.unwrap();
+            assert_eq!(resp.status(), StatusCode::CONFLICT);
+        }
+    }
+
+    #[tokio::test]
+    async fn replay_middleware_different_ts_accepted() {
+        let rp = Arc::new(ReplayProtection::new());
+        let sk = aegis_crypto::ed25519::generate_keypair();
+
+        // First request at ts
+        let ts1 = current_ts_ms();
+        let (pubkey1, sig1) = sign_request_with_ts(&sk, "GET", "/protected", b"", ts1);
+        {
+            let app = {
+                let rp_clone = rp.clone();
+                let authed = Router::new()
+                    .route(
+                        "/protected",
+                        get(|ext: Extension<VerifiedIdentity>| async move {
+                            format!("hello {}", ext.pubkey)
+                        }),
+                    )
+                    .layer(middleware::from_fn(auth_middleware))
+                    .layer(Extension(rp_clone));
+                Router::new().merge(authed)
+            };
+            let req = Request::builder()
+                .method("GET")
+                .uri("/protected")
+                .header("authorization", format!("NC-Ed25519 {pubkey1}:{sig1}"))
+                .header("x-aegis-timestamp", ts1.to_string())
+                .body(Body::empty())
+                .unwrap();
+            let resp = app.oneshot(req).await.unwrap();
+            assert_eq!(resp.status(), StatusCode::OK);
+        }
+
+        // Second request at ts+1 (different ts_ms = new request)
+        let ts2 = ts1 + 1;
+        let (pubkey2, sig2) = sign_request_with_ts(&sk, "GET", "/protected", b"", ts2);
+        {
+            let app = {
+                let rp_clone = rp.clone();
+                let authed = Router::new()
+                    .route(
+                        "/protected",
+                        get(|ext: Extension<VerifiedIdentity>| async move {
+                            format!("hello {}", ext.pubkey)
+                        }),
+                    )
+                    .layer(middleware::from_fn(auth_middleware))
+                    .layer(Extension(rp_clone));
+                Router::new().merge(authed)
+            };
+            let req = Request::builder()
+                .method("GET")
+                .uri("/protected")
+                .header("authorization", format!("NC-Ed25519 {pubkey2}:{sig2}"))
+                .header("x-aegis-timestamp", ts2.to_string())
+                .body(Body::empty())
+                .unwrap();
+            let resp = app.oneshot(req).await.unwrap();
+            assert_eq!(resp.status(), StatusCode::OK);
+        }
     }
 }
