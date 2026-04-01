@@ -21,6 +21,7 @@ use axum::{Extension, Json};
 use serde::Deserialize;
 
 use crate::auth::VerifiedIdentity;
+use crate::botawiki::BotawikiStore;
 use crate::nats_bridge::{NatsBridge, TrustmarkCache};
 use crate::store::{EvidenceRecord, EvidenceStore};
 use crate::ws::{DeadDropStore, RelayEnvelope, WssConnectionRegistry};
@@ -567,6 +568,144 @@ pub async fn mesh_send<S: EvidenceStore>(
     )
 }
 
+/// Minimum TRUSTMARK score (basis points) to submit a claim (Tier 2+).
+pub const BOTAWIKI_SUBMIT_THRESHOLD_BP: u32 = 3000;
+
+/// Request body for POST /botawiki/claim.
+#[derive(Debug, Deserialize)]
+pub struct SubmitClaimRequest {
+    #[serde(rename = "type")]
+    pub claim_type: aegis_schemas::claim::ClaimType,
+    pub namespace: String,
+    pub confidence_bp: u32,
+    pub temporal_scope: aegis_schemas::claim::TemporalScope,
+    #[serde(default)]
+    pub provenance: Vec<uuid::Uuid>,
+    #[serde(default = "default_schema_version")]
+    pub schema_version: u32,
+    #[serde(default)]
+    pub payload: serde_json::Value,
+}
+
+fn default_schema_version() -> u32 {
+    1
+}
+
+/// POST /botawiki/claim -- submit a new claim (enters quarantine).
+/// Requires TRUSTMARK >= 0.3 (Tier 2+).
+pub async fn botawiki_submit_claim(
+    Extension(identity): Extension<VerifiedIdentity>,
+    Extension(trustmark_cache): Extension<Arc<TrustmarkCache>>,
+    Extension(botawiki_store): Extension<Arc<BotawikiStore>>,
+    Json(req): Json<SubmitClaimRequest>,
+) -> impl IntoResponse {
+    // 1. Verify sender has TRUSTMARK >= 0.3
+    let sender_score = trustmark_cache.get(&identity.pubkey).await;
+    let score_bp = sender_score.map(|s| s.score_bp).unwrap_or(0);
+    if score_bp < BOTAWIKI_SUBMIT_THRESHOLD_BP {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({
+                "error": "TRUSTMARK below required threshold for claim submission"
+            })),
+        )
+            .into_response();
+    }
+
+    // 2. Validate claim structure
+    if req.namespace.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "namespace is required" })),
+        )
+            .into_response();
+    }
+    if req.confidence_bp > 10000 {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "confidence_bp must be <= 10000" })),
+        )
+            .into_response();
+    }
+
+    // 3. Build claim
+    let claim = aegis_schemas::Claim {
+        id: uuid::Uuid::now_v7(),
+        claim_type: req.claim_type,
+        namespace: req.namespace,
+        attester_id: identity.pubkey.clone(),
+        confidence_bp: aegis_schemas::BasisPoints::clamped(req.confidence_bp),
+        temporal_scope: req.temporal_scope,
+        provenance: req.provenance,
+        schema_version: req.schema_version,
+        confabulation_score_bp: None,
+        temporal_coherence_flag: None,
+        distinct_warden_count: None,
+        payload: req.payload,
+    };
+
+    // 4. Select 3 validators (top TRUSTMARK scores, excluding submitter)
+    let top = trustmark_cache.top_scores(3, &identity.pubkey).await;
+    let validators: Vec<String> = top.into_iter().map(|(id, _)| id).collect();
+
+    // 5. Store in quarantine
+    let claim_id = botawiki_store.submit(claim, validators.clone()).await;
+
+    // 6. Return 201 with claim ID and selected validators
+    (
+        StatusCode::CREATED,
+        Json(serde_json::json!({
+            "claim_id": claim_id,
+            "status": "quarantine",
+            "validators": validators,
+        })),
+    )
+        .into_response()
+}
+
+/// Request body for POST /botawiki/vote.
+#[derive(Debug, Deserialize)]
+pub struct VoteRequest {
+    pub claim_id: uuid::Uuid,
+    pub approve: bool,
+}
+
+/// POST /botawiki/vote -- vote on a quarantined claim.
+pub async fn botawiki_vote(
+    Extension(identity): Extension<VerifiedIdentity>,
+    Extension(botawiki_store): Extension<Arc<BotawikiStore>>,
+    Json(req): Json<VoteRequest>,
+) -> impl IntoResponse {
+    match botawiki_store
+        .vote(&req.claim_id, &identity.pubkey, req.approve)
+        .await
+    {
+        Ok(status) => (
+            StatusCode::OK,
+            Json(serde_json::json!({
+                "claim_id": req.claim_id,
+                "status": status,
+            })),
+        )
+            .into_response(),
+        Err(e) if e.contains("not a selected validator") => (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({ "error": e })),
+        )
+            .into_response(),
+        Err(e) if e.contains("not found") => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "error": e })),
+        )
+            .into_response(),
+        Err(e) => (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": e })),
+        )
+            .into_response(),
+    }
+}
+
 fn now_epoch_ms() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -578,6 +717,7 @@ fn now_epoch_ms() -> i64 {
 mod tests {
     use super::*;
     use crate::auth;
+    use crate::botawiki::BotawikiStore;
     use crate::nats_bridge::{CachedScore, NatsBridge, TrustmarkCache};
     use crate::store::MemoryStore;
     use axum::body::Body;
@@ -635,17 +775,36 @@ mod tests {
         wss_registry: Arc<WssConnectionRegistry>,
         dead_drop_store: Arc<DeadDropStore>,
     ) -> Router {
+        test_app_full_with_botawiki(
+            store,
+            cache,
+            wss_registry,
+            dead_drop_store,
+            Arc::new(BotawikiStore::new()),
+        )
+    }
+
+    fn test_app_full_with_botawiki(
+        store: MemoryStore,
+        cache: TrustmarkCache,
+        wss_registry: Arc<WssConnectionRegistry>,
+        dead_drop_store: Arc<DeadDropStore>,
+        botawiki_store: Arc<BotawikiStore>,
+    ) -> Router {
         let nats_bridge: Option<Arc<NatsBridge>> = None;
         let authed = Router::new()
             .route("/evidence", post(post_evidence::<MemoryStore>))
             .route("/evidence/batch", post(post_evidence_batch::<MemoryStore>))
             .route("/trustmark/{bot_id}", get(get_trustmark::<MemoryStore>))
             .route("/mesh/send", post(mesh_send::<MemoryStore>))
+            .route("/botawiki/claim", post(botawiki_submit_claim))
+            .route("/botawiki/vote", post(botawiki_vote))
             .layer(Extension(store))
             .layer(Extension(Arc::new(cache)))
             .layer(Extension(nats_bridge))
             .layer(Extension(wss_registry))
             .layer(Extension(dead_drop_store))
+            .layer(Extension(botawiki_store))
             .layer(middleware::from_fn(auth::auth_middleware));
 
         Router::new().merge(authed)
@@ -1792,5 +1951,262 @@ mod tests {
 
         // Dead-drop should NOT have been used (online delivery)
         assert_eq!(dead_drop.count_for(recipient_id).await, 0);
+    }
+
+    // ── Botawiki claim submission + quarantine tests ──
+
+    /// Helper: build a test app with botawiki store and trust scores.
+    async fn botawiki_test_app(
+        sender_pubkey: &str,
+        sender_score_bp: u32,
+        validator_ids: &[(&str, u32)],
+    ) -> (Router, Arc<BotawikiStore>) {
+        let store = MemoryStore::new();
+        let cache = TrustmarkCache::new();
+        cache
+            .insert(
+                sender_pubkey.to_string(),
+                CachedScore {
+                    score_bp: sender_score_bp,
+                    dimensions: serde_json::json!({}),
+                    tier: "tier2".to_string(),
+                    computed_at_ms: 1700000000000,
+                },
+            )
+            .await;
+        for &(vid, score) in validator_ids {
+            cache
+                .insert(
+                    vid.to_string(),
+                    CachedScore {
+                        score_bp: score,
+                        dimensions: serde_json::json!({}),
+                        tier: "tier3".to_string(),
+                        computed_at_ms: 1700000000000,
+                    },
+                )
+                .await;
+        }
+        let botawiki = Arc::new(BotawikiStore::new());
+        let app = test_app_full_with_botawiki(
+            store,
+            cache,
+            Arc::new(WssConnectionRegistry::new()),
+            Arc::new(DeadDropStore::new()),
+            botawiki.clone(),
+        );
+        (app, botawiki)
+    }
+
+    fn sample_claim_json() -> serde_json::Value {
+        serde_json::json!({
+            "type": "lore",
+            "namespace": "b/lore",
+            "confidence_bp": 8000,
+            "temporal_scope": { "start_ms": 1700000000000_i64 },
+            "provenance": [],
+            "schema_version": 1,
+            "payload": { "fact": "bots can cooperate" }
+        })
+    }
+
+    #[tokio::test]
+    async fn botawiki_submit_claim_returns_201_quarantined() {
+        let sk = aegis_crypto::ed25519::generate_keypair();
+        let sender_pubkey = hex::encode(sk.verifying_key().as_bytes());
+        let validators = [("v1", 9000u32), ("v2", 8000), ("v3", 7000)];
+        let (app, botawiki) = botawiki_test_app(&sender_pubkey, 5000, &validators).await;
+
+        let body = serde_json::to_vec(&sample_claim_json()).unwrap();
+        let (pubkey, sig, ts_ms) = sign_request(&sk, "POST", "/botawiki/claim", &body);
+
+        let req = Request::builder()
+            .method("POST")
+            .uri("/botawiki/claim")
+            .header("content-type", "application/json")
+            .header("authorization", format!("NC-Ed25519 {pubkey}:{sig}"))
+            .header("x-aegis-timestamp", ts_ms.to_string())
+            .body(Body::from(body))
+            .unwrap();
+
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::CREATED);
+
+        let body = axum::body::to_bytes(resp.into_body(), 4096).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["status"], "quarantine");
+        assert!(json["claim_id"].is_string());
+
+        // Verify claim is in quarantine in the store
+        let claim_id: uuid::Uuid = serde_json::from_value(json["claim_id"].clone()).unwrap();
+        let stored = botawiki.get(&claim_id).await.unwrap();
+        assert_eq!(
+            stored.status,
+            crate::botawiki::ClaimStatus::Quarantine
+        );
+    }
+
+    #[tokio::test]
+    async fn botawiki_submit_low_trustmark_returns_403() {
+        let sk = aegis_crypto::ed25519::generate_keypair();
+        let sender_pubkey = hex::encode(sk.verifying_key().as_bytes());
+        // score 2000 < 3000 threshold
+        let (app, _) = botawiki_test_app(&sender_pubkey, 2000, &[]).await;
+
+        let body = serde_json::to_vec(&sample_claim_json()).unwrap();
+        let (pubkey, sig, ts_ms) = sign_request(&sk, "POST", "/botawiki/claim", &body);
+
+        let req = Request::builder()
+            .method("POST")
+            .uri("/botawiki/claim")
+            .header("content-type", "application/json")
+            .header("authorization", format!("NC-Ed25519 {pubkey}:{sig}"))
+            .header("x-aegis-timestamp", ts_ms.to_string())
+            .body(Body::from(body))
+            .unwrap();
+
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn botawiki_vote_two_approvals_makes_canonical() {
+        let sk = aegis_crypto::ed25519::generate_keypair();
+        let sender_pubkey = hex::encode(sk.verifying_key().as_bytes());
+        let validators = [("v1", 9000u32), ("v2", 8000), ("v3", 7000)];
+        let (app, botawiki) = botawiki_test_app(&sender_pubkey, 5000, &validators).await;
+
+        // Submit a claim
+        let body = serde_json::to_vec(&sample_claim_json()).unwrap();
+        let (pubkey, sig, ts_ms) = sign_request(&sk, "POST", "/botawiki/claim", &body);
+        let req = Request::builder()
+            .method("POST")
+            .uri("/botawiki/claim")
+            .header("content-type", "application/json")
+            .header("authorization", format!("NC-Ed25519 {pubkey}:{sig}"))
+            .header("x-aegis-timestamp", ts_ms.to_string())
+            .body(Body::from(body))
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::CREATED);
+        let resp_body = axum::body::to_bytes(resp.into_body(), 4096).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&resp_body).unwrap();
+        let claim_id: uuid::Uuid = serde_json::from_value(json["claim_id"].clone()).unwrap();
+
+        // Vote approve as v1 -- use store directly (HTTP identity doesn't match "v1")
+        let status = botawiki.vote(&claim_id, "v1", true).await.unwrap();
+        assert_eq!(status, crate::botawiki::ClaimStatus::Quarantine);
+
+        // Vote approve as v2 → should become canonical
+        let status = botawiki.vote(&claim_id, "v2", true).await.unwrap();
+        assert_eq!(status, crate::botawiki::ClaimStatus::Canonical);
+    }
+
+    #[tokio::test]
+    async fn botawiki_vote_two_rejections_tombstones() {
+        let sk = aegis_crypto::ed25519::generate_keypair();
+        let sender_pubkey = hex::encode(sk.verifying_key().as_bytes());
+        let validators = [("v1", 9000u32), ("v2", 8000), ("v3", 7000)];
+        let (app, botawiki) = botawiki_test_app(&sender_pubkey, 5000, &validators).await;
+
+        // Submit a claim
+        let body = serde_json::to_vec(&sample_claim_json()).unwrap();
+        let (pubkey, sig, ts_ms) = sign_request(&sk, "POST", "/botawiki/claim", &body);
+        let req = Request::builder()
+            .method("POST")
+            .uri("/botawiki/claim")
+            .header("content-type", "application/json")
+            .header("authorization", format!("NC-Ed25519 {pubkey}:{sig}"))
+            .header("x-aegis-timestamp", ts_ms.to_string())
+            .body(Body::from(body))
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::CREATED);
+        let resp_body = axum::body::to_bytes(resp.into_body(), 4096).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&resp_body).unwrap();
+        let claim_id: uuid::Uuid = serde_json::from_value(json["claim_id"].clone()).unwrap();
+
+        botawiki.vote(&claim_id, "v1", false).await.unwrap();
+        let status = botawiki.vote(&claim_id, "v2", false).await.unwrap();
+        assert_eq!(status, crate::botawiki::ClaimStatus::Tombstoned);
+    }
+
+    #[tokio::test]
+    async fn botawiki_vote_non_validator_returns_403() {
+        let sk = aegis_crypto::ed25519::generate_keypair();
+        let sender_pubkey = hex::encode(sk.verifying_key().as_bytes());
+        let validators = [("v1", 9000u32), ("v2", 8000), ("v3", 7000)];
+        let (app, botawiki) = botawiki_test_app(&sender_pubkey, 5000, &validators).await;
+
+        // Submit a claim
+        let body = serde_json::to_vec(&sample_claim_json()).unwrap();
+        let (pubkey, sig, ts_ms) = sign_request(&sk, "POST", "/botawiki/claim", &body);
+        let req = Request::builder()
+            .method("POST")
+            .uri("/botawiki/claim")
+            .header("content-type", "application/json")
+            .header("authorization", format!("NC-Ed25519 {pubkey}:{sig}"))
+            .header("x-aegis-timestamp", ts_ms.to_string())
+            .body(Body::from(body))
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        let resp_body = axum::body::to_bytes(resp.into_body(), 4096).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&resp_body).unwrap();
+        let claim_id: uuid::Uuid = serde_json::from_value(json["claim_id"].clone()).unwrap();
+
+        // Vote via the HTTP endpoint as a non-validator
+        let intruder_sk = aegis_crypto::ed25519::generate_keypair();
+        let vote_body = serde_json::to_vec(&serde_json::json!({
+            "claim_id": claim_id,
+            "approve": true
+        }))
+        .unwrap();
+        let (pk, sig, ts) = sign_request(&intruder_sk, "POST", "/botawiki/vote", &vote_body);
+
+        let store = MemoryStore::new();
+        let cache = TrustmarkCache::new();
+        cache
+            .insert(
+                sender_pubkey.clone(),
+                CachedScore {
+                    score_bp: 5000,
+                    dimensions: serde_json::json!({}),
+                    tier: "tier2".to_string(),
+                    computed_at_ms: 1700000000000,
+                },
+            )
+            .await;
+        for &(vid, score) in &validators {
+            cache
+                .insert(
+                    vid.to_string(),
+                    CachedScore {
+                        score_bp: score,
+                        dimensions: serde_json::json!({}),
+                        tier: "tier3".to_string(),
+                        computed_at_ms: 1700000000000,
+                    },
+                )
+                .await;
+        }
+        let app2 = test_app_full_with_botawiki(
+            store,
+            cache,
+            Arc::new(WssConnectionRegistry::new()),
+            Arc::new(DeadDropStore::new()),
+            botawiki.clone(),
+        );
+
+        let req = Request::builder()
+            .method("POST")
+            .uri("/botawiki/vote")
+            .header("content-type", "application/json")
+            .header("authorization", format!("NC-Ed25519 {pk}:{sig}"))
+            .header("x-aegis-timestamp", ts.to_string())
+            .body(Body::from(vote_body))
+            .unwrap();
+
+        let resp = app2.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
     }
 }
