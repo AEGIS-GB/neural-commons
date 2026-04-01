@@ -19,6 +19,7 @@
 pub mod config;
 pub mod gateway_client;
 pub mod gateway_wss;
+pub mod gateway_wss_handler;
 pub mod hooks;
 pub mod mode;
 pub mod replay;

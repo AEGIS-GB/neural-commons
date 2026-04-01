@@ -245,7 +245,7 @@ pub async fn start(config: AdapterConfig, mode_override: Option<Mode>) -> Result
         upstream_url: config.proxy.upstream_url.clone(),
         dashboard_path: config.dashboard.path.clone(),
         alert_tx: alert_tx.clone(),
-        trustmark_cache: std::sync::RwLock::new(None),
+        trustmark_cache: Arc::new(std::sync::RwLock::new(None)),
         trustmark_mode: config.trustmark.mode.clone(),
     });
 
@@ -946,7 +946,7 @@ pub async fn start(config: AdapterConfig, mode_override: Option<Mode>) -> Result
         info!("TRUSTMARK scoring started (snapshot every 1h)");
     }
 
-    // 10c. Optionally spawn gateway evidence push task
+    // 10c. Optionally spawn gateway tasks (evidence push + WSS)
     if let Some(ref gw_url) = config.gateway_url {
         // Re-derive signing key from identity file (same key used for evidence signing)
         let gw_signing_key = {
@@ -958,12 +958,22 @@ pub async fn start(config: AdapterConfig, mode_override: Option<Mode>) -> Result
             arr.copy_from_slice(&key_bytes);
             Arc::new(SigningKey::from_bytes(&arr))
         };
+
+        // Evidence push task
         let gw_client = Arc::new(crate::gateway_client::GatewayClient::new(
             gw_url,
-            gw_signing_key,
+            gw_signing_key.clone(),
         ));
         crate::gateway_client::spawn_evidence_push_task(gw_client, recorder.clone());
-        info!(gateway_url = %gw_url, "gateway client configured");
+
+        // WSS connection task with message handler
+        let wss_handler = Arc::new(crate::gateway_wss_handler::AdapterWssHandler::new(
+            alert_tx.clone(),
+            adapter_state.trustmark_cache.clone(),
+        ));
+        crate::gateway_wss::spawn_wss_task(gw_url, gw_signing_key, wss_handler);
+
+        info!(gateway_url = %gw_url, "gateway client configured (evidence push + WSS)");
     }
 
     // 11. Start proxy server (blocks until shutdown)
