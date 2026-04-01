@@ -6,13 +6,15 @@
 use std::net::SocketAddr;
 use std::path::PathBuf;
 
-use axum::{Router, middleware, routing::get};
+use axum::{Extension, Router, middleware, routing::get, routing::post};
 use clap::Parser;
 use serde::Deserialize;
 use tokio::signal;
 use tracing::info;
 
 use aegis_gateway::auth;
+use aegis_gateway::routes;
+use aegis_gateway::store::MemoryStore;
 
 /// Gateway configuration loaded from TOML file.
 #[derive(Debug, Deserialize)]
@@ -112,9 +114,13 @@ async fn main() {
     let cli = Cli::parse();
     let config = load_config(&cli.config);
 
+    // Evidence store (in-memory for now; swap with PostgresStore in production)
+    let evidence_store = MemoryStore::new();
+
     // Authenticated routes (auth middleware applied)
     let authed_routes = Router::new()
-        // Future: POST /evidence, POST /evidence/batch, GET /trustmark/:bot_id
+        .route("/evidence", post(routes::post_evidence::<MemoryStore>))
+        .layer(Extension(evidence_store))
         .layer(middleware::from_fn(auth::auth_middleware));
 
     // Public routes (no auth) merged with authenticated routes

@@ -16,6 +16,9 @@ CREATE SCHEMA IF NOT EXISTS botawiki;
 -- Schema: ledger
 CREATE SCHEMA IF NOT EXISTS ledger;
 
+-- Schema: evidence
+CREATE SCHEMA IF NOT EXISTS evidence;
+
 -- Schema: identity
 CREATE SCHEMA IF NOT EXISTS identity;
 
@@ -71,6 +74,24 @@ CREATE TABLE IF NOT EXISTS ledger.balances (
     lifetime_spent DOUBLE PRECISION NOT NULL DEFAULT 0.0,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+-- Evidence receipts (cluster-aggregated from all bots)
+CREATE TABLE IF NOT EXISTS evidence.receipts (
+    id TEXT PRIMARY KEY,
+    bot_fingerprint TEXT NOT NULL,
+    seq BIGINT NOT NULL,
+    receipt_type TEXT NOT NULL,
+    ts_ms BIGINT NOT NULL,
+    core_json TEXT NOT NULL,
+    receipt_hash TEXT NOT NULL,
+    request_id TEXT,
+    received_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_evidence_bot ON evidence.receipts(bot_fingerprint, seq);
+CREATE INDEX IF NOT EXISTS idx_evidence_ts ON evidence.receipts(ts_ms);
+CREATE INDEX IF NOT EXISTS idx_evidence_type ON evidence.receipts(receipt_type);
+CREATE INDEX IF NOT EXISTS idx_evidence_request_id ON evidence.receipts(request_id);
 
 -- Identity registry (cluster-side)
 CREATE TABLE IF NOT EXISTS identity.bots (
