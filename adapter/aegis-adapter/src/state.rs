@@ -159,6 +159,9 @@ pub struct AdapterState {
     /// Cached TRUSTMARK score with freshness tracking.
     /// Auto-recomputed when stale (>5 minutes).
     pub trustmark_cache: std::sync::RwLock<Option<TrustmarkCache>>,
+
+    /// TRUSTMARK scoring mode ("warden" or "mesh").
+    pub trustmark_mode: String,
 }
 
 impl AdapterState {
@@ -257,7 +260,11 @@ impl AdapterState {
 
         // Recompute
         let signals = aegis_trustmark::gather::gather_local_signals(data_dir);
-        let score = aegis_trustmark::scoring::TrustmarkScore::compute(&signals);
+        let score = if self.trustmark_mode == "warden" {
+            aegis_trustmark::scoring::TrustmarkScore::compute_warden(&signals)
+        } else {
+            aegis_trustmark::scoring::TrustmarkScore::compute(&signals)
+        };
         let cache_entry = TrustmarkCache {
             score,
             computed_at_ms: now_ms,
@@ -295,6 +302,7 @@ mod tests {
             dashboard_path: "/dashboard".into(),
             alert_tx,
             trustmark_cache: std::sync::RwLock::new(None),
+            trustmark_mode: "warden".to_string(),
         }
     }
 

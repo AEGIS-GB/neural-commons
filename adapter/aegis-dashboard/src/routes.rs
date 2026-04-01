@@ -74,6 +74,8 @@ pub struct DashboardSharedState {
     /// Dashboard auth token. If set, all dashboard/API requests require
     /// `Authorization: Bearer <token>` or `?token=<token>` query param.
     pub auth_token: Option<String>,
+    /// TRUSTMARK scoring mode ("warden" or "mesh").
+    pub trustmark_mode: String,
 }
 
 // ── Router ───────────────────────────────────────────────────────────────────
@@ -366,7 +368,11 @@ async fn api_status(State(state): State<Arc<DashboardSharedState>>) -> Json<Dash
 
     // Compute TRUSTMARK score from local data
     let signals = aegis_trustmark::gather::gather_local_signals(&state.data_dir);
-    let score = aegis_trustmark::scoring::TrustmarkScore::compute(&signals);
+    let score = if state.trustmark_mode == "warden" {
+        aegis_trustmark::scoring::TrustmarkScore::compute_warden(&signals)
+    } else {
+        aegis_trustmark::scoring::TrustmarkScore::compute(&signals)
+    };
     let trustmark_score_bp = (score.total * 10000.0).round() as u32;
 
     Json(DashboardStatus {
@@ -1166,7 +1172,11 @@ fn parse_sse_response_text(sse_body: &str) -> Option<String> {
 /// Uses the same gather function as the CLI — single source of truth.
 async fn api_trustmark(State(state): State<Arc<DashboardSharedState>>) -> Json<serde_json::Value> {
     let signals = aegis_trustmark::gather::gather_local_signals(&state.data_dir);
-    let score = aegis_trustmark::scoring::TrustmarkScore::compute(&signals);
+    let score = if state.trustmark_mode == "warden" {
+        aegis_trustmark::scoring::TrustmarkScore::compute_warden(&signals)
+    } else {
+        aegis_trustmark::scoring::TrustmarkScore::compute(&signals)
+    };
     let identity_age = aegis_trustmark::gather::get_identity_age_hours(&state.data_dir);
     let tier = aegis_trustmark::tiers::resolve_tier(
         score.total,
@@ -1182,6 +1192,7 @@ async fn api_trustmark(State(state): State<Arc<DashboardSharedState>>) -> Json<s
         "computed_at_ms": score.computed_at_ms,
         "tier": tier,
         "identity_age_hours": identity_age,
+        "mode": state.trustmark_mode,
     }))
 }
 
