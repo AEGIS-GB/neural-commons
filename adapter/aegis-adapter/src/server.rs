@@ -246,6 +246,7 @@ pub async fn start(config: AdapterConfig, mode_override: Option<Mode>) -> Result
         dashboard_path: config.dashboard.path.clone(),
         alert_tx: alert_tx.clone(),
         trustmark_cache: std::sync::RwLock::new(None),
+        trustmark_mode: config.trustmark.mode.clone(),
     });
 
     // 5b. Create traffic store (in-memory ring buffer for dashboard inspector)
@@ -278,6 +279,7 @@ pub async fn start(config: AdapterConfig, mode_override: Option<Mode>) -> Result
         start_time,
         data_dir: data_dir.clone(),
         auth_token: generate_dashboard_token(&config),
+        trustmark_mode: config.trustmark.mode.clone(),
     });
     let dashboard_router = aegis_dashboard::routes::routes(dashboard_state);
     let dashboard_path = config.dashboard.path.clone();
@@ -889,16 +891,26 @@ pub async fn start(config: AdapterConfig, mode_override: Option<Mode>) -> Result
         let tm_recorder = recorder.clone();
         let tm_alert_tx = alert_tx.clone();
         let tm_min_score = config.trustmark.min_score;
+        let tm_mode = config.trustmark.mode.clone();
         let tm_degraded = trustmark_degraded_flag.clone();
         tokio::spawn(async move {
+            let compute_score = |signals: &aegis_trustmark::scoring::LocalSignals| {
+                if tm_mode == "warden" {
+                    aegis_trustmark::scoring::TrustmarkScore::compute_warden(signals)
+                } else {
+                    aegis_trustmark::scoring::TrustmarkScore::compute(signals)
+                }
+            };
+
             // Initial snapshot at startup
             let signals = aegis_trustmark::gather::gather_local_signals(&tm_data_dir);
-            let score = aegis_trustmark::scoring::TrustmarkScore::compute(&signals);
+            let score = compute_score(&signals);
             if let Err(e) = aegis_trustmark::persist::record_snapshot(&tm_recorder, &score) {
                 tracing::warn!("failed to record initial TRUSTMARK snapshot: {e}");
             } else {
                 tracing::info!(
                     score = format!("{:.3}", score.total),
+                    mode = %tm_mode,
                     "TRUSTMARK snapshot recorded"
                 );
             }
@@ -914,12 +926,13 @@ pub async fn start(config: AdapterConfig, mode_override: Option<Mode>) -> Result
             loop {
                 interval.tick().await;
                 let signals = aegis_trustmark::gather::gather_local_signals(&tm_data_dir);
-                let score = aegis_trustmark::scoring::TrustmarkScore::compute(&signals);
+                let score = compute_score(&signals);
                 if let Err(e) = aegis_trustmark::persist::record_snapshot(&tm_recorder, &score) {
                     tracing::warn!("failed to record TRUSTMARK snapshot: {e}");
                 } else {
                     tracing::info!(
                         score = format!("{:.3}", score.total),
+                        mode = %tm_mode,
                         "TRUSTMARK hourly snapshot"
                     );
                 }
