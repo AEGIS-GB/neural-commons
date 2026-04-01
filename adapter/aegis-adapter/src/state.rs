@@ -85,6 +85,14 @@ impl EvidenceState {
 // TRUSTMARK cache
 // ---------------------------------------------------------------------------
 
+/// Per-dimension health check result.
+pub struct DimensionHealth {
+    pub name: String,
+    pub value: f64,
+    pub threshold: f64,
+    pub healthy: bool,
+}
+
 /// Cached TRUSTMARK score with freshness tracking.
 #[derive(Clone)]
 pub struct TrustmarkCache {
@@ -204,6 +212,35 @@ impl AdapterState {
         format!("http://{}{}", self.listen_addr, self.dashboard_path)
     }
 
+    /// Check per-dimension TRUSTMARK health against thresholds.
+    /// Returns a health report for each dimension.
+    pub fn check_trustmark_health(&self, data_dir: &Path) -> Vec<DimensionHealth> {
+        let tm = self.trustmark_score(data_dir);
+        let thresholds = [
+            ("persona_integrity", 0.95),
+            ("chain_integrity", 0.95),
+            ("vault_hygiene", 0.90),
+            ("temporal_consistency", 0.80),
+            ("contribution_volume", 0.50),
+        ];
+
+        let mut results = Vec::new();
+        for dim in &tm.score.dimensions {
+            let threshold = thresholds
+                .iter()
+                .find(|(n, _)| *n == dim.name)
+                .map(|(_, t)| *t)
+                .unwrap_or(0.50);
+            results.push(DimensionHealth {
+                name: dim.name.clone(),
+                value: dim.value,
+                threshold,
+                healthy: dim.value >= threshold,
+            });
+        }
+        results
+    }
+
     /// Get the current TRUSTMARK score, recomputing if stale (>5 minutes).
     pub fn trustmark_score(&self, data_dir: &Path) -> TrustmarkCache {
         let stale_threshold_ms: i64 = 5 * 60 * 1000; // 5 minutes
@@ -318,6 +355,19 @@ mod tests {
         assert_eq!(ev.chain_head_seq(), 0);
         assert_eq!(ev.receipt_count(), 0);
         assert_eq!(ev.chain_head_hash().len(), 64);
+    }
+
+    #[test]
+    fn trustmark_health_check() {
+        let state = make_state();
+        let data_dir = PathBuf::from(".aegis");
+        let health = state.check_trustmark_health(&data_dir);
+        // Should return a health entry for each dimension
+        assert!(!health.is_empty(), "health check should have dimensions");
+        for dim in &health {
+            assert!(!dim.name.is_empty());
+            assert!(dim.threshold > 0.0);
+        }
     }
 
     #[test]
