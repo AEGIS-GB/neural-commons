@@ -194,6 +194,7 @@ pub async fn start(config: AdapterConfig, mode_override: Option<Mode>) -> Result
         upstream_url: config.proxy.upstream_url.clone(),
         dashboard_path: config.dashboard.path.clone(),
         alert_tx: alert_tx.clone(),
+        trustmark_cache: std::sync::RwLock::new(None),
     });
 
     // 5b. Create traffic store (in-memory ring buffer for dashboard inspector)
