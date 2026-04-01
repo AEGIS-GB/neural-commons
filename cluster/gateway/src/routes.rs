@@ -123,6 +123,90 @@ pub async fn post_evidence<S: EvidenceStore>(
     }
 }
 
+/// POST /evidence/batch -- accept a batch of receipt cores.
+///
+/// Limits: max 100 receipts, max 1MB body.
+/// Returns 201 with count on success, 413 if limits exceeded.
+pub async fn post_evidence_batch<S: EvidenceStore>(
+    Extension(identity): Extension<VerifiedIdentity>,
+    Extension(store): Extension<S>,
+    body: axum::body::Bytes,
+) -> impl IntoResponse {
+    // Check body size
+    if body.len() > MAX_BATCH_BYTES {
+        return (
+            StatusCode::PAYLOAD_TOO_LARGE,
+            Json(serde_json::json!({
+                "error": format!("body size {} exceeds limit of {} bytes", body.len(), MAX_BATCH_BYTES)
+            })),
+        );
+    }
+
+    // Parse JSON array
+    let receipts: Vec<SubmittedReceipt> = match serde_json::from_slice(&body) {
+        Ok(r) => r,
+        Err(e) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": format!("invalid JSON: {e}") })),
+            );
+        }
+    };
+
+    // Check batch size
+    if receipts.len() > MAX_BATCH_SIZE {
+        return (
+            StatusCode::PAYLOAD_TOO_LARGE,
+            Json(serde_json::json!({
+                "error": format!("batch size {} exceeds limit of {}", receipts.len(), MAX_BATCH_SIZE)
+            })),
+        );
+    }
+
+    if receipts.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "batch must not be empty" })),
+        );
+    }
+
+    // Validate all receipts first
+    for (i, receipt) in receipts.iter().enumerate() {
+        if let Err(e) = validate_receipt(receipt) {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": format!("receipt[{i}]: {e}") })),
+            );
+        }
+    }
+
+    // Convert to records
+    let mut records = Vec::with_capacity(receipts.len());
+    for receipt in &receipts {
+        match receipt_to_record(receipt, &identity.pubkey) {
+            Ok(r) => records.push(r),
+            Err(e) => {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(serde_json::json!({ "error": e })),
+                );
+            }
+        }
+    }
+
+    // Batch insert
+    match store.insert_batch(records).await {
+        Ok(count) => (
+            StatusCode::CREATED,
+            Json(serde_json::json!({ "count": count })),
+        ),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e })),
+        ),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -164,6 +248,7 @@ mod tests {
     fn test_app(store: MemoryStore) -> Router {
         let authed = Router::new()
             .route("/evidence", post(post_evidence::<MemoryStore>))
+            .route("/evidence/batch", post(post_evidence_batch::<MemoryStore>))
             .layer(Extension(store))
             .layer(middleware::from_fn(auth::auth_middleware));
 
@@ -294,5 +379,115 @@ mod tests {
             .unwrap();
         let resp2 = app2.oneshot(req2).await.unwrap();
         assert_eq!(resp2.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    // ── Batch endpoint tests ──
+
+    fn make_batch(count: usize) -> Vec<serde_json::Value> {
+        (0..count)
+            .map(|i| {
+                serde_json::json!({
+                    "id": format!("receipt-{i:04}"),
+                    "type": "api_call",
+                    "ts_ms": 1700000000000i64 + i as i64,
+                    "seq": i as i64 + 1,
+                    "prev_hash": "0000000000000000000000000000000000000000000000000000000000000000",
+                    "payload_hash": "aabbccdd00112233445566778899aabbccddeeff00112233445566778899aabb",
+                    "sig": "a".repeat(128),
+                    "receipt_hash": format!("{:064x}", i),
+                })
+            })
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn batch_50_receipts_returns_201() {
+        let store = MemoryStore::new();
+        let app = test_app(store.clone());
+        let sk = aegis_crypto::ed25519::generate_keypair();
+        let batch = make_batch(50);
+        let body = serde_json::to_vec(&batch).unwrap();
+        let (pubkey, sig, ts_ms) = sign_request(&sk, "POST", "/evidence/batch", &body);
+
+        let req = Request::builder()
+            .method("POST")
+            .uri("/evidence/batch")
+            .header("content-type", "application/json")
+            .header("authorization", format!("NC-Ed25519 {pubkey}:{sig}"))
+            .header("x-aegis-timestamp", ts_ms.to_string())
+            .body(Body::from(body))
+            .unwrap();
+
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::CREATED);
+
+        let body = axum::body::to_bytes(resp.into_body(), 4096).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["count"], 50);
+
+        let count = store.count_for_bot(&pubkey).await.unwrap();
+        assert_eq!(count, 50);
+    }
+
+    #[tokio::test]
+    async fn batch_101_receipts_returns_413() {
+        let store = MemoryStore::new();
+        let app = test_app(store);
+        let sk = aegis_crypto::ed25519::generate_keypair();
+        let batch = make_batch(101);
+        let body = serde_json::to_vec(&batch).unwrap();
+        let (pubkey, sig, ts_ms) = sign_request(&sk, "POST", "/evidence/batch", &body);
+
+        let req = Request::builder()
+            .method("POST")
+            .uri("/evidence/batch")
+            .header("content-type", "application/json")
+            .header("authorization", format!("NC-Ed25519 {pubkey}:{sig}"))
+            .header("x-aegis-timestamp", ts_ms.to_string())
+            .body(Body::from(body))
+            .unwrap();
+
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::PAYLOAD_TOO_LARGE);
+    }
+
+    #[tokio::test]
+    async fn batch_empty_returns_400() {
+        let store = MemoryStore::new();
+        let app = test_app(store);
+        let sk = aegis_crypto::ed25519::generate_keypair();
+        let batch: Vec<serde_json::Value> = vec![];
+        let body = serde_json::to_vec(&batch).unwrap();
+        let (pubkey, sig, ts_ms) = sign_request(&sk, "POST", "/evidence/batch", &body);
+
+        let req = Request::builder()
+            .method("POST")
+            .uri("/evidence/batch")
+            .header("content-type", "application/json")
+            .header("authorization", format!("NC-Ed25519 {pubkey}:{sig}"))
+            .header("x-aegis-timestamp", ts_ms.to_string())
+            .body(Body::from(body))
+            .unwrap();
+
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn batch_unauthenticated_returns_401() {
+        let store = MemoryStore::new();
+        let app = test_app(store);
+        let batch = make_batch(5);
+        let body = serde_json::to_vec(&batch).unwrap();
+
+        let req = Request::builder()
+            .method("POST")
+            .uri("/evidence/batch")
+            .header("content-type", "application/json")
+            .body(Body::from(body))
+            .unwrap();
+
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
     }
 }
