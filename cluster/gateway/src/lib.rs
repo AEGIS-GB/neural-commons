@@ -9,6 +9,7 @@
 //! Transport auth key: m/44'/784'/3'/0' (D0, D3). NOT the root signing key.
 
 pub mod auth;
+pub mod botawiki;
 pub mod embedding_pool;
 pub mod nats_bridge;
 pub mod routes;

@@ -259,6 +259,20 @@ impl TrustmarkCache {
     pub async fn is_empty(&self) -> bool {
         self.scores.read().await.is_empty()
     }
+
+    /// Return the top N bot IDs by score_bp, excluding a given bot_id.
+    /// Used for validator/evaluator selection.
+    pub async fn top_scores(&self, n: usize, exclude: &str) -> Vec<(String, u32)> {
+        let scores = self.scores.read().await;
+        let mut entries: Vec<(String, u32)> = scores
+            .iter()
+            .filter(|(id, _)| id.as_str() != exclude)
+            .map(|(id, s)| (id.clone(), s.score_bp))
+            .collect();
+        entries.sort_by(|a, b| b.1.cmp(&a.1));
+        entries.truncate(n);
+        entries
+    }
 }
 
 #[cfg(test)]
