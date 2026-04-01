@@ -303,6 +303,111 @@ pub struct RelayEnvelope {
     pub ts_ms: i64,
 }
 
+/// Dead-drop TTL: 72 hours in milliseconds (D25).
+pub const DEAD_DROP_TTL_MS: i64 = 72 * 60 * 60 * 1000;
+
+/// Maximum dead-drops per identity (D25).
+pub const MAX_DEAD_DROPS_PER_IDENTITY: usize = 500;
+
+/// A queued message for an offline bot.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeadDrop {
+    /// Sender bot_id (pubkey hex)
+    pub from: String,
+    /// Message content
+    pub body: String,
+    /// Message type
+    pub msg_type: String,
+    /// Timestamp when stored (epoch ms)
+    pub ts_ms: i64,
+    /// Expiry timestamp (epoch ms): ts_ms + 72h
+    pub expires_ms: i64,
+}
+
+/// In-memory dead-drop store for offline bot message queuing.
+///
+/// Messages are stored until the recipient connects via WSS, at which point
+/// they are drained and delivered. Expired messages (>72h) are cleaned up
+/// periodically. Each identity is limited to 500 queued messages (D25).
+pub struct DeadDropStore {
+    drops: RwLock<HashMap<String, Vec<DeadDrop>>>,
+    max_per_identity: usize,
+}
+
+impl DeadDropStore {
+    /// Create a new dead-drop store with the default 500-per-identity limit.
+    pub fn new() -> Self {
+        Self {
+            drops: RwLock::new(HashMap::new()),
+            max_per_identity: MAX_DEAD_DROPS_PER_IDENTITY,
+        }
+    }
+
+    /// Store a dead-drop message for an offline recipient.
+    /// Returns an error if the recipient's queue exceeds the per-identity limit.
+    pub async fn store(
+        &self,
+        to: &str,
+        from: &str,
+        body: &str,
+        msg_type: &str,
+    ) -> Result<(), String> {
+        let mut drops = self.drops.write().await;
+        let queue = drops.entry(to.to_string()).or_default();
+        if queue.len() >= self.max_per_identity {
+            return Err(format!(
+                "dead-drop quota exceeded ({} max)",
+                self.max_per_identity
+            ));
+        }
+        let ts_ms = now_epoch_ms();
+        queue.push(DeadDrop {
+            from: from.to_string(),
+            body: body.to_string(),
+            msg_type: msg_type.to_string(),
+            ts_ms,
+            expires_ms: ts_ms + DEAD_DROP_TTL_MS,
+        });
+        Ok(())
+    }
+
+    /// Drain all pending dead-drops for a recipient (on WSS connect).
+    /// Returns the messages and removes them from the store.
+    pub async fn drain(&self, bot_id: &str) -> Vec<DeadDrop> {
+        let mut drops = self.drops.write().await;
+        let now = now_epoch_ms();
+        drops
+            .remove(bot_id)
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|d| d.expires_ms > now) // skip expired
+            .collect()
+    }
+
+    /// Remove all expired dead-drops (>72h TTL) across all identities.
+    pub async fn cleanup_expired(&self) {
+        let now = now_epoch_ms();
+        let mut drops = self.drops.write().await;
+        for queue in drops.values_mut() {
+            queue.retain(|d| d.expires_ms > now);
+        }
+        // Remove empty queues
+        drops.retain(|_, q| !q.is_empty());
+    }
+
+    /// Return the count of pending dead-drops for a specific recipient.
+    pub async fn count_for(&self, bot_id: &str) -> usize {
+        let drops = self.drops.read().await;
+        drops.get(bot_id).map(|q| q.len()).unwrap_or(0)
+    }
+
+    /// Return the total count of all dead-drops across all identities.
+    pub async fn total_count(&self) -> usize {
+        let drops = self.drops.read().await;
+        drops.values().map(|q| q.len()).sum()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -451,5 +556,159 @@ mod tests {
         assert_eq!(parsed.from, "abc123");
         assert_eq!(parsed.body, "hello world");
         assert_eq!(parsed.msg_type, "relay");
+    }
+
+    // ── Dead-drop tests ──
+
+    #[tokio::test]
+    async fn dead_drop_store_and_drain() {
+        let store = DeadDropStore::new();
+        store
+            .store("bot_b", "bot_a", "hello offline", "relay")
+            .await
+            .unwrap();
+        store
+            .store("bot_b", "bot_a", "second message", "relay")
+            .await
+            .unwrap();
+
+        assert_eq!(store.count_for("bot_b").await, 2);
+        assert_eq!(store.count_for("bot_a").await, 0);
+
+        let messages = store.drain("bot_b").await;
+        assert_eq!(messages.len(), 2);
+        assert_eq!(messages[0].body, "hello offline");
+        assert_eq!(messages[1].body, "second message");
+
+        // After drain, queue is empty
+        assert_eq!(store.count_for("bot_b").await, 0);
+    }
+
+    #[tokio::test]
+    async fn dead_drop_quota_enforced() {
+        let store = DeadDropStore {
+            drops: RwLock::new(HashMap::new()),
+            max_per_identity: 3, // Small limit for testing
+        };
+
+        for i in 0..3 {
+            store
+                .store("bot_b", "bot_a", &format!("msg {i}"), "relay")
+                .await
+                .unwrap();
+        }
+
+        // 4th message should fail
+        let result = store.store("bot_b", "bot_a", "msg 3", "relay").await;
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("quota exceeded"));
+    }
+
+    #[tokio::test]
+    async fn dead_drop_500_limit() {
+        let store = DeadDropStore::new();
+
+        // Fill to exactly 500
+        for i in 0..500 {
+            store
+                .store("target_bot", "sender", &format!("msg {i}"), "relay")
+                .await
+                .unwrap();
+        }
+
+        // 501st should fail
+        let result = store
+            .store("target_bot", "sender", "msg 500", "relay")
+            .await;
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("500 max"));
+    }
+
+    #[tokio::test]
+    async fn dead_drop_expired_messages_cleaned_up() {
+        let store = DeadDropStore::new();
+
+        // Insert a message, then manually set it as expired
+        store
+            .store("bot_b", "bot_a", "expired msg", "relay")
+            .await
+            .unwrap();
+
+        // Manually expire the message by adjusting expires_ms
+        {
+            let mut drops = store.drops.write().await;
+            let queue = drops.get_mut("bot_b").unwrap();
+            queue[0].expires_ms = now_epoch_ms() - 1000; // expired 1s ago
+        }
+
+        store.cleanup_expired().await;
+        assert_eq!(store.count_for("bot_b").await, 0);
+        assert_eq!(store.total_count().await, 0);
+    }
+
+    #[tokio::test]
+    async fn dead_drop_drain_skips_expired() {
+        let store = DeadDropStore::new();
+
+        store
+            .store("bot_b", "bot_a", "valid msg", "relay")
+            .await
+            .unwrap();
+        store
+            .store("bot_b", "bot_a", "expired msg", "relay")
+            .await
+            .unwrap();
+
+        // Expire the second message
+        {
+            let mut drops = store.drops.write().await;
+            let queue = drops.get_mut("bot_b").unwrap();
+            queue[1].expires_ms = now_epoch_ms() - 1000;
+        }
+
+        let messages = store.drain("bot_b").await;
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].body, "valid msg");
+    }
+
+    #[tokio::test]
+    async fn dead_drop_ttl_is_72h() {
+        let store = DeadDropStore::new();
+        store
+            .store("bot_b", "bot_a", "test", "relay")
+            .await
+            .unwrap();
+
+        let drops = store.drops.read().await;
+        let queue = drops.get("bot_b").unwrap();
+        let drop = &queue[0];
+        let expected_ttl = DEAD_DROP_TTL_MS;
+        let actual_ttl = drop.expires_ms - drop.ts_ms;
+        assert_eq!(actual_ttl, expected_ttl);
+    }
+
+    #[tokio::test]
+    async fn dead_drop_total_count() {
+        let store = DeadDropStore::new();
+        store.store("a", "x", "m1", "relay").await.unwrap();
+        store.store("b", "x", "m2", "relay").await.unwrap();
+        store.store("b", "x", "m3", "relay").await.unwrap();
+        assert_eq!(store.total_count().await, 3);
+    }
+
+    #[tokio::test]
+    async fn dead_drop_serialization() {
+        let drop = DeadDrop {
+            from: "sender".to_string(),
+            body: "hello".to_string(),
+            msg_type: "relay".to_string(),
+            ts_ms: 1700000000000,
+            expires_ms: 1700000000000 + DEAD_DROP_TTL_MS,
+        };
+        let json = serde_json::to_string(&drop).unwrap();
+        let parsed: DeadDrop = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.from, "sender");
+        assert_eq!(parsed.body, "hello");
+        assert_eq!(parsed.expires_ms, 1700000000000 + DEAD_DROP_TTL_MS);
     }
 }
