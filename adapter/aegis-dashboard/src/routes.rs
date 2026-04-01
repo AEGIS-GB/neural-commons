@@ -210,6 +210,8 @@ struct DashboardStatus {
     /// Which switchable checks are currently in observe mode (D30).
     /// Empty vec = all checks enforced = no amber banner needed.
     observe_mode_checks: Vec<String>,
+    /// TRUSTMARK score in basis points (0-10000). 0 if not yet computed.
+    trustmark_score_bp: u32,
 }
 
 #[derive(Debug, Serialize)]
@@ -361,6 +363,12 @@ async fn dashboard_html() -> axum::response::Html<&'static str> {
 /// GET /dashboard/api/status — current adapter status.
 async fn api_status(State(state): State<Arc<DashboardSharedState>>) -> Json<DashboardStatus> {
     let chain_head = state.evidence.chain_head();
+
+    // Compute TRUSTMARK score from local data
+    let signals = aegis_trustmark::gather::gather_local_signals(&state.data_dir);
+    let score = aegis_trustmark::scoring::TrustmarkScore::compute(&signals);
+    let trustmark_score_bp = (score.total * 10000.0).round() as u32;
+
     Json(DashboardStatus {
         mode: (state.mode_fn)().to_string(),
         uptime_secs: state.start_time.elapsed().as_secs(),
@@ -370,6 +378,7 @@ async fn api_status(State(state): State<Arc<DashboardSharedState>>) -> Json<Dash
         health: "healthy".to_string(),
         version: env!("CARGO_PKG_VERSION").to_string(),
         observe_mode_checks: (state.observe_mode_checks_fn)(),
+        trustmark_score_bp,
     })
 }
 

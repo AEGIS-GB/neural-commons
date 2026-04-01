@@ -436,6 +436,41 @@ impl TrustmarkScore {
         d.estimated = is_estimated;
         d
     }
+
+    /// Compute TRUSTMARK score in warden mode (self-attested, no mesh relay).
+    ///
+    /// Excludes relay_reliability (always estimated in warden mode) and
+    /// redistributes its weight proportionally across the other 5 dimensions.
+    pub fn compute_warden(signals: &LocalSignals) -> Self {
+        // Zero out relay signals so the relay dimension defaults to 0.5
+        let mut warden_signals = signals.clone();
+        warden_signals.relay_forwarded = 0;
+        warden_signals.relay_failed = 0;
+
+        let mut score = Self::compute(&warden_signals);
+
+        // Redistribute relay weight: remove relay contribution and rescale
+        let relay_idx = score
+            .dimensions
+            .iter()
+            .position(|d| d.name == "relay_reliability");
+        if let Some(idx) = relay_idx {
+            let relay_contribution = score.dimensions[idx].contribution;
+            let remaining_weight: f64 = 1.0 - WEIGHT_RELAY_RELIABILITY;
+
+            // Remove relay from total, then rescale to [0,1]
+            let total_without_relay = score.total - relay_contribution;
+            score.total = (total_without_relay / remaining_weight).clamp(0.0, 1.0);
+
+            // Mark relay as excluded
+            score.dimensions[idx].reason = "excluded (warden mode)".into();
+            score.dimensions[idx].weight = 0.0;
+            score.dimensions[idx].contribution = 0.0;
+            score.dimensions[idx].estimated = true;
+        }
+
+        score
+    }
 }
 
 impl TrustmarkScore {
@@ -802,5 +837,54 @@ mod tests {
         assert!(json.contains("persona_integrity"));
         let rt: TrustmarkScore = serde_json::from_str(&json).unwrap();
         assert!((rt.total - score.total).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn warden_mode_excludes_relay() {
+        let signals = LocalSignals::default();
+        let warden = TrustmarkScore::compute_warden(&signals);
+
+        // Relay dimension should have zero weight
+        let relay = warden
+            .dimensions
+            .iter()
+            .find(|d| d.name == "relay_reliability")
+            .unwrap();
+        assert_eq!(relay.weight, 0.0);
+        assert_eq!(relay.contribution, 0.0);
+        assert!(relay.estimated);
+        assert!(relay.reason.contains("warden"));
+
+        // Total should be rescaled (different from compute)
+        let normal = TrustmarkScore::compute(&signals);
+        // Warden score is the remaining dimensions rescaled to [0,1]
+        assert!(
+            (warden.total - normal.total).abs() > 0.001 || normal.total == 0.0,
+            "warden should differ from normal unless both zero: warden={}, normal={}",
+            warden.total,
+            normal.total
+        );
+    }
+
+    #[test]
+    fn warden_mode_perfect_score() {
+        let signals = LocalSignals {
+            protected_files_total: 9,
+            protected_files_intact: 9,
+            manifest_signature_valid: Some(true),
+            chain_verified: Some(true),
+            chain_receipt_count: 10000,
+            vault_scans_total: 500,
+            receipt_timestamps: (0..288).map(|i| i * 300_000).collect(),
+            receipts_last_24h: 288,
+            volume_baseline: Some(100),
+            ..Default::default()
+        };
+        let warden = TrustmarkScore::compute_warden(&signals);
+        assert!(
+            warden.total > 0.90,
+            "perfect warden should be > 0.90: {}",
+            warden.total
+        );
     }
 }
