@@ -161,6 +161,9 @@ async fn main() {
         }
     };
 
+    // Replay protection (in-memory, inline cleanup)
+    let replay_protection = Arc::new(auth::ReplayProtection::new());
+
     // Authenticated routes (auth middleware applied)
     let authed_routes = Router::new()
         .route("/evidence", post(routes::post_evidence::<MemoryStore>))
@@ -175,7 +178,8 @@ async fn main() {
         .layer(Extension(evidence_store))
         .layer(Extension(trustmark_cache))
         .layer(Extension(nats_bridge))
-        .layer(middleware::from_fn(auth::auth_middleware));
+        .layer(middleware::from_fn(auth::auth_middleware))
+        .layer(Extension(replay_protection));
 
     // Public routes (no auth) merged with authenticated routes
     let app = Router::new()
