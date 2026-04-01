@@ -18,10 +18,12 @@ use axum::extract::Path;
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::{Extension, Json};
+use serde::Deserialize;
 
 use crate::auth::VerifiedIdentity;
 use crate::nats_bridge::{NatsBridge, TrustmarkCache};
 use crate::store::{EvidenceRecord, EvidenceStore};
+use crate::ws::{RelayEnvelope, WssConnectionRegistry};
 
 /// Maximum receipts per batch
 pub const MAX_BATCH_SIZE: usize = 100;
@@ -364,6 +366,120 @@ pub async fn get_trustmark<S: EvidenceStore>(
     (StatusCode::OK, Json(score)).into_response()
 }
 
+/// Mesh relay send request body.
+#[derive(Debug, Deserialize)]
+pub struct MeshSendRequest {
+    /// Recipient bot_id (pubkey hex)
+    pub to: String,
+    /// Message content
+    pub body: String,
+    /// Message type: "relay", "claim", "broadcast"
+    pub msg_type: String,
+}
+
+/// POST /mesh/send — send a message to another bot via the Gateway.
+///
+/// Auth required. Sender identified from NC-Ed25519 pubkey.
+/// Steps:
+///   1. Validate recipient exists in evidence store
+///   2. If recipient has active WSS connection, push immediately
+///   3. If recipient offline, return 202 (dead-drop in PR 15)
+///   4. Return 202 Accepted
+pub async fn mesh_send<S: EvidenceStore>(
+    Extension(identity): Extension<VerifiedIdentity>,
+    Extension(store): Extension<S>,
+    Extension(wss_registry): Extension<Arc<WssConnectionRegistry>>,
+    Json(payload): Json<MeshSendRequest>,
+) -> impl IntoResponse {
+    // Validate request
+    if payload.to.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "recipient 'to' is required" })),
+        );
+    }
+    if payload.body.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "message 'body' is required" })),
+        );
+    }
+
+    // Validate recipient exists in evidence store
+    match store.count_for_bot(&payload.to).await {
+        Ok(0) => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({
+                    "error": format!("recipient {} not found", payload.to)
+                })),
+            );
+        }
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": e })),
+            );
+        }
+        _ => {}
+    }
+
+    // Build relay envelope
+    let envelope = RelayEnvelope {
+        from: identity.pubkey.clone(),
+        body: payload.body.clone(),
+        msg_type: payload.msg_type.clone(),
+        ts_ms: now_epoch_ms(),
+    };
+    let envelope_json = match serde_json::to_string(&envelope) {
+        Ok(j) => j,
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": format!("serialization error: {e}") })),
+            );
+        }
+    };
+
+    // Try to deliver via WSS if recipient is online
+    if wss_registry.is_online(&payload.to).await {
+        let delivered = wss_registry.send_to(&payload.to, &envelope_json).await;
+        if delivered {
+            tracing::info!(
+                from = %identity.pubkey,
+                to = %payload.to,
+                msg_type = %payload.msg_type,
+                "mesh relay delivered via WSS"
+            );
+        } else {
+            tracing::warn!(
+                from = %identity.pubkey,
+                to = %payload.to,
+                "mesh relay: WSS send failed (connection dropped)"
+            );
+        }
+    } else {
+        tracing::info!(
+            from = %identity.pubkey,
+            to = %payload.to,
+            "mesh relay: recipient offline, queued for delivery"
+        );
+        // Dead-drop storage will be added in PR 15
+    }
+
+    (
+        StatusCode::ACCEPTED,
+        Json(serde_json::json!({ "status": "accepted" })),
+    )
+}
+
+fn now_epoch_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as i64
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -408,14 +524,24 @@ mod tests {
     }
 
     fn test_app_with_cache(store: MemoryStore, cache: TrustmarkCache) -> Router {
+        test_app_with_cache_and_registry(store, cache, Arc::new(WssConnectionRegistry::new()))
+    }
+
+    fn test_app_with_cache_and_registry(
+        store: MemoryStore,
+        cache: TrustmarkCache,
+        wss_registry: Arc<WssConnectionRegistry>,
+    ) -> Router {
         let nats_bridge: Option<Arc<NatsBridge>> = None;
         let authed = Router::new()
             .route("/evidence", post(post_evidence::<MemoryStore>))
             .route("/evidence/batch", post(post_evidence_batch::<MemoryStore>))
             .route("/trustmark/{bot_id}", get(get_trustmark::<MemoryStore>))
+            .route("/mesh/send", post(mesh_send::<MemoryStore>))
             .layer(Extension(store))
             .layer(Extension(Arc::new(cache)))
             .layer(Extension(nats_bridge))
+            .layer(Extension(wss_registry))
             .layer(middleware::from_fn(auth::auth_middleware));
 
         Router::new().merge(authed)
@@ -955,5 +1081,165 @@ mod tests {
 
         let resp = app.oneshot(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
+
+    // ── Mesh relay tests ──
+
+    /// Helper: pre-populate evidence store so a bot is recognized as existing.
+    async fn register_bot(store: &MemoryStore, bot_id: &str) {
+        let record = EvidenceRecord {
+            id: format!("reg-{bot_id}"),
+            bot_fingerprint: bot_id.to_string(),
+            seq: 1,
+            receipt_type: "api_call".to_string(),
+            ts_ms: 1700000000000,
+            core_json: "{}".to_string(),
+            receipt_hash: format!("{:064x}", 0),
+            request_id: None,
+        };
+        store.insert(record).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn mesh_send_valid_recipient_returns_202() {
+        let store = MemoryStore::new();
+        let recipient_id = "recipient_bot_abc";
+        register_bot(&store, recipient_id).await;
+
+        let app = test_app(store);
+        let sk = aegis_crypto::ed25519::generate_keypair();
+        let payload = serde_json::json!({
+            "to": recipient_id,
+            "body": "hello from sender",
+            "msg_type": "relay"
+        });
+        let body = serde_json::to_vec(&payload).unwrap();
+        let (pubkey, sig, ts_ms) = sign_request(&sk, "POST", "/mesh/send", &body);
+
+        let req = Request::builder()
+            .method("POST")
+            .uri("/mesh/send")
+            .header("content-type", "application/json")
+            .header("authorization", format!("NC-Ed25519 {pubkey}:{sig}"))
+            .header("x-aegis-timestamp", ts_ms.to_string())
+            .body(Body::from(body))
+            .unwrap();
+
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::ACCEPTED);
+    }
+
+    #[tokio::test]
+    async fn mesh_send_unknown_recipient_returns_404() {
+        let store = MemoryStore::new();
+        let app = test_app(store);
+        let sk = aegis_crypto::ed25519::generate_keypair();
+        let payload = serde_json::json!({
+            "to": "nonexistent_bot",
+            "body": "hello",
+            "msg_type": "relay"
+        });
+        let body = serde_json::to_vec(&payload).unwrap();
+        let (pubkey, sig, ts_ms) = sign_request(&sk, "POST", "/mesh/send", &body);
+
+        let req = Request::builder()
+            .method("POST")
+            .uri("/mesh/send")
+            .header("content-type", "application/json")
+            .header("authorization", format!("NC-Ed25519 {pubkey}:{sig}"))
+            .header("x-aegis-timestamp", ts_ms.to_string())
+            .body(Body::from(body))
+            .unwrap();
+
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn mesh_send_without_auth_returns_401() {
+        let store = MemoryStore::new();
+        let app = test_app(store);
+        let payload = serde_json::json!({
+            "to": "some_bot",
+            "body": "hello",
+            "msg_type": "relay"
+        });
+        let body = serde_json::to_vec(&payload).unwrap();
+
+        let req = Request::builder()
+            .method("POST")
+            .uri("/mesh/send")
+            .header("content-type", "application/json")
+            .body(Body::from(body))
+            .unwrap();
+
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn mesh_send_empty_body_returns_400() {
+        let store = MemoryStore::new();
+        let app = test_app(store);
+        let sk = aegis_crypto::ed25519::generate_keypair();
+        let payload = serde_json::json!({
+            "to": "some_bot",
+            "body": "",
+            "msg_type": "relay"
+        });
+        let body = serde_json::to_vec(&payload).unwrap();
+        let (pubkey, sig, ts_ms) = sign_request(&sk, "POST", "/mesh/send", &body);
+
+        let req = Request::builder()
+            .method("POST")
+            .uri("/mesh/send")
+            .header("content-type", "application/json")
+            .header("authorization", format!("NC-Ed25519 {pubkey}:{sig}"))
+            .header("x-aegis-timestamp", ts_ms.to_string())
+            .body(Body::from(body))
+            .unwrap();
+
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn mesh_send_delivers_via_wss_when_online() {
+        let store = MemoryStore::new();
+        let recipient_id = "online_bot";
+        register_bot(&store, recipient_id).await;
+
+        let wss_registry = Arc::new(WssConnectionRegistry::new());
+        let (tx, mut rx) = tokio::sync::mpsc::channel(16);
+        wss_registry.register(recipient_id, tx).await;
+
+        let app = test_app_with_cache_and_registry(store, TrustmarkCache::new(), wss_registry);
+
+        let sk = aegis_crypto::ed25519::generate_keypair();
+        let payload = serde_json::json!({
+            "to": recipient_id,
+            "body": "hello via wss",
+            "msg_type": "relay"
+        });
+        let body = serde_json::to_vec(&payload).unwrap();
+        let (pubkey, sig, ts_ms) = sign_request(&sk, "POST", "/mesh/send", &body);
+
+        let req = Request::builder()
+            .method("POST")
+            .uri("/mesh/send")
+            .header("content-type", "application/json")
+            .header("authorization", format!("NC-Ed25519 {pubkey}:{sig}"))
+            .header("x-aegis-timestamp", ts_ms.to_string())
+            .body(Body::from(body))
+            .unwrap();
+
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::ACCEPTED);
+
+        // Verify the message was forwarded via WSS
+        let received = rx.recv().await.unwrap();
+        let envelope: RelayEnvelope = serde_json::from_str(&received).unwrap();
+        assert_eq!(envelope.body, "hello via wss");
+        assert_eq!(envelope.from, pubkey);
     }
 }
