@@ -12,12 +12,15 @@
 //! All routes require NC-Ed25519 authentication.
 //! Rate limits per D24. Credit deductions per D19.
 
+use std::sync::Arc;
+
 use axum::extract::Path;
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::{Extension, Json};
 
 use crate::auth::VerifiedIdentity;
+use crate::nats_bridge::NatsBridge;
 use crate::store::{EvidenceRecord, EvidenceStore};
 
 /// Maximum receipts per batch
@@ -95,6 +98,7 @@ fn receipt_to_record(
 pub async fn post_evidence<S: EvidenceStore>(
     Extension(identity): Extension<VerifiedIdentity>,
     Extension(store): Extension<S>,
+    Extension(nats_bridge): Extension<Option<Arc<NatsBridge>>>,
     Json(receipt): Json<SubmittedReceipt>,
 ) -> impl IntoResponse {
     if let Err(e) = validate_receipt(&receipt) {
@@ -114,9 +118,18 @@ pub async fn post_evidence<S: EvidenceStore>(
         }
     };
 
+    let core_json = record.core_json.clone();
     let id = record.id.clone();
     match store.insert(record).await {
-        Ok(_) => (StatusCode::CREATED, Json(serde_json::json!({ "id": id }))),
+        Ok(_) => {
+            // Publish to NATS if bridge is available (fire-and-forget with warning)
+            if let Some(bridge) = nats_bridge.as_ref() {
+                if let Err(e) = bridge.publish_evidence(core_json.as_bytes()).await {
+                    tracing::warn!(id = %id, error = %e, "failed to publish evidence to NATS");
+                }
+            }
+            (StatusCode::CREATED, Json(serde_json::json!({ "id": id })))
+        }
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({ "error": e })),
@@ -336,6 +349,7 @@ pub async fn get_trustmark<S: EvidenceStore>(
 mod tests {
     use super::*;
     use crate::auth;
+    use crate::nats_bridge::NatsBridge;
     use crate::store::MemoryStore;
     use axum::body::Body;
     use axum::http::Request;
@@ -371,11 +385,13 @@ mod tests {
     }
 
     fn test_app(store: MemoryStore) -> Router {
+        let nats_bridge: Option<Arc<NatsBridge>> = None;
         let authed = Router::new()
             .route("/evidence", post(post_evidence::<MemoryStore>))
             .route("/evidence/batch", post(post_evidence_batch::<MemoryStore>))
             .route("/trustmark/{bot_id}", get(get_trustmark::<MemoryStore>))
             .layer(Extension(store))
+            .layer(Extension(nats_bridge))
             .layer(middleware::from_fn(auth::auth_middleware));
 
         Router::new().merge(authed)
@@ -700,6 +716,33 @@ mod tests {
         // Should not panic on empty
         let score = compute_trustmark_from_evidence(&[]);
         assert!(score.score_bp.value() > 0);
+    }
+
+    #[tokio::test]
+    async fn post_evidence_works_without_nats_bridge() {
+        // Verify that the evidence endpoint works correctly when NATS is not configured
+        // (nats_bridge = None). This is the default for local/test deployments.
+        let store = MemoryStore::new();
+        let app = test_app(store.clone());
+        let sk = aegis_crypto::ed25519::generate_keypair();
+        let body = serde_json::to_vec(&sample_receipt_json()).unwrap();
+        let (pubkey, sig, ts_ms) = sign_request(&sk, "POST", "/evidence", &body);
+
+        let req = Request::builder()
+            .method("POST")
+            .uri("/evidence")
+            .header("content-type", "application/json")
+            .header("authorization", format!("NC-Ed25519 {pubkey}:{sig}"))
+            .header("x-aegis-timestamp", ts_ms.to_string())
+            .body(Body::from(body))
+            .unwrap();
+
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::CREATED);
+
+        // Evidence should be stored despite no NATS
+        let count = store.count_for_bot(&pubkey).await.unwrap();
+        assert_eq!(count, 1);
     }
 
     #[test]
