@@ -920,14 +920,23 @@ fn run_watch(
             let mode = s.get("mode").and_then(|v| v.as_str()).unwrap_or("?");
             let uptime = s.get("uptime_secs").and_then(|v| v.as_u64()).unwrap_or(0);
             let receipts = s.get("receipt_count").and_then(|v| v.as_u64()).unwrap_or(0);
+            let trustmark_bp = s
+                .get("trustmark_score_bp")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0);
             let uptime_str = if uptime > 3600 {
                 format!("{}h {}m", uptime / 3600, (uptime % 3600) / 60)
             } else {
                 format!("{}m", uptime / 60)
             };
+            let tm_indicator = if trustmark_bp > 0 {
+                format!(" | TRUSTMARK: {}", trustmark_bp)
+            } else {
+                String::new()
+            };
             println!(
-                "  Mode: {} | Uptime: {} | Evidence: {} receipts",
-                mode, uptime_str, receipts
+                "  Mode: {}{} | Uptime: {} | Evidence: {} receipts",
+                mode, tm_indicator, uptime_str, receipts
             );
         }
         println!("  {}", "\u{2500}".repeat(90));

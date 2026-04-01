@@ -1172,6 +1172,25 @@ fn print_banner(config: &AdapterConfig, mode: Mode, bot_id: &str, state: &Adapte
     eprintln!("  data dir:   {}", config.data_dir.display());
     eprintln!("  dashboard:  {}", state.dashboard_url());
     eprintln!("  chain seq:  {}", state.chain_head_seq());
+
+    // TRUSTMARK score at startup
+    let tm = state.trustmark_score(&config.data_dir);
+    let score_bp = (tm.score.total * 10000.0).round() as u32;
+    let identity_age = aegis_trustmark::gather::get_identity_age_hours(&config.data_dir);
+    let tier = aegis_trustmark::tiers::resolve_tier(
+        tm.score.total,
+        identity_age,
+        tm.score.total > 0.0,
+        tm.score
+            .dimensions
+            .iter()
+            .any(|d| d.name == "chain_integrity" && d.value >= 0.7),
+        0,
+    );
+    eprintln!(
+        "  trustmark:  {}/{} ({}, {})",
+        score_bp, 10000, tier.current, config.trustmark.mode
+    );
     eprintln!();
 }
 
