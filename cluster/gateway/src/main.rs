@@ -17,7 +17,7 @@ use tokio::signal;
 use tracing::info;
 
 use aegis_gateway::auth;
-use aegis_gateway::nats_bridge::NatsBridge;
+use aegis_gateway::nats_bridge::{NatsBridge, TrustmarkCache};
 use aegis_gateway::routes;
 use aegis_gateway::store::MemoryStore;
 
@@ -127,6 +127,9 @@ async fn main() {
     // Evidence store (in-memory for now; swap with PostgresStore in production)
     let evidence_store = MemoryStore::new();
 
+    // TRUSTMARK cache (populated by NATS subscription, used by GET /trustmark)
+    let trustmark_cache = Arc::new(TrustmarkCache::new());
+
     // Optional NATS bridge
     let nats_bridge: Option<Arc<NatsBridge>> = match &config.nats_url {
         Some(url) => match NatsBridge::connect(url).await {
@@ -138,6 +141,11 @@ async fn main() {
                 let store_for_sub = evidence_store.clone();
                 if let Err(e) = bridge.subscribe_evidence(Arc::new(store_for_sub)).await {
                     tracing::warn!("failed to subscribe to evidence.new: {e}");
+                }
+
+                // Start trustmark cache subscriber (updates local cache on score changes)
+                if let Err(e) = bridge.subscribe_trustmark(trustmark_cache.clone()).await {
+                    tracing::warn!("failed to subscribe to trustmark.updated: {e}");
                 }
 
                 Some(bridge)
@@ -165,6 +173,7 @@ async fn main() {
             get(routes::get_trustmark::<MemoryStore>),
         )
         .layer(Extension(evidence_store))
+        .layer(Extension(trustmark_cache))
         .layer(Extension(nats_bridge))
         .layer(middleware::from_fn(auth::auth_middleware));
 

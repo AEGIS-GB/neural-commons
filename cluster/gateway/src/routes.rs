@@ -20,7 +20,7 @@ use axum::response::IntoResponse;
 use axum::{Extension, Json};
 
 use crate::auth::VerifiedIdentity;
-use crate::nats_bridge::NatsBridge;
+use crate::nats_bridge::{NatsBridge, TrustmarkCache};
 use crate::store::{EvidenceRecord, EvidenceStore};
 
 /// Maximum receipts per batch
@@ -315,13 +315,30 @@ pub fn compute_trustmark_from_evidence(
 
 /// GET /trustmark/:bot_id -- query TRUSTMARK score for a bot.
 ///
-/// Returns the computed TRUSTMARK score based on stored evidence.
+/// Checks the NATS-fed cache first for a precomputed score.
+/// Falls back to evidence-based computation if not cached.
 /// Returns 404 if no evidence exists for the given bot_id.
 pub async fn get_trustmark<S: EvidenceStore>(
     Extension(store): Extension<S>,
+    Extension(cache): Extension<Arc<TrustmarkCache>>,
     Path(bot_id): Path<String>,
 ) -> impl IntoResponse {
-    // Query stored evidence for this bot
+    // Check cache first
+    if let Some(cached) = cache.get(&bot_id).await {
+        return (
+            StatusCode::OK,
+            Json(serde_json::json!({
+                "score_bp": cached.score_bp,
+                "dimensions": cached.dimensions,
+                "tier": cached.tier,
+                "computed_at_ms": cached.computed_at_ms,
+                "cached": true,
+            })),
+        )
+            .into_response();
+    }
+
+    // Cache miss — compute from evidence store
     let records = match store.get_for_bot(&bot_id).await {
         Ok(r) => r,
         Err(e) => {
@@ -351,7 +368,7 @@ pub async fn get_trustmark<S: EvidenceStore>(
 mod tests {
     use super::*;
     use crate::auth;
-    use crate::nats_bridge::NatsBridge;
+    use crate::nats_bridge::{CachedScore, NatsBridge, TrustmarkCache};
     use crate::store::MemoryStore;
     use axum::body::Body;
     use axum::http::Request;
@@ -387,12 +404,17 @@ mod tests {
     }
 
     fn test_app(store: MemoryStore) -> Router {
+        test_app_with_cache(store, TrustmarkCache::new())
+    }
+
+    fn test_app_with_cache(store: MemoryStore, cache: TrustmarkCache) -> Router {
         let nats_bridge: Option<Arc<NatsBridge>> = None;
         let authed = Router::new()
             .route("/evidence", post(post_evidence::<MemoryStore>))
             .route("/evidence/batch", post(post_evidence_batch::<MemoryStore>))
             .route("/trustmark/{bot_id}", get(get_trustmark::<MemoryStore>))
             .layer(Extension(store))
+            .layer(Extension(Arc::new(cache)))
             .layer(Extension(nats_bridge))
             .layer(middleware::from_fn(auth::auth_middleware));
 
@@ -764,5 +786,174 @@ mod tests {
         let score = compute_trustmark_from_evidence(&records);
         // Chain integrity should be 10000 (no gaps)
         assert_eq!(score.dimensions.chain_integrity.value(), 10000);
+    }
+
+    // ── Cache tests ──
+
+    #[tokio::test]
+    async fn cache_insert_and_lookup() {
+        let cache = TrustmarkCache::new();
+        assert!(cache.is_empty().await);
+
+        let score = CachedScore {
+            score_bp: 7500,
+            dimensions: serde_json::json!({
+                "chain_integrity": 10000,
+                "persona_integrity": 5000,
+            }),
+            tier: "tier3".to_string(),
+            computed_at_ms: 1700000000000,
+        };
+
+        cache.insert("bot_abc".to_string(), score.clone()).await;
+        assert_eq!(cache.len().await, 1);
+
+        let fetched = cache.get("bot_abc").await.unwrap();
+        assert_eq!(fetched.score_bp, 7500);
+        assert_eq!(fetched.tier, "tier3");
+        assert_eq!(fetched.computed_at_ms, 1700000000000);
+    }
+
+    #[tokio::test]
+    async fn cache_miss_returns_none() {
+        let cache = TrustmarkCache::new();
+        assert!(cache.get("nonexistent").await.is_none());
+    }
+
+    #[tokio::test]
+    async fn cache_update_overwrites() {
+        let cache = TrustmarkCache::new();
+
+        let score1 = CachedScore {
+            score_bp: 5000,
+            dimensions: serde_json::json!({}),
+            tier: "tier2".to_string(),
+            computed_at_ms: 1700000000000,
+        };
+        cache.insert("bot1".to_string(), score1).await;
+
+        let score2 = CachedScore {
+            score_bp: 8000,
+            dimensions: serde_json::json!({}),
+            tier: "tier3".to_string(),
+            computed_at_ms: 1700000001000,
+        };
+        cache.insert("bot1".to_string(), score2).await;
+
+        assert_eq!(cache.len().await, 1);
+        let fetched = cache.get("bot1").await.unwrap();
+        assert_eq!(fetched.score_bp, 8000);
+        assert_eq!(fetched.tier, "tier3");
+    }
+
+    #[tokio::test]
+    async fn get_trustmark_returns_cached_score() {
+        let store = MemoryStore::new();
+        let cache = TrustmarkCache::new();
+
+        // Pre-populate cache (simulating NATS subscription update)
+        let cached = CachedScore {
+            score_bp: 8500,
+            dimensions: serde_json::json!({
+                "chain_integrity": 10000,
+                "persona_integrity": 5000,
+                "vault_hygiene": 5000,
+                "temporal_consistency": 9000,
+                "relay_reliability": 5000,
+                "contribution_volume": 7000,
+            }),
+            tier: "tier3".to_string(),
+            computed_at_ms: 1700000000000,
+        };
+        cache.insert("cached_bot".to_string(), cached).await;
+
+        let app = test_app_with_cache(store, cache);
+        let sk = aegis_crypto::ed25519::generate_keypair();
+        let (pubkey, sig, ts_ms) = sign_request(&sk, "GET", "/trustmark/cached_bot", b"");
+
+        let req = Request::builder()
+            .method("GET")
+            .uri("/trustmark/cached_bot")
+            .header("authorization", format!("NC-Ed25519 {pubkey}:{sig}"))
+            .header("x-aegis-timestamp", ts_ms.to_string())
+            .body(Body::empty())
+            .unwrap();
+
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        let body = axum::body::to_bytes(resp.into_body(), 4096).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+        // Should be the cached score
+        assert_eq!(json["score_bp"], 8500);
+        assert_eq!(json["cached"], true);
+        assert_eq!(json["tier"], "tier3");
+    }
+
+    #[tokio::test]
+    async fn get_trustmark_falls_back_to_evidence_when_not_cached() {
+        let store = MemoryStore::new();
+        let cache = TrustmarkCache::new();
+        let bot_id = "uncached_bot";
+
+        // Add evidence but no cache entry
+        for i in 0..5 {
+            let record = EvidenceRecord {
+                id: format!("receipt-{i}"),
+                bot_fingerprint: bot_id.to_string(),
+                seq: i + 1,
+                receipt_type: "api_call".to_string(),
+                ts_ms: 1700000000000 + i * 60_000,
+                core_json: "{}".to_string(),
+                receipt_hash: format!("{:064x}", i),
+                request_id: None,
+            };
+            store.insert(record).await.unwrap();
+        }
+
+        let app = test_app_with_cache(store, cache);
+        let sk = aegis_crypto::ed25519::generate_keypair();
+        let path = format!("/trustmark/{bot_id}");
+        let (pubkey, sig, ts_ms) = sign_request(&sk, "GET", &path, b"");
+
+        let req = Request::builder()
+            .method("GET")
+            .uri(&path)
+            .header("authorization", format!("NC-Ed25519 {pubkey}:{sig}"))
+            .header("x-aegis-timestamp", ts_ms.to_string())
+            .body(Body::empty())
+            .unwrap();
+
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        let body = axum::body::to_bytes(resp.into_body(), 4096).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+        // Should be computed (not cached), score should be present
+        assert!(json["score_bp"].is_number());
+        assert!(json.get("cached").is_none());
+    }
+
+    #[tokio::test]
+    async fn get_trustmark_uncached_no_evidence_returns_404() {
+        let store = MemoryStore::new();
+        let cache = TrustmarkCache::new();
+
+        let app = test_app_with_cache(store, cache);
+        let sk = aegis_crypto::ed25519::generate_keypair();
+        let (pubkey, sig, ts_ms) = sign_request(&sk, "GET", "/trustmark/nobody", b"");
+
+        let req = Request::builder()
+            .method("GET")
+            .uri("/trustmark/nobody")
+            .header("authorization", format!("NC-Ed25519 {pubkey}:{sig}"))
+            .header("x-aegis-timestamp", ts_ms.to_string())
+            .body(Body::empty())
+            .unwrap();
+
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
     }
 }

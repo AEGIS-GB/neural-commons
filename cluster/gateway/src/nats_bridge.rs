@@ -9,10 +9,12 @@
 //!   NATS trustmark.updated → WSS push to bot
 //!   NATS broadcast.* → WSS push to all connected bots
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use async_nats::Client;
 use futures::StreamExt;
+use tokio::sync::RwLock;
 
 use crate::routes::compute_trustmark_from_evidence;
 use crate::store::EvidenceStore;
@@ -157,6 +159,45 @@ impl NatsBridge {
 
         Ok(())
     }
+
+    /// Subscribe to `trustmark.updated` and update the local cache.
+    ///
+    /// This implements the `gateway-cache` consumer pattern from the NATS topology:
+    /// push delivery, ack-none. Each incoming message updates the in-memory
+    /// cache so `GET /trustmark/:bot_id` can serve cached scores.
+    pub async fn subscribe_trustmark(
+        &self,
+        cache: Arc<TrustmarkCache>,
+    ) -> Result<(), async_nats::SubscribeError> {
+        let mut subscriber = self.client.subscribe("trustmark.updated").await?;
+
+        tokio::spawn(async move {
+            tracing::info!("trustmark cache subscriber started on trustmark.updated");
+            while let Some(msg) = subscriber.next().await {
+                match serde_json::from_slice::<TrustmarkUpdate>(&msg.payload) {
+                    Ok(update) => {
+                        let cached = CachedScore {
+                            score_bp: update.score.score_bp.value(),
+                            dimensions: serde_json::to_value(&update.score.dimensions)
+                                .unwrap_or_default(),
+                            tier: serde_json::to_value(update.score.tier)
+                                .map(|v| v.as_str().unwrap_or("tier1").to_string())
+                                .unwrap_or_else(|_| "tier1".to_string()),
+                            computed_at_ms: update.score.computed_at_ms,
+                        };
+                        tracing::debug!(bot_id = %update.bot_id, score_bp = cached.score_bp, "cache updated");
+                        cache.insert(update.bot_id, cached).await;
+                    }
+                    Err(e) => {
+                        tracing::warn!(error = %e, "failed to parse trustmark.updated message");
+                    }
+                }
+            }
+            tracing::warn!("trustmark cache subscriber ended unexpectedly");
+        });
+
+        Ok(())
+    }
 }
 
 /// TRUSTMARK update message published to `trustmark.updated`.
@@ -168,6 +209,56 @@ pub struct TrustmarkUpdate {
     pub bot_id: String,
     /// Recomputed TRUSTMARK score
     pub score: aegis_schemas::TrustmarkScore,
+}
+
+/// Cached TRUSTMARK score entry.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct CachedScore {
+    /// Overall score in basis points
+    pub score_bp: u32,
+    /// Per-dimension breakdown (serialized for flexibility)
+    pub dimensions: serde_json::Value,
+    /// Tier string
+    pub tier: String,
+    /// Unix epoch milliseconds when this score was computed
+    pub computed_at_ms: i64,
+}
+
+/// In-memory cache of TRUSTMARK scores, updated via NATS subscription.
+///
+/// The cache is populated by `subscribe_trustmark` which listens for
+/// `trustmark.updated` messages. The `GET /trustmark/:bot_id` handler
+/// checks this cache first before falling back to evidence-based computation.
+#[derive(Debug, Clone, Default)]
+pub struct TrustmarkCache {
+    scores: Arc<RwLock<HashMap<String, CachedScore>>>,
+}
+
+impl TrustmarkCache {
+    /// Create a new empty cache.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Insert or update a cached score for a bot.
+    pub async fn insert(&self, bot_id: String, score: CachedScore) {
+        self.scores.write().await.insert(bot_id, score);
+    }
+
+    /// Look up a cached score for a bot.
+    pub async fn get(&self, bot_id: &str) -> Option<CachedScore> {
+        self.scores.read().await.get(bot_id).cloned()
+    }
+
+    /// Return the number of cached entries.
+    pub async fn len(&self) -> usize {
+        self.scores.read().await.len()
+    }
+
+    /// Check if the cache is empty.
+    pub async fn is_empty(&self) -> bool {
+        self.scores.read().await.is_empty()
+    }
 }
 
 #[cfg(test)]
