@@ -40,6 +40,7 @@ fn main() {
         volume_baseline: Some(100),
         relay_forwarded: 100,
         relay_failed: 0,
+        ..Default::default()
     });
     print_score("SCENARIO 2: Perfect (everything healthy)", &perfect);
 
@@ -59,6 +60,7 @@ fn main() {
         volume_baseline: Some(100),
         relay_forwarded: 5,
         relay_failed: 45,
+        ..Default::default()
     });
     print_score("SCENARIO 3: Compromised (tampered, leaking, bursty)", &bad);
 
@@ -78,6 +80,7 @@ fn main() {
         volume_baseline: Some(100),
         relay_forwarded: 0,
         relay_failed: 0,
+        ..Default::default()
     });
     print_score("SCENARIO 4: Typical (2 days, few leaks redacted)", &typical);
 

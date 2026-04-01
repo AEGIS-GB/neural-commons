@@ -78,6 +78,12 @@ pub struct LocalSignals {
     pub vault_leaks_detected: u64,
     pub vault_leaks_redacted: u64,
 
+    /// Decay-weighted vault leak count (recent leaks weigh more than old ones).
+    /// When > 0.0, scoring uses this instead of the raw `vault_leaks_detected`.
+    pub weighted_vault_leaks: f64,
+    /// Decay-weighted vault scan count.
+    pub weighted_vault_scans: f64,
+
     // ── Temporal Consistency ──
     /// Receipt timestamps for the scoring window (epoch ms, sorted).
     pub receipt_timestamps: Vec<u64>,
@@ -237,12 +243,19 @@ impl TrustmarkScore {
     }
 
     fn score_vault_hygiene(s: &LocalSignals) -> DimensionScore {
-        let (value, reason) = if s.vault_scans_total == 0 {
+        // Use decay-weighted counts when available, else fall back to raw counts
+        let (leaks, scans) = if s.weighted_vault_scans > 0.0 {
+            (s.weighted_vault_leaks, s.weighted_vault_scans)
+        } else {
+            (s.vault_leaks_detected as f64, s.vault_scans_total as f64)
+        };
+
+        let (value, reason) = if scans == 0.0 {
             (0.5, "no vault scans performed yet".into())
-        } else if s.vault_leaks_detected == 0 {
+        } else if leaks == 0.0 {
             (1.0, format!("{} scans, 0 leaks", s.vault_scans_total))
         } else {
-            let leak_rate = s.vault_leaks_detected as f64 / s.vault_scans_total as f64;
+            let leak_rate = leaks / scans;
             let redaction_rate = if s.vault_leaks_detected > 0 {
                 s.vault_leaks_redacted as f64 / s.vault_leaks_detected as f64
             } else {
@@ -252,7 +265,7 @@ impl TrustmarkScore {
             (
                 value,
                 format!(
-                    "{} leaks in {} scans ({:.1}%), {} redacted",
+                    "{} leaks in {} scans ({:.1}% weighted), {} redacted",
                     s.vault_leaks_detected,
                     s.vault_scans_total,
                     leak_rate * 100.0,
@@ -260,10 +273,10 @@ impl TrustmarkScore {
                 ),
             )
         };
-        let formula = "(1 - leak_rate) × 0.7 + redaction_rate × 0.3".into();
+        let formula = "(1 - decay_weighted_leak_rate) × 0.7 + redaction_rate × 0.3".into();
         let inputs = format!(
-            "{} detections / {} scans · {} redacted",
-            s.vault_leaks_detected, s.vault_scans_total, s.vault_leaks_redacted
+            "{} detections / {} scans · {} redacted · weighted leaks={:.1} scans={:.1}",
+            s.vault_leaks_detected, s.vault_scans_total, s.vault_leaks_redacted, leaks, scans,
         );
         let improve = if value >= 0.95 {
             String::new()
@@ -547,6 +560,8 @@ mod tests {
             vault_scans_total: 500,
             vault_leaks_detected: 0,
             vault_leaks_redacted: 0,
+            weighted_vault_leaks: 0.0,
+            weighted_vault_scans: 0.0,
             receipt_timestamps: (0..288).map(|i| i * 300_000).collect(),
             receipts_last_24h: 288,
             volume_baseline: Some(100),
@@ -573,6 +588,8 @@ mod tests {
             vault_scans_total: 100,
             vault_leaks_detected: 50,
             vault_leaks_redacted: 10,
+            weighted_vault_leaks: 50.0,
+            weighted_vault_scans: 100.0,
             receipt_timestamps: vec![1000, 2000, 100_000_000],
             receipts_last_24h: 3,
             volume_baseline: Some(100),
@@ -742,6 +759,8 @@ mod tests {
             vault_scans_total: 500,
             vault_leaks_detected: 0,
             vault_leaks_redacted: 0,
+            weighted_vault_leaks: 0.0,
+            weighted_vault_scans: 0.0,
             receipt_timestamps: (0..288).map(|i| i * 300_000).collect(),
             receipts_last_24h: 288,
             volume_baseline: Some(100),
