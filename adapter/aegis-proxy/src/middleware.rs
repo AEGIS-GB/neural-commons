@@ -52,6 +52,9 @@ pub struct RequestInfo {
     pub channel_trust: aegis_schemas::ChannelTrust,
     /// Unique pipeline request ID (UUID v7). Links traffic entries to evidence receipts.
     pub request_id: String,
+    /// Whether TRUSTMARK health is degraded (score below threshold).
+    /// When true, holster should tighten permissive profiles to balanced.
+    pub trustmark_degraded: bool,
 }
 
 /// Information captured from the upstream response.
@@ -541,6 +544,7 @@ mod tests {
             body_text: None,
             channel_trust: aegis_schemas::ChannelTrust::default(),
             request_id: String::new(),
+            trustmark_degraded: false,
         };
         assert!(hook.on_request(&info).await.is_ok());
         let resp = ResponseInfo {
@@ -566,6 +570,7 @@ mod tests {
             body_text: None,
             channel_trust: aegis_schemas::ChannelTrust::default(),
             request_id: String::new(),
+            trustmark_degraded: false,
         };
         assert_eq!(hook.check_write(&info).await, BarrierDecision::Allow);
     }
