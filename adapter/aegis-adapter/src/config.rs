@@ -56,6 +56,11 @@ pub struct AdapterConfig {
     /// TRUSTMARK health policy — controls holster tightening on low scores.
     #[serde(default)]
     pub trustmark: TrustmarkHealthConfig,
+
+    /// Gateway URL for cluster connectivity (e.g., "http://gateway.aegis.network:8080").
+    /// When set, the adapter pushes evidence to the Gateway periodically.
+    #[serde(default)]
+    pub gateway_url: Option<String>,
 }
 
 /// Trust configuration — channel-based access control + context observability.
@@ -398,6 +403,7 @@ impl Default for AdapterConfig {
             trust: TrustSection::default(),
             webhook_url: None,
             trustmark: TrustmarkHealthConfig::default(),
+            gateway_url: None,
         }
     }
 }

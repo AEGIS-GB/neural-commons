@@ -17,6 +17,7 @@
 //!   pass-through: zero inspection, metadata-only receipt logging
 
 pub mod config;
+pub mod gateway_client;
 pub mod hooks;
 pub mod mode;
 pub mod replay;

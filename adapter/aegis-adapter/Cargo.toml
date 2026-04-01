@@ -21,6 +21,7 @@ aegis-vault = { path = "../aegis-vault" }
 aegis-failure = { path = "../aegis-failure" }
 aegis-dashboard = { path = "../aegis-dashboard" }
 aegis-trustmark = { path = "../../cluster/trustmark" }
+ed25519-dalek.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 serde.workspace = true
