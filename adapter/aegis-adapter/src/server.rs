@@ -883,11 +883,13 @@ pub async fn start(config: AdapterConfig, mode_override: Option<Mode>) -> Result
     }
 
     // 10b. Record initial TRUSTMARK snapshot and start periodic recording (every hour)
+    let trustmark_degraded_flag = Arc::new(std::sync::atomic::AtomicBool::new(false));
     {
         let tm_data_dir = data_dir.clone();
         let tm_recorder = recorder.clone();
         let tm_alert_tx = alert_tx.clone();
         let tm_min_score = config.trustmark.min_score;
+        let tm_degraded = trustmark_degraded_flag.clone();
         tokio::spawn(async move {
             // Initial snapshot at startup
             let signals = aegis_trustmark::gather::gather_local_signals(&tm_data_dir);
@@ -901,6 +903,10 @@ pub async fn start(config: AdapterConfig, mode_override: Option<Mode>) -> Result
                 );
             }
             check_trustmark_health_alerts(&score, tm_min_score, &tm_alert_tx);
+            tm_degraded.store(
+                score.total < tm_min_score,
+                std::sync::atomic::Ordering::Relaxed,
+            );
 
             // Hourly snapshots
             let mut interval = tokio::time::interval(std::time::Duration::from_secs(3600));
@@ -918,6 +924,10 @@ pub async fn start(config: AdapterConfig, mode_override: Option<Mode>) -> Result
                     );
                 }
                 check_trustmark_health_alerts(&score, tm_min_score, &tm_alert_tx);
+                tm_degraded.store(
+                    score.total < tm_min_score,
+                    std::sync::atomic::Ordering::Relaxed,
+                );
             }
         });
         info!("TRUSTMARK scoring started (snapshot every 1h)");
@@ -1056,13 +1066,14 @@ pub async fn start(config: AdapterConfig, mode_override: Option<Mode>) -> Result
         }
     };
 
-    aegis_proxy::proxy::start_with_traffic_full(
+    aegis_proxy::proxy::start_with_traffic_full_ex(
         proxy_config,
         hooks,
         Some((dashboard_path, dashboard_router)),
         Some(traffic_recorder),
         Some(traffic_slm_updater),
         trust_config,
+        trustmark_degraded_flag,
     )
     .await
     .map_err(|e| StartupError::Proxy(format!("{e}")))?;
