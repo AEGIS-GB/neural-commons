@@ -12,13 +12,15 @@
 //! All routes require NC-Ed25519 authentication.
 //! Rate limits per D24. Credit deductions per D19.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
-use axum::extract::Path;
+use axum::extract::{Path, Query};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::{Extension, Json};
 use serde::Deserialize;
+use tokio::sync::RwLock;
 
 use crate::auth::VerifiedIdentity;
 use crate::botawiki::BotawikiStore;
@@ -706,6 +708,96 @@ pub async fn botawiki_vote(
     }
 }
 
+/// Query parameters for GET /botawiki/query.
+#[derive(Debug, Deserialize)]
+pub struct BotawikiQueryParams {
+    pub namespace: Option<String>,
+    pub claim_type: Option<String>,
+    pub limit: Option<usize>,
+}
+
+/// Default and maximum query limit.
+const BOTAWIKI_DEFAULT_LIMIT: usize = 50;
+
+/// Rate limit: reads per hour for Tier 2 bots.
+pub const BOTAWIKI_TIER2_READS_PER_HOUR: u32 = 50;
+
+/// Rate window entry: (window_start_ms, request_count).
+type RateWindow = (i64, u32);
+
+/// In-memory rate limiter for Botawiki reads.
+#[derive(Debug, Clone, Default)]
+pub struct BotawikiRateLimiter {
+    /// Map of bot_id -> rate window
+    windows: Arc<RwLock<HashMap<String, RateWindow>>>,
+}
+
+impl BotawikiRateLimiter {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Check and increment rate limit. Returns Ok(()) if allowed, Err if exceeded.
+    /// Tier 3 bots (score_bp >= 4000) are unlimited.
+    pub async fn check(&self, bot_id: &str, score_bp: u32) -> Result<(), String> {
+        // Tier 3 (>= 0.4) is unlimited
+        if score_bp >= 4000 {
+            return Ok(());
+        }
+
+        let now = now_epoch_ms();
+        let hour_ms: i64 = 3_600_000;
+        let mut windows = self.windows.write().await;
+
+        let entry = windows.entry(bot_id.to_string()).or_insert((now, 0));
+
+        // Reset window if it's been more than an hour
+        if now - entry.0 >= hour_ms {
+            *entry = (now, 0);
+        }
+
+        if entry.1 >= BOTAWIKI_TIER2_READS_PER_HOUR {
+            return Err("rate limit exceeded: 50 reads/hour for Tier 2".to_string());
+        }
+
+        entry.1 += 1;
+        Ok(())
+    }
+}
+
+/// GET /botawiki/query -- query canonical claims.
+/// Any registered bot (TRUSTMARK >= 0) can read. Tier 2 rate limited to 50/hour.
+pub async fn botawiki_query(
+    Extension(identity): Extension<VerifiedIdentity>,
+    Extension(trustmark_cache): Extension<Arc<TrustmarkCache>>,
+    Extension(botawiki_store): Extension<Arc<BotawikiStore>>,
+    Extension(rate_limiter): Extension<Arc<BotawikiRateLimiter>>,
+    Query(params): Query<BotawikiQueryParams>,
+) -> impl IntoResponse {
+    // Rate limit check
+    let score_bp = trustmark_cache
+        .get(&identity.pubkey)
+        .await
+        .map(|s| s.score_bp)
+        .unwrap_or(0);
+
+    if let Err(e) = rate_limiter.check(&identity.pubkey, score_bp).await {
+        return (StatusCode::TOO_MANY_REQUESTS, Json(serde_json::json!({ "error": e }))).into_response();
+    }
+
+    let limit = params.limit.unwrap_or(BOTAWIKI_DEFAULT_LIMIT).min(BOTAWIKI_DEFAULT_LIMIT);
+
+    let claims = botawiki_store
+        .query(
+            params.namespace.as_deref(),
+            params.claim_type.as_deref(),
+            limit,
+        )
+        .await;
+
+    (StatusCode::OK, Json(serde_json::json!({ "claims": claims }))).into_response()
+}
+
 fn now_epoch_ms() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -799,12 +891,14 @@ mod tests {
             .route("/mesh/send", post(mesh_send::<MemoryStore>))
             .route("/botawiki/claim", post(botawiki_submit_claim))
             .route("/botawiki/vote", post(botawiki_vote))
+            .route("/botawiki/query", get(botawiki_query))
             .layer(Extension(store))
             .layer(Extension(Arc::new(cache)))
             .layer(Extension(nats_bridge))
             .layer(Extension(wss_registry))
             .layer(Extension(dead_drop_store))
             .layer(Extension(botawiki_store))
+            .layer(Extension(Arc::new(BotawikiRateLimiter::new())))
             .layer(middleware::from_fn(auth::auth_middleware));
 
         Router::new().merge(authed)
@@ -2208,5 +2302,140 @@ mod tests {
 
         let resp = app2.oneshot(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+    }
+
+    // ── Botawiki query tests ──
+
+    #[tokio::test]
+    async fn botawiki_query_returns_canonical_claims() {
+        let sk = aegis_crypto::ed25519::generate_keypair();
+        let sender_pubkey = hex::encode(sk.verifying_key().as_bytes());
+        let validators = [("v1", 9000u32), ("v2", 8000), ("v3", 7000)];
+        let (app, botawiki) = botawiki_test_app(&sender_pubkey, 5000, &validators).await;
+
+        // Submit and approve a claim via store directly
+        let claim = aegis_schemas::Claim {
+            id: uuid::Uuid::now_v7(),
+            claim_type: aegis_schemas::claim::ClaimType::Lore,
+            namespace: "b/lore".to_string(),
+            attester_id: sender_pubkey.clone(),
+            confidence_bp: aegis_schemas::BasisPoints::clamped(8000),
+            temporal_scope: aegis_schemas::claim::TemporalScope {
+                start_ms: 1700000000000,
+                end_ms: None,
+            },
+            provenance: vec![],
+            schema_version: 1,
+            confabulation_score_bp: None,
+            temporal_coherence_flag: None,
+            distinct_warden_count: None,
+            payload: serde_json::json!({"fact": "test"}),
+        };
+        let claim_id = botawiki
+            .submit(claim, vec!["v1".into(), "v2".into(), "v3".into()])
+            .await;
+        botawiki.vote(&claim_id, "v1", true).await.unwrap();
+        botawiki.vote(&claim_id, "v2", true).await.unwrap();
+
+        // Query
+        let (pubkey, sig, ts_ms) =
+            sign_request(&sk, "GET", "/botawiki/query", b"");
+        let req = Request::builder()
+            .method("GET")
+            .uri("/botawiki/query?namespace=b/lore")
+            .header("authorization", format!("NC-Ed25519 {pubkey}:{sig}"))
+            .header("x-aegis-timestamp", ts_ms.to_string())
+            .body(Body::empty())
+            .unwrap();
+
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        let body = axum::body::to_bytes(resp.into_body(), 8192).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let claims = json["claims"].as_array().unwrap();
+        assert_eq!(claims.len(), 1);
+        assert_eq!(claims[0]["namespace"], "b/lore");
+    }
+
+    #[tokio::test]
+    async fn botawiki_query_empty_namespace_returns_empty() {
+        let sk = aegis_crypto::ed25519::generate_keypair();
+        let sender_pubkey = hex::encode(sk.verifying_key().as_bytes());
+        let (app, _) = botawiki_test_app(&sender_pubkey, 5000, &[]).await;
+
+        let (pubkey, sig, ts_ms) = sign_request(&sk, "GET", "/botawiki/query", b"");
+        let req = Request::builder()
+            .method("GET")
+            .uri("/botawiki/query?namespace=nonexistent")
+            .header("authorization", format!("NC-Ed25519 {pubkey}:{sig}"))
+            .header("x-aegis-timestamp", ts_ms.to_string())
+            .body(Body::empty())
+            .unwrap();
+
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        let body = axum::body::to_bytes(resp.into_body(), 4096).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let claims = json["claims"].as_array().unwrap();
+        assert!(claims.is_empty());
+    }
+
+    #[tokio::test]
+    async fn botawiki_query_with_claim_type_filter() {
+        let sk = aegis_crypto::ed25519::generate_keypair();
+        let sender_pubkey = hex::encode(sk.verifying_key().as_bytes());
+        let validators = [("v1", 9000u32), ("v2", 8000), ("v3", 7000)];
+        let (app, botawiki) = botawiki_test_app(&sender_pubkey, 5000, &validators).await;
+
+        // Submit a Lore claim and a Skills claim, approve both
+        for (ct, ns) in [
+            (aegis_schemas::claim::ClaimType::Lore, "b/lore"),
+            (aegis_schemas::claim::ClaimType::Skills, "b/skills"),
+        ] {
+            let claim = aegis_schemas::Claim {
+                id: uuid::Uuid::now_v7(),
+                claim_type: ct,
+                namespace: ns.to_string(),
+                attester_id: sender_pubkey.clone(),
+                confidence_bp: aegis_schemas::BasisPoints::clamped(8000),
+                temporal_scope: aegis_schemas::claim::TemporalScope {
+                    start_ms: 1700000000000,
+                    end_ms: None,
+                },
+                provenance: vec![],
+                schema_version: 1,
+                confabulation_score_bp: None,
+                temporal_coherence_flag: None,
+                distinct_warden_count: None,
+                payload: serde_json::json!({}),
+            };
+            let id = botawiki
+                .submit(claim, vec!["v1".into(), "v2".into(), "v3".into()])
+                .await;
+            botawiki.vote(&id, "v1", true).await.unwrap();
+            botawiki.vote(&id, "v2", true).await.unwrap();
+        }
+
+        // Query only skills
+        let (pubkey, sig, ts_ms) =
+            sign_request(&sk, "GET", "/botawiki/query", b"");
+        let req = Request::builder()
+            .method("GET")
+            .uri("/botawiki/query?claim_type=skills")
+            .header("authorization", format!("NC-Ed25519 {pubkey}:{sig}"))
+            .header("x-aegis-timestamp", ts_ms.to_string())
+            .body(Body::empty())
+            .unwrap();
+
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        let body = axum::body::to_bytes(resp.into_body(), 8192).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let claims = json["claims"].as_array().unwrap();
+        assert_eq!(claims.len(), 1);
+        assert_eq!(claims[0]["namespace"], "b/skills");
     }
 }
