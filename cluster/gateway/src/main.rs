@@ -6,7 +6,10 @@
 use std::net::SocketAddr;
 use std::path::PathBuf;
 
-use axum::{Extension, Router, middleware, routing::get, routing::post};
+use axum::{
+    Extension, Router, middleware,
+    routing::{get, post},
+};
 use clap::Parser;
 use serde::Deserialize;
 use tokio::signal;
@@ -123,6 +126,10 @@ async fn main() {
         .route(
             "/evidence/batch",
             post(routes::post_evidence_batch::<MemoryStore>),
+        )
+        .route(
+            "/trustmark/{bot_id}",
+            get(routes::get_trustmark::<MemoryStore>),
         )
         .layer(Extension(evidence_store))
         .layer(middleware::from_fn(auth::auth_middleware));
