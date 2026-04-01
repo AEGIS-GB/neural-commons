@@ -52,6 +52,10 @@ pub struct AdapterConfig {
     /// When set, critical alerts are POSTed here in addition to the SSE dashboard stream.
     #[serde(default)]
     pub webhook_url: Option<String>,
+
+    /// TRUSTMARK health policy — controls holster tightening on low scores.
+    #[serde(default)]
+    pub trustmark: TrustmarkHealthConfig,
 }
 
 /// Trust configuration — channel-based access control + context observability.
@@ -342,6 +346,44 @@ fn default_prompt_guard_dir() -> Option<String> {
     None
 }
 
+/// TRUSTMARK health configuration — controls holster tightening when score is low.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TrustmarkHealthConfig {
+    /// Minimum TRUSTMARK total score (0.0-1.0) before holster tightens.
+    #[serde(default = "default_min_trustmark_score")]
+    pub min_score: f64,
+
+    /// Action when score drops below min_score.
+    /// "tighten" = downgrade permissive channels to balanced holster.
+    /// "alert_only" = just log a warning, don't change behavior.
+    #[serde(default = "default_trustmark_action")]
+    pub action: String,
+
+    /// TRUSTMARK mode: "warden" (self-attested, default) or "mesh" (peer-verified, future).
+    #[serde(default = "default_trustmark_mode")]
+    pub mode: String,
+}
+
+fn default_min_trustmark_score() -> f64 {
+    0.6
+}
+fn default_trustmark_action() -> String {
+    "tighten".to_string()
+}
+fn default_trustmark_mode() -> String {
+    "warden".to_string()
+}
+
+impl Default for TrustmarkHealthConfig {
+    fn default() -> Self {
+        Self {
+            min_score: default_min_trustmark_score(),
+            action: default_trustmark_action(),
+            mode: default_trustmark_mode(),
+        }
+    }
+}
+
 impl Default for AdapterConfig {
     fn default() -> Self {
         Self {
@@ -355,6 +397,7 @@ impl Default for AdapterConfig {
             data_dir: default_data_dir(),
             trust: TrustSection::default(),
             webhook_url: None,
+            trustmark: TrustmarkHealthConfig::default(),
         }
     }
 }

@@ -13,13 +13,25 @@ use crate::types::*;
 /// Map a trust level to the appropriate holster profile.
 /// Higher trust → more permissive thresholds.
 /// Unknown maps to Balanced for backward compatibility (no cert = same as before).
-pub fn trust_to_profile(trust: &aegis_schemas::TrustLevel) -> HolsterProfile {
-    match trust {
+///
+/// When `trustmark_degraded` is true, Permissive is downgraded to Balanced
+/// (TRUSTMARK health check — tightens holster when the node's trust score is low).
+pub fn trust_to_profile(
+    trust: &aegis_schemas::TrustLevel,
+    trustmark_degraded: bool,
+) -> HolsterProfile {
+    let base = match trust {
         aegis_schemas::TrustLevel::Full => HolsterProfile::Permissive,
         aegis_schemas::TrustLevel::Trusted => HolsterProfile::Balanced,
         aegis_schemas::TrustLevel::Public => HolsterProfile::Aggressive,
         aegis_schemas::TrustLevel::Restricted => HolsterProfile::Aggressive,
         aegis_schemas::TrustLevel::Unknown => HolsterProfile::Balanced, // backward compat
+    };
+
+    if trustmark_degraded && base == HolsterProfile::Permissive {
+        HolsterProfile::Balanced
+    } else {
+        base
     }
 }
 
@@ -246,7 +258,7 @@ mod tests {
     #[test]
     fn trust_full_maps_to_permissive() {
         assert_eq!(
-            trust_to_profile(&aegis_schemas::TrustLevel::Full),
+            trust_to_profile(&aegis_schemas::TrustLevel::Full, false),
             HolsterProfile::Permissive
         );
     }
@@ -254,7 +266,7 @@ mod tests {
     #[test]
     fn trust_trusted_maps_to_balanced() {
         assert_eq!(
-            trust_to_profile(&aegis_schemas::TrustLevel::Trusted),
+            trust_to_profile(&aegis_schemas::TrustLevel::Trusted, false),
             HolsterProfile::Balanced
         );
     }
@@ -262,7 +274,7 @@ mod tests {
     #[test]
     fn trust_public_maps_to_aggressive() {
         assert_eq!(
-            trust_to_profile(&aegis_schemas::TrustLevel::Public),
+            trust_to_profile(&aegis_schemas::TrustLevel::Public, false),
             HolsterProfile::Aggressive
         );
     }
@@ -270,7 +282,7 @@ mod tests {
     #[test]
     fn trust_restricted_maps_to_aggressive() {
         assert_eq!(
-            trust_to_profile(&aegis_schemas::TrustLevel::Restricted),
+            trust_to_profile(&aegis_schemas::TrustLevel::Restricted, false),
             HolsterProfile::Aggressive
         );
     }
@@ -279,8 +291,32 @@ mod tests {
     fn trust_unknown_maps_to_balanced() {
         // Backward compat: no cert = same as before
         assert_eq!(
-            trust_to_profile(&aegis_schemas::TrustLevel::Unknown),
+            trust_to_profile(&aegis_schemas::TrustLevel::Unknown, false),
             HolsterProfile::Balanced
+        );
+    }
+
+    #[test]
+    fn holster_tightens_on_low_trustmark() {
+        // Without degradation: Full → Permissive
+        assert_eq!(
+            trust_to_profile(&aegis_schemas::TrustLevel::Full, false),
+            HolsterProfile::Permissive
+        );
+        // With degradation: Full → Balanced (tightened)
+        assert_eq!(
+            trust_to_profile(&aegis_schemas::TrustLevel::Full, true),
+            HolsterProfile::Balanced
+        );
+        // Balanced stays Balanced even when degraded
+        assert_eq!(
+            trust_to_profile(&aegis_schemas::TrustLevel::Trusted, true),
+            HolsterProfile::Balanced
+        );
+        // Aggressive stays Aggressive even when degraded
+        assert_eq!(
+            trust_to_profile(&aegis_schemas::TrustLevel::Public, true),
+            HolsterProfile::Aggressive
         );
     }
 }

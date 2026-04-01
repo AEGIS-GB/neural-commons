@@ -665,6 +665,7 @@ async fn forward_request(
         body_text,
         channel_trust,
         request_id: pipeline.request_id_str(),
+        trustmark_degraded: false,
     };
 
     // Recording is handled by recording_middleware — no manual recording needed.
