@@ -164,6 +164,9 @@ async fn main() {
     // Replay protection (in-memory, inline cleanup)
     let replay_protection = Arc::new(auth::ReplayProtection::new());
 
+    // Tier-based rate limiter (in-memory token buckets per bot)
+    let tier_rate_limiter = Arc::new(aegis_gateway::rate_limit::TierRateLimiter::new());
+
     // Authenticated routes (auth middleware applied)
     let authed_routes = Router::new()
         .route("/evidence", post(routes::post_evidence::<MemoryStore>))
@@ -176,10 +179,11 @@ async fn main() {
             get(routes::get_trustmark::<MemoryStore>),
         )
         .layer(Extension(evidence_store))
-        .layer(Extension(trustmark_cache))
         .layer(Extension(nats_bridge))
         .layer(middleware::from_fn(auth::auth_middleware))
-        .layer(Extension(replay_protection));
+        .layer(Extension(replay_protection))
+        .layer(Extension(tier_rate_limiter))
+        .layer(Extension(trustmark_cache));
 
     // Public routes (no auth) merged with authenticated routes
     let app = Router::new()

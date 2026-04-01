@@ -269,6 +269,39 @@ pub async fn auth_middleware(request: Request, next: Next) -> Response {
         }
     }
 
+    // Tier-based rate limiting: look up TRUSTMARK score → tier → check bucket
+    if let Some(rate_limiter) = parts
+        .extensions
+        .get::<Arc<crate::rate_limit::TierRateLimiter>>()
+        .cloned()
+    {
+        // Determine tier from TRUSTMARK cache (if available)
+        let tier = if let Some(cache) = parts
+            .extensions
+            .get::<Arc<crate::nats_bridge::TrustmarkCache>>()
+        {
+            let score_bp = cache.get(&auth.pubkey).await.map(|s| s.score_bp).unwrap_or(0);
+            crate::rate_limit::tier_from_score_bp(score_bp)
+        } else {
+            1 // default to Tier 1 if no cache
+        };
+
+        if let Err(retry_after) = rate_limiter.check(&auth.pubkey, tier) {
+            return (
+                StatusCode::TOO_MANY_REQUESTS,
+                [(
+                    axum::http::header::RETRY_AFTER,
+                    format!("{}", retry_after.ceil() as u64),
+                )],
+                axum::Json(serde_json::json!({
+                    "error": "rate limit exceeded",
+                    "retry_after": retry_after
+                })),
+            )
+                .into_response();
+        }
+    }
+
     // Inject verified identity and reconstruct request
     let mut request = Request::from_parts(parts, Body::from(body_bytes));
     request.extensions_mut().insert(VerifiedIdentity {
