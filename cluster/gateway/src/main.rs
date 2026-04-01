@@ -120,6 +120,10 @@ async fn main() {
     // Authenticated routes (auth middleware applied)
     let authed_routes = Router::new()
         .route("/evidence", post(routes::post_evidence::<MemoryStore>))
+        .route(
+            "/evidence/batch",
+            post(routes::post_evidence_batch::<MemoryStore>),
+        )
         .layer(Extension(evidence_store))
         .layer(middleware::from_fn(auth::auth_middleware));
 
