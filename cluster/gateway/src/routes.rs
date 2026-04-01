@@ -23,7 +23,7 @@ use serde::Deserialize;
 use crate::auth::VerifiedIdentity;
 use crate::nats_bridge::{NatsBridge, TrustmarkCache};
 use crate::store::{EvidenceRecord, EvidenceStore};
-use crate::ws::{RelayEnvelope, WssConnectionRegistry};
+use crate::ws::{DeadDropStore, RelayEnvelope, WssConnectionRegistry};
 
 /// Maximum receipts per batch
 pub const MAX_BATCH_SIZE: usize = 100;
@@ -390,6 +390,7 @@ pub async fn mesh_send<S: EvidenceStore>(
     Extension(store): Extension<S>,
     Extension(trustmark_cache): Extension<Arc<TrustmarkCache>>,
     Extension(wss_registry): Extension<Arc<WssConnectionRegistry>>,
+    Extension(dead_drop_store): Extension<Arc<DeadDropStore>>,
     Json(payload): Json<MeshSendRequest>,
 ) -> impl IntoResponse {
     // Validate request
@@ -528,12 +529,36 @@ pub async fn mesh_send<S: EvidenceStore>(
             );
         }
     } else {
-        tracing::info!(
-            from = %identity.pubkey,
-            to = %payload.to,
-            "mesh relay: recipient offline, queued for delivery"
-        );
-        // Dead-drop storage will be added in PR 15
+        // Recipient offline — store as dead-drop
+        match dead_drop_store
+            .store(
+                &payload.to,
+                &identity.pubkey,
+                &payload.body,
+                &payload.msg_type,
+            )
+            .await
+        {
+            Ok(()) => {
+                tracing::info!(
+                    from = %identity.pubkey,
+                    to = %payload.to,
+                    "mesh relay: recipient offline, stored as dead-drop"
+                );
+            }
+            Err(e) => {
+                tracing::warn!(
+                    from = %identity.pubkey,
+                    to = %payload.to,
+                    error = %e,
+                    "mesh relay: dead-drop storage failed"
+                );
+                return (
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    Json(serde_json::json!({ "error": e })),
+                );
+            }
+        }
     }
 
     (
@@ -601,6 +626,15 @@ mod tests {
         cache: TrustmarkCache,
         wss_registry: Arc<WssConnectionRegistry>,
     ) -> Router {
+        test_app_full(store, cache, wss_registry, Arc::new(DeadDropStore::new()))
+    }
+
+    fn test_app_full(
+        store: MemoryStore,
+        cache: TrustmarkCache,
+        wss_registry: Arc<WssConnectionRegistry>,
+        dead_drop_store: Arc<DeadDropStore>,
+    ) -> Router {
         let nats_bridge: Option<Arc<NatsBridge>> = None;
         let authed = Router::new()
             .route("/evidence", post(post_evidence::<MemoryStore>))
@@ -611,6 +645,7 @@ mod tests {
             .layer(Extension(Arc::new(cache)))
             .layer(Extension(nats_bridge))
             .layer(Extension(wss_registry))
+            .layer(Extension(dead_drop_store))
             .layer(middleware::from_fn(auth::auth_middleware));
 
         Router::new().merge(authed)
@@ -1620,5 +1655,142 @@ mod tests {
         let resp = app.oneshot(req).await.unwrap();
         // Returns 404 to hide that the bot exists but is untrusted
         assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
+
+    // ── Dead-drop integration tests ──
+
+    #[tokio::test]
+    async fn mesh_send_offline_recipient_stored_as_dead_drop() {
+        let store = MemoryStore::new();
+        let recipient_id = "offline_bot";
+        register_bot(&store, recipient_id).await;
+
+        let dead_drop = Arc::new(DeadDropStore::new());
+        let sk = aegis_crypto::ed25519::generate_keypair();
+        let sender_pubkey = hex::encode(sk.verifying_key().as_bytes());
+
+        let cache = TrustmarkCache::new();
+        cache
+            .insert(
+                sender_pubkey.clone(),
+                CachedScore {
+                    score_bp: 5000,
+                    dimensions: serde_json::json!({}),
+                    tier: "tier3".to_string(),
+                    computed_at_ms: 1700000000000,
+                },
+            )
+            .await;
+        cache
+            .insert(
+                recipient_id.to_string(),
+                CachedScore {
+                    score_bp: 5000,
+                    dimensions: serde_json::json!({}),
+                    tier: "tier3".to_string(),
+                    computed_at_ms: 1700000000000,
+                },
+            )
+            .await;
+
+        let app = test_app_full(
+            store,
+            cache,
+            Arc::new(WssConnectionRegistry::new()),
+            dead_drop.clone(),
+        );
+
+        let payload = serde_json::json!({
+            "to": recipient_id,
+            "body": "stored for later",
+            "msg_type": "relay"
+        });
+        let body = serde_json::to_vec(&payload).unwrap();
+        let (pubkey, sig, ts_ms) = sign_request(&sk, "POST", "/mesh/send", &body);
+
+        let req = Request::builder()
+            .method("POST")
+            .uri("/mesh/send")
+            .header("content-type", "application/json")
+            .header("authorization", format!("NC-Ed25519 {pubkey}:{sig}"))
+            .header("x-aegis-timestamp", ts_ms.to_string())
+            .body(Body::from(body))
+            .unwrap();
+
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::ACCEPTED);
+
+        // Verify dead-drop was stored
+        assert_eq!(dead_drop.count_for(recipient_id).await, 1);
+
+        // Drain and verify content
+        let messages = dead_drop.drain(recipient_id).await;
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].body, "stored for later");
+        assert_eq!(messages[0].from, sender_pubkey);
+    }
+
+    #[tokio::test]
+    async fn mesh_send_online_recipient_not_stored_as_dead_drop() {
+        let store = MemoryStore::new();
+        let recipient_id = "wss_online_bot";
+        register_bot(&store, recipient_id).await;
+
+        let dead_drop = Arc::new(DeadDropStore::new());
+        let wss_registry = Arc::new(WssConnectionRegistry::new());
+        let (tx, _rx) = tokio::sync::mpsc::channel(16);
+        wss_registry.register(recipient_id, tx).await;
+
+        let sk = aegis_crypto::ed25519::generate_keypair();
+        let sender_pubkey = hex::encode(sk.verifying_key().as_bytes());
+
+        let cache = TrustmarkCache::new();
+        cache
+            .insert(
+                sender_pubkey.clone(),
+                CachedScore {
+                    score_bp: 5000,
+                    dimensions: serde_json::json!({}),
+                    tier: "tier3".to_string(),
+                    computed_at_ms: 1700000000000,
+                },
+            )
+            .await;
+        cache
+            .insert(
+                recipient_id.to_string(),
+                CachedScore {
+                    score_bp: 5000,
+                    dimensions: serde_json::json!({}),
+                    tier: "tier3".to_string(),
+                    computed_at_ms: 1700000000000,
+                },
+            )
+            .await;
+
+        let app = test_app_full(store, cache, wss_registry, dead_drop.clone());
+
+        let payload = serde_json::json!({
+            "to": recipient_id,
+            "body": "direct delivery",
+            "msg_type": "relay"
+        });
+        let body = serde_json::to_vec(&payload).unwrap();
+        let (pubkey, sig, ts_ms) = sign_request(&sk, "POST", "/mesh/send", &body);
+
+        let req = Request::builder()
+            .method("POST")
+            .uri("/mesh/send")
+            .header("content-type", "application/json")
+            .header("authorization", format!("NC-Ed25519 {pubkey}:{sig}"))
+            .header("x-aegis-timestamp", ts_ms.to_string())
+            .body(Body::from(body))
+            .unwrap();
+
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::ACCEPTED);
+
+        // Dead-drop should NOT have been used (online delivery)
+        assert_eq!(dead_drop.count_for(recipient_id).await, 0);
     }
 }
