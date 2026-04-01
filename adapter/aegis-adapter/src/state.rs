@@ -7,6 +7,7 @@
 //! - `SecurityState` — nonce registry for replay prevention
 //! - `EvidenceState` — evidence recorder and chain helper methods
 
+use std::path::Path;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -81,6 +82,25 @@ impl EvidenceState {
 }
 
 // ---------------------------------------------------------------------------
+// TRUSTMARK cache
+// ---------------------------------------------------------------------------
+
+/// Cached TRUSTMARK score with freshness tracking.
+#[derive(Clone)]
+pub struct TrustmarkCache {
+    pub score: aegis_trustmark::scoring::TrustmarkScore,
+    pub computed_at_ms: i64,
+}
+
+/// Return the current epoch time in milliseconds.
+fn now_epoch_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as i64
+}
+
+// ---------------------------------------------------------------------------
 // AdapterState
 // ---------------------------------------------------------------------------
 
@@ -127,6 +147,10 @@ pub struct AdapterState {
     /// Sender is cloned into each subsystem that can generate alerts.
     /// SSE handler calls `.subscribe()` to get a per-connection receiver.
     pub alert_tx: broadcast::Sender<DashboardAlert>,
+
+    /// Cached TRUSTMARK score with freshness tracking.
+    /// Auto-recomputed when stale (>5 minutes).
+    pub trustmark_cache: std::sync::RwLock<Option<TrustmarkCache>>,
 }
 
 impl AdapterState {
@@ -179,6 +203,35 @@ impl AdapterState {
     pub fn dashboard_url(&self) -> String {
         format!("http://{}{}", self.listen_addr, self.dashboard_path)
     }
+
+    /// Get the current TRUSTMARK score, recomputing if stale (>5 minutes).
+    pub fn trustmark_score(&self, data_dir: &Path) -> TrustmarkCache {
+        let stale_threshold_ms: i64 = 5 * 60 * 1000; // 5 minutes
+        let now_ms = now_epoch_ms();
+
+        // Check cache
+        if let Ok(cache) = self.trustmark_cache.read() {
+            if let Some(ref cached) = *cache {
+                if now_ms - cached.computed_at_ms < stale_threshold_ms {
+                    return cached.clone(); // Fresh enough
+                }
+            }
+        }
+
+        // Recompute
+        let signals = aegis_trustmark::gather::gather_local_signals(data_dir);
+        let score = aegis_trustmark::scoring::TrustmarkScore::compute(&signals);
+        let cache_entry = TrustmarkCache {
+            score,
+            computed_at_ms: now_ms,
+        };
+
+        if let Ok(mut cache) = self.trustmark_cache.write() {
+            *cache = Some(cache_entry.clone());
+        }
+
+        cache_entry
+    }
 }
 
 #[cfg(test)]
@@ -204,6 +257,7 @@ mod tests {
             upstream_url: "https://api.anthropic.com".into(),
             dashboard_path: "/dashboard".into(),
             alert_tx,
+            trustmark_cache: std::sync::RwLock::new(None),
         }
     }
 
@@ -264,5 +318,17 @@ mod tests {
         assert_eq!(ev.chain_head_seq(), 0);
         assert_eq!(ev.receipt_count(), 0);
         assert_eq!(ev.chain_head_hash().len(), 64);
+    }
+
+    #[test]
+    fn trustmark_cache_freshness() {
+        let state = make_state();
+        let data_dir = PathBuf::from(".aegis");
+        let s1 = state.trustmark_score(&data_dir);
+        let s2 = state.trustmark_score(&data_dir);
+        assert_eq!(
+            s1.computed_at_ms, s2.computed_at_ms,
+            "second call should return cached value"
+        );
     }
 }
