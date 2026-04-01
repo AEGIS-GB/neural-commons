@@ -12,4 +12,5 @@ pub mod auth;
 pub mod embedding_pool;
 pub mod nats_bridge;
 pub mod routes;
+pub mod store;
 pub mod ws;
