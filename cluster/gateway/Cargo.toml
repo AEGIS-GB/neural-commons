@@ -8,6 +8,7 @@ license.workspace = true
 [dependencies]
 aegis-crypto = { path = "../../aegis-crypto" }
 aegis-schemas = { path = "../../aegis-schemas" }
+aegis-slm = { path = "../../adapter/aegis-slm", default-features = false }
 aegis-common = { path = "../common" }
 axum.workspace = true
 tower.workspace = true
