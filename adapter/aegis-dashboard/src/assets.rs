@@ -1712,60 +1712,80 @@ async function pollMesh(){
   let sc='';
   if(status){
     sc+='<div class="card"><div class="stat status-ok">Connected</div><div class="stat-label">Gateway</div></div>';
-    sc+='<div class="card"><div class="stat">'+(status.peer_count||0)+'</div><div class="stat-label">Peers</div></div>';
-    sc+='<div class="card"><div class="stat">'+(status.evidence_relayed||0)+'</div><div class="stat-label">Evidence Relayed</div></div>';
-    sc+='<div class="card"><div class="stat">'+(status.claims_total||0)+'</div><div class="stat-label">Claims</div></div>';
+    sc+='<div class="card"><div class="stat">'+(status.peers_online||0)+'</div><div class="stat-label">Peers Online</div></div>';
+    sc+='<div class="card"><div class="stat">'+(status.cached_scores||0)+'</div><div class="stat-label">Cached Scores</div></div>';
+    const rl=status.relay||{};
+    sc+='<div class="card"><div class="stat">'+((rl.sent||0)+(rl.dead_dropped||0))+'</div><div class="stat-label">Relay Total</div></div>';
   }else{
-    sc+='<div class="card"><div class="stat status-warn">Unreachable</div><div class="stat-label">Gateway</div></div>';
+    sc+='<div class="card"><div class="stat status-warn">Unreachable</div><div class="stat-label">Gateway at '+esc(meshGatewayUrl)+'</div></div>';
   }
   stats.innerHTML=sc;
   // Peers table
   if(peers&&Array.isArray(peers.peers)&&peers.peers.length>0){
-    let h='<table class="dtable"><tr><th>Peer ID</th><th>Address</th><th>Status</th><th>Last Seen</th><th>Evidence</th><th>Latency</th></tr>';
+    let h='<table class="dtable"><tr><th>Bot ID</th><th>TRUSTMARK</th><th>Tier</th><th>Status</th></tr>';
     for(const p of peers.peers){
-      const st=p.status==='healthy'?'<span class="status-ok">healthy</span>':'<span class="status-warn">'+(p.status||'unknown')+'</span>';
-      const ls=p.last_seen?new Date(p.last_seen).toLocaleTimeString():'—';
-      h+='<tr><td style="font-family:monospace;font-size:11px">'+esc(p.peer_id||'')+'</td><td>'+esc(p.address||'')+'</td><td>'+st+'</td><td>'+ls+'</td><td>'+(p.evidence_count||0)+'</td><td>'+(p.latency_ms!=null?p.latency_ms+'ms':'—')+'</td></tr>';
+      const id=(p.bot_id||'').substring(0,16)+'...';
+      const sc=p.score_bp!=null?p.score_bp+' bp':'—';
+      const tier=p.tier||'—';
+      const st=p.online?'<span class="status-ok">online</span>':'<span class="status-warn">offline</span>';
+      h+='<tr><td style="font-family:monospace;font-size:11px">'+esc(id)+'</td><td>'+sc+'</td><td>'+esc(tier)+'</td><td>'+st+'</td></tr>';
     }
     h+='</table>';peersTable.innerHTML=h;
   }else{
-    peersTable.innerHTML='<p class="empty-state">No peers connected.</p>';
+    peersTable.innerHTML='<p class="empty-state">No peers connected via WSS. Bots connect when running with gateway_url configured.</p>';
   }
   // Relay stats
   if(status&&status.relay){
     const r=status.relay;
-    let rh='<div style="display:flex;gap:16px;flex-wrap:wrap;font-size:13px">';
-    rh+='<span>Forwarded: <strong>'+(r.forwarded||0)+'</strong></span>';
-    rh+='<span>Dropped: <strong>'+(r.dropped||0)+'</strong></span>';
-    rh+='<span>Pending: <strong>'+(r.pending||0)+'</strong></span>';
+    const sent=r.sent||0,dd=r.dead_dropped||0,quar=r.quarantined||0,recv=r.received||0;
+    let rh='<div style="display:flex;gap:24px;flex-wrap:wrap;font-size:13px">';
+    rh+='<span>Sent: <strong>'+sent+'</strong></span>';
+    rh+='<span>Dead-dropped: <strong>'+dd+'</strong></span>';
+    rh+='<span>Quarantined: <strong style="color:#f85149">'+quar+'</strong></span>';
+    rh+='<span>Received: <strong>'+recv+'</strong></span>';
     rh+='</div>';
-    if(r.forwarded>0||r.dropped>0){
-      const total=r.forwarded+r.dropped;
-      const pct=Math.round(r.forwarded/total*100);
+    const total=sent+dd;
+    if(total>0||quar>0){
+      const good=sent;const bad=quar+dd;const all=good+bad;
+      const pct=all>0?Math.round(good/all*100):0;
       rh+='<div style="margin-top:8px;height:12px;border-radius:4px;overflow:hidden;background:#21262d">';
       rh+='<div style="width:'+pct+'%;height:100%;background:#3fb950"></div></div>';
-      rh+='<div style="font-size:11px;color:#8b949e;margin-top:4px">'+pct+'% relay success rate</div>';
+      rh+='<div style="font-size:11px;color:#8b949e;margin-top:4px">'+pct+'% direct delivery ('+bad+' dead-dropped/quarantined)</div>';
     }
     relayDiv.innerHTML=rh;
   }else{relayDiv.innerHTML='<p class="empty-state">No relay data.</p>';}
   // Claims
-  if(claims&&Array.isArray(claims.claims)&&claims.claims.length>0){
-    let ch='<table class="dtable"><tr><th>Peer</th><th>Type</th><th>Score</th><th>Verified</th><th>Timestamp</th></tr>';
-    for(const c of claims.claims){
-      const v=c.verified?'<span class="status-ok">Yes</span>':'<span class="status-warn">No</span>';
-      const ts=c.timestamp?new Date(c.timestamp).toLocaleTimeString():'—';
-      ch+='<tr><td style="font-family:monospace;font-size:11px">'+esc(c.peer_id||'')+'</td><td>'+esc(c.claim_type||'')+'</td><td>'+(c.score!=null?c.score:'—')+'</td><td>'+v+'</td><td>'+ts+'</td></tr>';
+  if(claims&&(claims.total||0)>0){
+    let ch='<div style="display:flex;gap:24px;flex-wrap:wrap;font-size:13px;margin-bottom:12px">';
+    ch+='<span>Quarantine: <strong>'+claims.quarantine+'</strong></span>';
+    ch+='<span>Canonical: <strong style="color:#3fb950">'+claims.canonical+'</strong></span>';
+    ch+='<span>Tombstoned: <strong>'+claims.tombstoned+'</strong></span>';
+    ch+='<span>Disputed: <strong>'+claims.disputed+'</strong></span>';
+    ch+='<span>Total: <strong>'+claims.total+'</strong></span>';
+    ch+='</div>';
+    if(claims.pending_votes&&claims.pending_votes.length>0){
+      ch+='<table class="dtable"><tr><th>Claim ID</th><th>Namespace</th><th>Votes</th></tr>';
+      for(const v of claims.pending_votes){
+        const id=(v.claim_id||'').substring(0,12)+'...';
+        ch+='<tr><td style="font-family:monospace;font-size:11px">'+esc(id)+'</td><td>'+esc(v.namespace||'')+'</td><td>'+v.votes_cast+'/'+v.validators_total+'</td></tr>';
+      }
+      ch+='</table>';
     }
-    ch+='</table>';claimsDiv.innerHTML=ch;
-  }else{claimsDiv.innerHTML='<p class="empty-state">No claims.</p>';}
+    claimsDiv.innerHTML=ch;
+  }else{claimsDiv.innerHTML='<p class="empty-state">No Botawiki claims.</p>';}
   // Dead-drops
-  if(deadDrops&&Array.isArray(deadDrops.drops)&&deadDrops.drops.length>0){
-    let dh='<table class="dtable"><tr><th>ID</th><th>From</th><th>To</th><th>Type</th><th>Size</th><th>Created</th></tr>';
-    for(const d of deadDrops.drops){
-      const ts=d.created?new Date(d.created).toLocaleTimeString():'—';
-      dh+='<tr><td style="font-family:monospace;font-size:11px">'+esc(d.id||'')+'</td><td>'+esc(d.from||'')+'</td><td>'+esc(d.to||'')+'</td><td>'+esc(d.drop_type||'')+'</td><td>'+(d.size_bytes||0)+'</td><td>'+ts+'</td></tr>';
+  if(deadDrops&&(deadDrops.total||0)>0){
+    let dh='<div style="font-size:13px;margin-bottom:12px">Total queued: <strong>'+deadDrops.total+'</strong> for <strong>'+deadDrops.recipients_count+'</strong> recipients</div>';
+    if(deadDrops.recipients&&deadDrops.recipients.length>0){
+      dh+='<table class="dtable"><tr><th>Recipient</th><th>Queued</th><th>Oldest</th></tr>';
+      for(const r of deadDrops.recipients){
+        const id=(r.bot_id||'').substring(0,16)+'...';
+        const age=r.oldest_age_ms!=null?Math.round(r.oldest_age_ms/60000)+'m ago':'—';
+        dh+='<tr><td style="font-family:monospace;font-size:11px">'+esc(id)+'</td><td>'+r.count+'</td><td>'+age+'</td></tr>';
+      }
+      dh+='</table>';
     }
-    dh+='</table>';deaddropsDiv.innerHTML=dh;
+    deaddropsDiv.innerHTML=dh;
   }else{deaddropsDiv.innerHTML='<p class="empty-state">No dead-drops in queue.</p>';}
 }
 function schedule(fn,ms){fn().finally(()=>setTimeout(()=>schedule(fn,ms),ms));}

@@ -369,6 +369,18 @@ pub async fn get_trustmark<S: EvidenceStore>(
     }
 
     let score = compute_trustmark_from_evidence(&records);
+
+    // Populate cache on compute so relay/mesh works without NATS
+    let cached = crate::nats_bridge::CachedScore {
+        score_bp: score.score_bp.value(),
+        dimensions: serde_json::to_value(&score.dimensions).unwrap_or_default(),
+        tier: serde_json::to_value(&score.tier)
+            .map(|v| v.as_str().unwrap_or("tier1").to_string())
+            .unwrap_or_else(|_| "tier1".to_string()),
+        computed_at_ms: score.computed_at_ms,
+    };
+    cache.insert(bot_id, cached).await;
+
     (StatusCode::OK, Json(score)).into_response()
 }
 
