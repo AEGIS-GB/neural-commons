@@ -117,102 +117,59 @@ pub fn screen_response_with_policy(
         }
     }
 
-    // Layer 3: NER-based PII detection (names, addresses, phone numbers)
+    // Layer 3: NER-based PII detection (person names).
+    //
+    // Uses GDPR/NIST-compliant filtering: a single first name ("Mark") is NOT
+    // PII. Only identifiable information is flagged:
+    //   - Full names (first + last): "Sarah Johnson"
+    //   - Title + surname: "Mr. Tanaka", "Dr. Kim"
+    //   - Structured: "ZHANG, WEI"
+    //
+    // Supports both DistilBERT-NER (PER/LOC/ORG/MISC) and legacy XLM-RoBERTa
+    // (GIVENNAME/SURNAME/...) label formats.
     #[cfg(feature = "ner")]
     {
         let ner_entities = crate::ner_pii::detect_entities(&text);
 
-        // Pre-scan: check if address-related entities (STREET) are present.
-        // CITY/ZIPCODE/BUILDINGNUM are only PII when part of an address.
-        let has_street = ner_entities
-            .iter()
-            .any(|e| e.entity_type == "STREET" && e.score > 0.7);
-
-        // Per-entity-type confidence thresholds. Higher thresholds for
-        // types prone to false positives (e.g. common first names used
-        // as verbs: "Mark", "Grant", "Bill").
-        fn min_confidence(entity_type: &str) -> f32 {
-            match entity_type {
-                "GIVENNAME" | "SURNAME" => 0.80,
-                "TITLE" => 0.85,
-                "TELEPHONENUM" | "EMAIL" => 0.70,
-                "CREDITCARDNUMBER" => 0.60,
-                "SOCIALNUM" | "TAXNUM" => 0.60,
-                "DRIVERLICENSENUM" | "IDCARDNUM" | "PASSPORTNUM" => 0.60,
-                "DATEOFBIRTH" | "SEX" | "GENDER" => 0.70,
-                "STREET" => 0.90,
-                "CITY" | "ZIPCODE" | "BUILDINGNUM" => 0.85,
-                _ => 1.0, // unknown types: effectively skip
-            }
-        }
-
         for entity in &ner_entities {
-            // Skip entities below their type-specific confidence threshold
-            if entity.score < min_confidence(&entity.entity_type) {
+            // Map entity type to DLP category.
+            // Only person-name types are actionable — LOC/ORG/MISC/DATE/etc are skipped.
+            let is_name_type = match entity.entity_type.as_str() {
+                // DistilBERT-NER labels
+                "PER" => true,
+                // XLM-RoBERTa legacy labels (backward compat if old model loaded)
+                "GIVENNAME" | "SURNAME" | "TITLE" => true,
+                // Everything else: not actionable PII from NER
+                // (emails, phones, SSNs, credentials are caught by regex Layer 2)
+                _ => false,
+            };
+
+            if !is_name_type {
                 continue;
             }
 
-            let category = match entity.entity_type.as_str() {
-                "GIVENNAME" | "SURNAME" | "TITLE" => "pii",
-                "TELEPHONENUM" => "pii",
-                "EMAIL" => "pii",
-                "CREDITCARDNUMBER" => "pii",
-                "SOCIALNUM" | "TAXNUM" => "pii",
-                "DRIVERLICENSENUM" | "IDCARDNUM" | "PASSPORTNUM" => "pii",
-                "DATEOFBIRTH" | "SEX" | "GENDER" => "phi",
-                // Dates and times are never PII on their own
-                "DATE" | "TIME" => continue,
-                // AGE: standalone numbers ("42") get misclassified
-                "AGE" => continue,
-                // Address components: only flag when STREET is also present,
-                // indicating an actual address rather than a city name in context
-                "CITY" | "ZIPCODE" | "BUILDINGNUM" => {
-                    if !has_street {
-                        continue;
-                    }
-                    "pii"
-                }
-                // Street: require reasonable length to avoid short misclassifications
-                "STREET" => {
-                    if entity.text.len() < 10 {
-                        continue;
-                    }
-                    "pii"
-                }
-                _ => continue,
-            };
-            let description = format!("NER: {} detected", entity.entity_type.to_lowercase());
+            // GDPR/NIST filter: a single first name is NOT identifiable PII.
+            // Only flag full names, title+surname, or structured formats.
+            if !crate::ner_pii::is_pii_name(&entity.text) {
+                continue;
+            }
 
-            // Only add if not already caught by regex
+            // Skip if already caught by regex
             let already_caught = result.findings.iter().any(|f| {
                 f.matched_values
                     .iter()
                     .any(|v| v.contains(&entity.text) || entity.text.contains(v.as_str()))
             });
 
-            // Minimum text length per entity type to filter out garbage
-            // subword tokens (e.g. "wen" from "Qwen", "LPDDR" from "LPDDR5X")
-            let min_len = match entity.entity_type.as_str() {
-                "GIVENNAME" | "SURNAME" => 2,
-                "TELEPHONENUM" => 7,      // shortest phone: 7 digits
-                "EMAIL" => 5,             // a@b.c
-                "CREDITCARDNUMBER" => 13, // shortest CC: 13 digits
-                "SOCIALNUM" => 8,         // SSN without dashes: 9 chars
-                "TAXNUM" => 8,
-                "DRIVERLICENSENUM" => 6,
-                "IDCARDNUM" => 6,
-                "PASSPORTNUM" => 6,
-                "STREET" => 10,
-                _ => 2,
-            };
-            if entity.text.len() < min_len {
-                continue;
-            }
+            let description = format!(
+                "NER: person name detected ({})",
+                entity.entity_type.to_lowercase()
+            );
 
             if !already_caught {
                 result.redaction_count += 1;
                 result.findings.push(ResponseFinding {
-                    category: category.to_string(),
+                    category: "pii".to_string(),
                     description,
                     matched_values: vec![entity.text.clone()],
                     location: None,

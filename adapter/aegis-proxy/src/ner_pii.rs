@@ -1,14 +1,15 @@
 //! NER-based PII detection for response screening.
 //!
-//! Uses a token classification ONNX model (XLM-RoBERTa) to detect
-//! person names, addresses, phone numbers, and other semantic PII.
+//! Uses a token classification ONNX model to detect person names and
+//! other semantic PII. Supports both DistilBERT-NER (PER/LOC/ORG/MISC)
+//! and XLM-RoBERTa PII-NER (GIVENNAME/SURNAME/...) label formats.
 
 use std::path::Path;
 use std::sync::{Mutex, OnceLock};
 
 use ort::value::Value;
 use tokenizers::Tokenizer;
-use tracing::{debug, info, warn};
+use tracing::{debug, info};
 
 const MAX_SEQ_LEN: usize = 512;
 
@@ -26,6 +27,9 @@ struct NerEngine {
     session: Mutex<ort::session::Session>,
     tokenizer: Tokenizer,
     id2label: std::collections::HashMap<i64, String>,
+    /// Whether the model requires token_type_ids (3 inputs vs 2).
+    /// DistilBERT and BERT need this; XLM-RoBERTa and DeBERTa do not.
+    needs_token_type_ids: bool,
 }
 
 /// Initialize NER from model directory (model.onnx + tokenizer.json + config.json).
@@ -70,13 +74,23 @@ pub fn init(model_dir: &Path) {
 
         let tokenizer = Tokenizer::from_file(&tokenizer_path).ok()?;
 
-        let entity_count = id2label.values().filter(|v| v.starts_with("B-")).count();
-        info!(entity_count, "NER PII model loaded");
+        let needs_tti = session.inputs().len() >= 3;
+        let entity_count = id2label
+            .values()
+            .filter(|v| v.starts_with("B-") || v.starts_with("I-"))
+            .count();
+        info!(
+            entity_count,
+            inputs = session.inputs().len(),
+            needs_token_type_ids = needs_tti,
+            "NER PII model loaded"
+        );
 
         Some(NerEngine {
             session: Mutex::new(session),
             tokenizer,
             id2label,
+            needs_token_type_ids: needs_tti,
         })
     });
 }
@@ -134,7 +148,19 @@ pub fn detect_entities(text: &str) -> Vec<NerEntity> {
     let logits_vec: Vec<f32>;
     let num_labels = engine.id2label.len();
     {
-        let outputs = match session.run(ort::inputs![input_ids_val, attention_val]) {
+        // Run inference — pass token_type_ids for models that need it (DistilBERT, BERT)
+        let outputs = if engine.needs_token_type_ids {
+            let token_type_ids: Vec<i64> = vec![0i64; seq_len];
+            let tti_val = match Value::from_array((&shape[..], token_type_ids)) {
+                Ok(v) => v,
+                Err(_) => return Vec::new(),
+            };
+            session.run(ort::inputs![input_ids_val, attention_val, tti_val])
+        } else {
+            session.run(ort::inputs![input_ids_val, attention_val])
+        };
+
+        let outputs = match outputs {
             Ok(o) => o,
             Err(e) => {
                 debug!("NER inference error: {e}");
@@ -248,6 +274,109 @@ pub fn detect_entities(text: &str) -> Vec<NerEntity> {
 
     debug!(count = entities.len(), "NER detected entities");
     entities
+}
+
+/// Check if a detected name constitutes identifiable PII under GDPR/NIST.
+///
+/// A single first name ("Mark") or single surname ("Kim") is NOT PII —
+/// it cannot identify a specific individual. PII requires:
+/// - Full name (first + last): "Sarah Johnson"
+/// - Title + surname: "Mr. Tanaka", "Dr. Kim"
+/// - Structured format: "ZHANG, WEI"
+pub fn is_pii_name(entity_text: &str) -> bool {
+    let mut name = entity_text.trim().trim_matches('.').to_string();
+
+    // Clean subword artifacts
+    name = name.replace("##", "");
+
+    // Check for title prefix (and remember it)
+    let titles = [
+        "Dr.",
+        "Mr.",
+        "Mrs.",
+        "Ms.",
+        "Prof.",
+        "Nurse",
+        "Engineer",
+        "Manager",
+        "Consultant",
+        "Intern",
+        "Receptionist",
+        "Attending",
+        "Professor",
+        "Cardholder",
+        "Dear",
+        "Patient",
+        "Surgeon",
+        "Therapist",
+        "Radiologist",
+        "Officer",
+        "Technician",
+        "Employee",
+        "RN",
+    ];
+    let mut has_title = false;
+    for title in &titles {
+        if let Some(stripped) = name
+            .strip_prefix(title)
+            .or_else(|| name.strip_prefix(&title.to_lowercase()))
+        {
+            has_title = true;
+            name = stripped.trim().to_string();
+            break;
+        }
+    }
+
+    // Remove trailing credentials (MD, RN, BSN, PhD, etc.)
+    for cred in &["MD", "RN", "BSN", "PhD", "DO", "PA", "NP"] {
+        let patterns = [
+            format!(", {cred}"),
+            format!(" {cred}"),
+            format!(", {cred}."),
+            format!(" {cred}."),
+        ];
+        for pat in &patterns {
+            if name.ends_with(pat.as_str()) {
+                name = name[..name.len() - pat.len()].to_string();
+            }
+        }
+    }
+
+    let name = name.trim().trim_matches(|c: char| c == '.' || c == ',');
+    let parts: Vec<&str> = name
+        .split_whitespace()
+        .filter(|p| p.len() > 1 || p.chars().next().map(|c| c.is_uppercase()).unwrap_or(false))
+        .collect();
+
+    // Title + any name part = identifiable (Mr. Tanaka, Dr. Kim)
+    if has_title && !parts.is_empty() {
+        return true;
+    }
+
+    // Two+ capitalized words = full name = identifiable
+    if parts.len() >= 2 {
+        let cap_count = parts
+            .iter()
+            .filter(|p| p.chars().next().map(|c| c.is_uppercase()).unwrap_or(false))
+            .count();
+        if cap_count >= 2 {
+            return true;
+        }
+    }
+
+    // Structured: "LASTNAME, FIRSTNAME" format
+    if name.contains(',') {
+        let comma_parts: Vec<&str> = name
+            .split(',')
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty())
+            .collect();
+        if comma_parts.len() >= 2 {
+            return true;
+        }
+    }
+
+    false
 }
 
 pub fn is_available() -> bool {
