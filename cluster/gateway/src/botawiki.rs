@@ -13,6 +13,25 @@ use uuid::Uuid;
 
 use aegis_schemas::Claim;
 
+/// Summary of Botawiki claim state.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ClaimSummary {
+    pub quarantine: u32,
+    pub canonical: u32,
+    pub tombstoned: u32,
+    pub disputed: u32,
+    pub pending_votes: Vec<PendingVote>,
+    pub total: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PendingVote {
+    pub claim_id: Uuid,
+    pub votes_cast: usize,
+    pub validators_total: usize,
+    pub namespace: String,
+}
+
 /// Status of a stored claim in quarantine pipeline.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -119,6 +138,43 @@ impl BotawikiStore {
     /// Get a stored claim by ID.
     pub async fn get(&self, id: &Uuid) -> Option<StoredClaim> {
         self.claims.read().await.get(id).cloned()
+    }
+
+    /// Return a summary of all claims by status.
+    pub async fn summary(&self) -> ClaimSummary {
+        let claims = self.claims.read().await;
+        let mut quarantine = 0u32;
+        let mut canonical = 0u32;
+        let mut tombstoned = 0u32;
+        let mut disputed = 0u32;
+        let mut pending_votes = Vec::new();
+
+        for (id, stored) in claims.iter() {
+            match stored.status {
+                ClaimStatus::Quarantine => {
+                    quarantine += 1;
+                    pending_votes.push(PendingVote {
+                        claim_id: *id,
+                        votes_cast: stored.votes.len(),
+                        validators_total: stored.validators.len(),
+                        namespace: stored.claim.namespace.clone(),
+                    });
+                }
+                ClaimStatus::Canonical => canonical += 1,
+                ClaimStatus::Tombstoned => tombstoned += 1,
+                ClaimStatus::Disputed => disputed += 1,
+            }
+        }
+
+        let total = quarantine + canonical + tombstoned + disputed;
+        ClaimSummary {
+            quarantine,
+            canonical,
+            tombstoned,
+            disputed,
+            pending_votes,
+            total,
+        }
     }
 
     /// Query canonical claims by namespace and optional claim_type.
@@ -246,6 +302,41 @@ mod tests {
         let result = store.vote(&id, "v1", true).await;
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("already voted"));
+    }
+
+    #[tokio::test]
+    async fn botawiki_summary_counts() {
+        let store = BotawikiStore::new();
+        let validators = vec!["v1".into(), "v2".into(), "v3".into()];
+
+        // Submit 3 claims
+        let c1 = sample_claim();
+        let id1 = c1.id;
+        store.submit(c1, validators.clone()).await;
+
+        let c2 = sample_claim();
+        let id2 = c2.id;
+        store.submit(c2, validators.clone()).await;
+
+        let c3 = sample_claim();
+        store.submit(c3, validators.clone()).await;
+
+        // Approve c1 → canonical
+        store.vote(&id1, "v1", true).await.unwrap();
+        store.vote(&id1, "v2", true).await.unwrap();
+
+        // Reject c2 → tombstoned
+        store.vote(&id2, "v1", false).await.unwrap();
+        store.vote(&id2, "v2", false).await.unwrap();
+
+        // c3 stays quarantined
+        let summary = store.summary().await;
+        assert_eq!(summary.canonical, 1);
+        assert_eq!(summary.tombstoned, 1);
+        assert_eq!(summary.quarantine, 1);
+        assert_eq!(summary.disputed, 0);
+        assert_eq!(summary.total, 3);
+        assert_eq!(summary.pending_votes.len(), 1); // only c3 is quarantined
     }
 
     #[tokio::test]

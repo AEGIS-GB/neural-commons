@@ -88,6 +88,11 @@ impl WssConnectionRegistry {
     pub async fn connection_count(&self) -> usize {
         self.connections.read().await.len()
     }
+
+    /// Return a list of all connected bot IDs.
+    pub async fn list_peers(&self) -> Vec<String> {
+        self.connections.read().await.keys().cloned().collect()
+    }
 }
 
 /// GET /ws — WebSocket upgrade with challenge-response auth.
@@ -309,6 +314,22 @@ pub const DEAD_DROP_TTL_MS: i64 = 72 * 60 * 60 * 1000;
 /// Maximum dead-drops per identity (D25).
 pub const MAX_DEAD_DROPS_PER_IDENTITY: usize = 500;
 
+/// Summary of dead-drop queue state.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeadDropSummary {
+    pub total: usize,
+    pub recipients_count: usize,
+    pub recipients: Vec<DeadDropRecipient>,
+}
+
+/// Per-recipient dead-drop queue info.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeadDropRecipient {
+    pub bot_id: String,
+    pub count: usize,
+    pub oldest_age_ms: Option<i64>,
+}
+
 /// A queued message for an offline bot.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DeadDrop {
@@ -405,6 +426,31 @@ impl DeadDropStore {
     pub async fn total_count(&self) -> usize {
         let drops = self.drops.read().await;
         drops.values().map(|q| q.len()).sum()
+    }
+
+    /// Return a summary of all dead-drop queues.
+    pub async fn summary(&self) -> DeadDropSummary {
+        let drops = self.drops.read().await;
+        let now = now_epoch_ms();
+        let mut recipients = Vec::new();
+        let mut total = 0usize;
+
+        for (bot_id, queue) in drops.iter() {
+            let count = queue.len();
+            total += count;
+            let oldest_age_ms = queue.iter().map(|d| now - d.ts_ms).max();
+            recipients.push(DeadDropRecipient {
+                bot_id: bot_id.clone(),
+                count,
+                oldest_age_ms,
+            });
+        }
+
+        DeadDropSummary {
+            total,
+            recipients_count: recipients.len(),
+            recipients,
+        }
     }
 }
 
@@ -694,6 +740,46 @@ mod tests {
         store.store("b", "x", "m2", "relay").await.unwrap();
         store.store("b", "x", "m3", "relay").await.unwrap();
         assert_eq!(store.total_count().await, 3);
+    }
+
+    #[tokio::test]
+    async fn registry_list_peers() {
+        let registry = WssConnectionRegistry::new();
+        let (tx1, _rx1) = mpsc::channel(16);
+        let (tx2, _rx2) = mpsc::channel(16);
+        registry.register("bot_a", tx1).await;
+        registry.register("bot_b", tx2).await;
+
+        let mut peers = registry.list_peers().await;
+        peers.sort();
+        assert_eq!(peers, vec!["bot_a".to_string(), "bot_b".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn dead_drop_summary() {
+        let store = DeadDropStore::new();
+        store.store("bot_a", "x", "m1", "relay").await.unwrap();
+        store.store("bot_a", "x", "m2", "relay").await.unwrap();
+        store.store("bot_b", "x", "m3", "relay").await.unwrap();
+
+        let summary = store.summary().await;
+        assert_eq!(summary.total, 3);
+        assert_eq!(summary.recipients_count, 2);
+
+        let a = summary
+            .recipients
+            .iter()
+            .find(|r| r.bot_id == "bot_a")
+            .unwrap();
+        assert_eq!(a.count, 2);
+        assert!(a.oldest_age_ms.is_some());
+
+        let b = summary
+            .recipients
+            .iter()
+            .find(|r| r.bot_id == "bot_b")
+            .unwrap();
+        assert_eq!(b.count, 1);
     }
 
     #[tokio::test]

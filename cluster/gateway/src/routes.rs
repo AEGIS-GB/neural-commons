@@ -14,6 +14,7 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 
 use axum::extract::{Path, Query};
 use axum::http::StatusCode;
@@ -25,6 +26,7 @@ use tokio::sync::RwLock;
 use crate::auth::VerifiedIdentity;
 use crate::botawiki::BotawikiStore;
 use crate::evaluator::EvaluatorService;
+use crate::mesh_routes::RelayStats;
 use crate::nats_bridge::{NatsBridge, TrustmarkCache};
 use crate::store::{EvidenceRecord, EvidenceStore};
 use crate::ws::{DeadDropStore, RelayEnvelope, WssConnectionRegistry};
@@ -395,6 +397,7 @@ pub async fn mesh_send<S: EvidenceStore>(
     Extension(trustmark_cache): Extension<Arc<TrustmarkCache>>,
     Extension(wss_registry): Extension<Arc<WssConnectionRegistry>>,
     Extension(dead_drop_store): Extension<Arc<DeadDropStore>>,
+    Extension(relay_stats): Extension<Arc<RelayStats>>,
     Json(payload): Json<MeshSendRequest>,
 ) -> impl IntoResponse {
     // Validate request
@@ -487,6 +490,7 @@ pub async fn mesh_send<S: EvidenceStore>(
                         patterns = parsed.annotations.len(),
                         "mesh relay quarantined: injection detected in relay message"
                     );
+                    relay_stats.quarantined.fetch_add(1, Ordering::Relaxed);
                     return (
                         StatusCode::FORBIDDEN,
                         Json(serde_json::json!({
@@ -519,6 +523,7 @@ pub async fn mesh_send<S: EvidenceStore>(
     if wss_registry.is_online(&payload.to).await {
         let delivered = wss_registry.send_to(&payload.to, &envelope_json).await;
         if delivered {
+            relay_stats.sent.fetch_add(1, Ordering::Relaxed);
             tracing::info!(
                 from = %identity.pubkey,
                 to = %payload.to,
@@ -544,6 +549,7 @@ pub async fn mesh_send<S: EvidenceStore>(
             .await
         {
             Ok(()) => {
+                relay_stats.dead_dropped.fetch_add(1, Ordering::Relaxed);
                 tracing::info!(
                     from = %identity.pubkey,
                     to = %payload.to,
@@ -1103,6 +1109,7 @@ mod tests {
             .layer(Extension(botawiki_store))
             .layer(Extension(Arc::new(BotawikiRateLimiter::new())))
             .layer(Extension(evaluator_svc))
+            .layer(Extension(Arc::new(RelayStats::new())))
             .layer(middleware::from_fn(auth::auth_middleware));
 
         Router::new().merge(authed)

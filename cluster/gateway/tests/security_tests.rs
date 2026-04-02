@@ -15,6 +15,7 @@ use tower::ServiceExt;
 use aegis_gateway::auth::{self, ReplayProtection, SigningInput, VerifiedIdentity};
 use aegis_gateway::botawiki::BotawikiStore;
 use aegis_gateway::evaluator::EvaluatorService;
+use aegis_gateway::mesh_routes::RelayStats;
 use aegis_gateway::nats_bridge::{CachedScore, NatsBridge, TrustmarkCache};
 use aegis_gateway::rate_limit::TierRateLimiter;
 use aegis_gateway::routes;
@@ -94,6 +95,7 @@ fn security_test_app(
         .layer(Extension(Arc::new(BotawikiStore::new())))
         .layer(Extension(Arc::new(routes::BotawikiRateLimiter::new())))
         .layer(Extension(Arc::new(EvaluatorService::new())))
+        .layer(Extension(Arc::new(RelayStats::new())))
         .layer(middleware::from_fn(auth::auth_middleware))
         .layer(Extension(replay))
         .layer(Extension(rate_limiter))
@@ -655,6 +657,7 @@ async fn dead_drop_quota_enforced() {
         .layer(Extension(Arc::new(BotawikiStore::new())))
         .layer(Extension(Arc::new(routes::BotawikiRateLimiter::new())))
         .layer(Extension(Arc::new(EvaluatorService::new())))
+        .layer(Extension(Arc::new(RelayStats::new())))
         .layer(middleware::from_fn(auth::auth_middleware))
         .layer(Extension(Arc::new(ReplayProtection::new())))
         .layer(Extension(Arc::new(TierRateLimiter::new())))
