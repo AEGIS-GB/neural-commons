@@ -350,34 +350,35 @@ async fn recording_middleware(
 
     let handler_recorded = rec_ctx.handler_recorded;
 
-    if !handler_recorded && !is_streaming {
-        if let Some(ref recorder) = state.traffic_recorder {
-            let model = extract_model_from_body(&body_for_record);
-            let channel_ip = Some(_source_ip.as_str());
-            let trust = rec_ctx.trust_level.clone();
-            let context_str = rec_ctx.context.clone();
-            let slm_v = rec_ctx.slm_verdict.clone();
-            // No global fallback — context comes from RecordingContext only
-            let context = context_str.as_deref();
+    if !handler_recorded
+        && !is_streaming
+        && let Some(ref recorder) = state.traffic_recorder
+    {
+        let model = extract_model_from_body(&body_for_record);
+        let channel_ip = Some(_source_ip.as_str());
+        let trust = rec_ctx.trust_level.clone();
+        let context_str = rec_ctx.context.clone();
+        let slm_v = rec_ctx.slm_verdict.clone();
+        // No global fallback — context comes from RecordingContext only
+        let context = context_str.as_deref();
 
-            recorder(
-                &method,
-                &path,
-                status,
-                &body_for_record,
-                b"",
-                start.elapsed().as_millis() as u64,
-                false,
-                slm_v.as_ref(),
-                channel_ip,
-                trust.as_deref(),
-                model.as_deref(),
-                context,
-                slm_v.as_ref().and_then(|v| serde_json::to_value(v).ok()),
-                None, // no response screening on early rejections
-                None, // no request_id on early rejections
-            );
-        }
+        recorder(
+            &method,
+            &path,
+            status,
+            &body_for_record,
+            b"",
+            start.elapsed().as_millis() as u64,
+            false,
+            slm_v.as_ref(),
+            channel_ip,
+            trust.as_deref(),
+            model.as_deref(),
+            context,
+            slm_v.as_ref().and_then(|v| serde_json::to_value(v).ok()),
+            None, // no response screening on early rejections
+            None, // no request_id on early rejections
+        );
     }
 
     response
@@ -1529,46 +1530,46 @@ async fn forward_request(
 
     // Response screening: DLP, tool calls, PII/PHI, machine recon
     let mut response_screen_result = None;
-    if state.config.mode != ProxyMode::PassThrough {
-        if let Ok(body_str) = std::str::from_utf8(&final_body) {
-            let (screened_text, screen_result) =
-                crate::response_screen::screen_response_with_policy(body_str, &trust_policy);
+    if state.config.mode != ProxyMode::PassThrough
+        && let Ok(body_str) = std::str::from_utf8(&final_body)
+    {
+        let (screened_text, screen_result) =
+            crate::response_screen::screen_response_with_policy(body_str, &trust_policy);
 
-            if screen_result.blocked {
-                // Dangerous tool call — block entire response
-                warn!(
-                    path = %path,
-                    reason = ?screen_result.block_reason,
-                    "response blocked: dangerous operation detected"
-                );
-                let mut resp = (
-                    StatusCode::BAD_GATEWAY,
-                    "Response blocked: unsafe operation detected",
-                )
-                    .into_response();
-                resp.extensions_mut().insert(RecordingContext {
-                    handler_recorded: false,
-                    proxied: true,
-                    trust_level: Some(
-                        format!("{:?}", req_info.channel_trust.trust_level).to_lowercase(),
-                    ),
-                    context: req_info.channel_trust.channel.clone(),
-                    ..Default::default()
-                });
-                return Ok(resp);
-            }
-
-            if screen_result.screened {
-                info!(
-                    path = %path,
-                    redactions = screen_result.redaction_count,
-                    categories = ?screen_result.findings.iter().map(|f| &f.category).collect::<Vec<_>>(),
-                    "DLP: response redacted"
-                );
-                final_body = screened_text.into_bytes();
-            }
-            response_screen_result = Some(screen_result);
+        if screen_result.blocked {
+            // Dangerous tool call — block entire response
+            warn!(
+                path = %path,
+                reason = ?screen_result.block_reason,
+                "response blocked: dangerous operation detected"
+            );
+            let mut resp = (
+                StatusCode::BAD_GATEWAY,
+                "Response blocked: unsafe operation detected",
+            )
+                .into_response();
+            resp.extensions_mut().insert(RecordingContext {
+                handler_recorded: false,
+                proxied: true,
+                trust_level: Some(
+                    format!("{:?}", req_info.channel_trust.trust_level).to_lowercase(),
+                ),
+                context: req_info.channel_trust.channel.clone(),
+                ..Default::default()
+            });
+            return Ok(resp);
         }
+
+        if screen_result.screened {
+            info!(
+                path = %path,
+                redactions = screen_result.redaction_count,
+                categories = ?screen_result.findings.iter().map(|f| &f.category).collect::<Vec<_>>(),
+                "DLP: response redacted"
+            );
+            final_body = screened_text.into_bytes();
+        }
+        response_screen_result = Some(screen_result);
     }
 
     // Record traffic IMMEDIATELY — recording is a first citizen.

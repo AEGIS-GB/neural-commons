@@ -55,19 +55,19 @@ pub fn run_backup(data_dir: &Path) {
     }
 
     // Record the backup as an evidence receipt
-    if let Ok(key_bytes) = std::fs::read(&key_path) {
-        if key_bytes.len() == 32 {
-            let mut key_arr = [0u8; 32];
-            key_arr.copy_from_slice(&key_bytes);
-            let signing_key = aegis_crypto::ed25519::SigningKey::from_bytes(&key_arr);
-            if let Ok(recorder) = aegis_evidence::EvidenceRecorder::new(&db_path, signing_key) {
-                let _ = recorder.record_simple(
-                    aegis_schemas::ReceiptType::ModeChange,
-                    "evidence_backup",
-                    &format!("backup_path={}", backup_path.display()),
-                );
-                eprintln!("  \x1b[32m✓\x1b[0m Backup receipt recorded in evidence chain");
-            }
+    if let Ok(key_bytes) = std::fs::read(&key_path)
+        && key_bytes.len() == 32
+    {
+        let mut key_arr = [0u8; 32];
+        key_arr.copy_from_slice(&key_bytes);
+        let signing_key = aegis_crypto::ed25519::SigningKey::from_bytes(&key_arr);
+        if let Ok(recorder) = aegis_evidence::EvidenceRecorder::new(&db_path, signing_key) {
+            let _ = recorder.record_simple(
+                aegis_schemas::ReceiptType::ModeChange,
+                "evidence_backup",
+                &format!("backup_path={}", backup_path.display()),
+            );
+            eprintln!("  \x1b[32m✓\x1b[0m Backup receipt recorded in evidence chain");
         }
     }
 
@@ -82,7 +82,7 @@ pub fn run_backup(data_dir: &Path) {
 /// List existing backups.
 pub fn run_list_backups(data_dir: &Path) {
     let pattern = data_dir.join("evidence.backup*");
-    let glob_str = pattern.to_string_lossy();
+    let _glob_str = pattern.to_string_lossy();
 
     let mut found = false;
     if let Ok(entries) = std::fs::read_dir(data_dir) {

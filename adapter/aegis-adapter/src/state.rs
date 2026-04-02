@@ -29,6 +29,12 @@ pub struct SecurityState {
     pub nonce_registry: std::sync::Mutex<NonceRegistry>,
 }
 
+impl Default for SecurityState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SecurityState {
     /// Create a new SecurityState with a fresh nonce registry.
     pub fn new() -> Self {
@@ -251,12 +257,11 @@ impl AdapterState {
         let now_ms = now_epoch_ms();
 
         // Check cache
-        if let Ok(cache) = self.trustmark_cache.read() {
-            if let Some(ref cached) = *cache {
-                if now_ms - cached.computed_at_ms < stale_threshold_ms {
-                    return cached.clone(); // Fresh enough
-                }
-            }
+        if let Ok(cache) = self.trustmark_cache.read()
+            && let Some(ref cached) = *cache
+            && now_ms - cached.computed_at_ms < stale_threshold_ms
+        {
+            return cached.clone(); // Fresh enough
         }
 
         // Recompute

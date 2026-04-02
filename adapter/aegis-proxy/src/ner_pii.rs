@@ -249,27 +249,29 @@ pub fn detect_entities(text: &str) -> Vec<NerEntity> {
             }
         } else {
             // O label — flush current entity
-            if let Some((etype, etext, escore)) = current.take() {
-                if escore > 0.5 && etext.trim().len() > 1 {
-                    entities.push(NerEntity {
-                        entity_type: etype,
-                        text: etext.trim().to_string(),
-                        score: escore,
-                    });
-                }
+            if let Some((etype, etext, escore)) = current.take()
+                && escore > 0.5
+                && etext.trim().len() > 1
+            {
+                entities.push(NerEntity {
+                    entity_type: etype,
+                    text: etext.trim().to_string(),
+                    score: escore,
+                });
             }
         }
     }
 
     // Flush last
-    if let Some((etype, etext, escore)) = current {
-        if escore > 0.5 && etext.trim().len() > 1 {
-            entities.push(NerEntity {
-                entity_type: etype,
-                text: etext.trim().to_string(),
-                score: escore,
-            });
-        }
+    if let Some((etype, etext, escore)) = current
+        && escore > 0.5
+        && etext.trim().len() > 1
+    {
+        entities.push(NerEntity {
+            entity_type: etype,
+            text: etext.trim().to_string(),
+            score: escore,
+        });
     }
 
     debug!(count = entities.len(), "NER detected entities");

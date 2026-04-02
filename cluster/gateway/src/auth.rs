@@ -38,6 +38,12 @@ pub struct ReplayProtection {
     seen: RwLock<HashMap<String, i64>>,
 }
 
+impl Default for ReplayProtection {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ReplayProtection {
     pub fn new() -> Self {
         Self {

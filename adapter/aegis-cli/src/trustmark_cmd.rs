@@ -58,8 +58,8 @@ pub fn run(data_dir: &Path, json_output: bool) {
         let bar_len = (d.value * 20.0) as usize;
         let target_pos = (d.target * 20.0) as usize;
         let mut bar_chars: Vec<char> = vec!['░'; 20];
-        for i in 0..bar_len.min(20) {
-            bar_chars[i] = '█';
+        for ch in bar_chars.iter_mut().take(bar_len.min(20)) {
+            *ch = '█';
         }
         if target_pos < 20 {
             bar_chars[target_pos] = '|';

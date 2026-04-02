@@ -181,12 +181,12 @@ pub fn run_peers(gateway_url: &str) {
     println!("━━━ Mesh Peers ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
     println!();
     println!(
-        "  {:<20} {:<12} {:<8} {}",
-        "Bot ID", "TRUSTMARK", "Tier", "Status"
+        "  {:<20} {:<12} {:<8} Status",
+        "Bot ID", "TRUSTMARK", "Tier"
     );
     println!(
-        "  {:<20} {:<12} {:<8} {}",
-        "──────────────────", "─────────", "────", "──────"
+        "  {:<20} {:<12} {:<8} ──────",
+        "──────────────────", "─────────", "────"
     );
 
     for peer in &data.peers {
@@ -341,11 +341,8 @@ pub fn run_dead_drops(gateway_url: &str) {
 
     if !data.recipients.is_empty() {
         println!();
-        println!("  {:<20} {:<10} {}", "Bot ID", "Queued", "Oldest");
-        println!(
-            "  {:<20} {:<10} {}",
-            "──────────────────", "──────", "──────"
-        );
+        println!("  {:<20} {:<10} Oldest", "Bot ID", "Queued");
+        println!("  {:<20} {:<10} ──────", "──────────────────", "──────");
         for q in &data.recipients {
             let id_short = format_bot_id_short(&q.bot_id);
             let age = match q.oldest_age_ms {
@@ -388,6 +385,7 @@ pub struct RelayLogEvent {
 
 #[derive(Deserialize, Debug)]
 pub struct DeadDropDetailResponse {
+    #[allow(dead_code)]
     pub bot_id: String,
     pub drops: Vec<DeadDropMessage>,
     #[allow(dead_code)]
@@ -508,12 +506,11 @@ pub fn run_relay_log(gateway_url: &str, limit: usize) {
     }
 
     println!(
-        "  {:<14} {:<14} {:<14} {:<14} {}",
-        "Time", "From", "To", "Status", "Type"
+        "  {:<14} {:<14} {:<14} {:<14} Type",
+        "Time", "From", "To", "Status"
     );
     println!(
-        "  {:<14} {:<14} {:<14} {:<14} {}",
-        "\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}",
+        "  {:<14} {:<14} {:<14} {:<14} \u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}",
         "\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}",
         "\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}",
         "\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}",

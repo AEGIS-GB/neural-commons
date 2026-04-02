@@ -80,6 +80,7 @@ impl TrafficStore {
     }
 
     /// Record a request/response pair with full context.
+    #[allow(clippy::too_many_arguments)]
     pub fn record(
         &self,
         method: &str,

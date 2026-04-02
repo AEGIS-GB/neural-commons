@@ -234,9 +234,7 @@ async fn main() {
         .allow_headers(Any);
 
     // WSS route (challenge-response auth handled internally in ws.rs)
-    let ws_state = Arc::new(GatewayWsState {
-        wss_registry: wss_registry,
-    });
+    let ws_state = Arc::new(GatewayWsState { wss_registry });
     let ws_routes = Router::new()
         .route("/ws", get(ws::ws_upgrade))
         .with_state(ws_state);

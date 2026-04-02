@@ -132,55 +132,53 @@ async fn dashboard_auth_middleware(
     };
 
     // Check 1: Valid session cookie
-    if let Some(cookie_header) = req.headers().get("cookie") {
-        if let Ok(cookies) = cookie_header.to_str() {
-            for cookie in cookies.split(';') {
-                let cookie = cookie.trim();
-                if let Some(value) = cookie.strip_prefix(&format!("{SESSION_COOKIE}=")) {
-                    if value == make_session_value(token) {
-                        return next.run(req).await;
-                    }
-                }
+    if let Some(cookie_header) = req.headers().get("cookie")
+        && let Ok(cookies) = cookie_header.to_str()
+    {
+        for cookie in cookies.split(';') {
+            let cookie = cookie.trim();
+            if let Some(value) = cookie.strip_prefix(&format!("{SESSION_COOKIE}="))
+                && value == make_session_value(token)
+            {
+                return next.run(req).await;
             }
         }
     }
 
     // Check 2: Authorization: Bearer header (for API/CLI clients)
-    if let Some(auth) = req.headers().get("authorization") {
-        if let Ok(auth_str) = auth.to_str() {
-            if let Some(bearer) = auth_str.strip_prefix("Bearer ") {
-                if bearer.trim() == token {
-                    return next.run(req).await;
-                }
-            }
-        }
+    if let Some(auth) = req.headers().get("authorization")
+        && let Ok(auth_str) = auth.to_str()
+        && let Some(bearer) = auth_str.strip_prefix("Bearer ")
+        && bearer.trim() == token
+    {
+        return next.run(req).await;
     }
 
     // Check 3: ?token= query param → set cookie and redirect (first-time browser login)
     if let Some(query) = req.uri().query() {
         for pair in query.split('&') {
-            if let Some(val) = pair.strip_prefix("token=") {
-                if val == token {
-                    // Valid token — set session cookie and redirect to clean URL
-                    let session = make_session_value(token);
-                    let cookie = format!(
-                        "{SESSION_COOKIE}={session}; HttpOnly; SameSite=Strict; Path=/dashboard; Max-Age=86400"
-                    );
-                    // Redirect to clean URL (without token in query string).
-                    // The router is mounted at /dashboard, so req path is relative.
-                    let rel_path = req.uri().path();
-                    let path = if rel_path == "/" {
-                        "/dashboard".to_string()
-                    } else {
-                        format!("/dashboard{rel_path}")
-                    };
-                    return axum::response::Response::builder()
-                        .status(302)
-                        .header("set-cookie", cookie)
-                        .header("location", path)
-                        .body(axum::body::Body::empty())
-                        .unwrap_or_default();
-                }
+            if let Some(val) = pair.strip_prefix("token=")
+                && val == token
+            {
+                // Valid token — set session cookie and redirect to clean URL
+                let session = make_session_value(token);
+                let cookie = format!(
+                    "{SESSION_COOKIE}={session}; HttpOnly; SameSite=Strict; Path=/dashboard; Max-Age=86400"
+                );
+                // Redirect to clean URL (without token in query string).
+                // The router is mounted at /dashboard, so req path is relative.
+                let rel_path = req.uri().path();
+                let path = if rel_path == "/" {
+                    "/dashboard".to_string()
+                } else {
+                    format!("/dashboard{rel_path}")
+                };
+                return axum::response::Response::builder()
+                    .status(302)
+                    .header("set-cookie", cookie)
+                    .header("location", path)
+                    .body(axum::body::Body::empty())
+                    .unwrap_or_default();
             }
         }
     }
@@ -1306,7 +1304,7 @@ async fn api_trust_remove(
 
     while i < lines.len() {
         if lines[i].trim() == "[[trust.channels]]" {
-            let block_start = i;
+            let _block_start = i;
             let mut block_end = i + 1;
             let mut has_pattern = false;
             while block_end < lines.len()

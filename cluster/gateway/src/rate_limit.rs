@@ -90,6 +90,12 @@ pub struct TierRateLimiter {
     buckets: Mutex<HashMap<String, TokenBucket>>,
 }
 
+impl Default for TierRateLimiter {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl TierRateLimiter {
     /// Create a new rate limiter.
     pub fn new() -> Self {

@@ -46,6 +46,12 @@ pub struct WssConnectionRegistry {
     connections: RwLock<HashMap<String, mpsc::Sender<String>>>,
 }
 
+impl Default for WssConnectionRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl WssConnectionRegistry {
     /// Create a new empty registry.
     pub fn new() -> Self {
@@ -353,6 +359,12 @@ pub struct DeadDrop {
 pub struct DeadDropStore {
     drops: RwLock<HashMap<String, Vec<DeadDrop>>>,
     max_per_identity: usize,
+}
+
+impl Default for DeadDropStore {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl DeadDropStore {

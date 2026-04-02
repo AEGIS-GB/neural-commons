@@ -131,10 +131,10 @@ pub async fn post_evidence<S: EvidenceStore>(
     match store.insert(record).await {
         Ok(_) => {
             // Publish to NATS if bridge is available (fire-and-forget with warning)
-            if let Some(bridge) = nats_bridge.as_ref() {
-                if let Err(e) = bridge.publish_evidence(core_json.as_bytes()).await {
-                    tracing::warn!(id = %id, error = %e, "failed to publish evidence to NATS");
-                }
+            if let Some(bridge) = nats_bridge.as_ref()
+                && let Err(e) = bridge.publish_evidence(core_json.as_bytes()).await
+            {
+                tracing::warn!(id = %id, error = %e, "failed to publish evidence to NATS");
             }
             (StatusCode::CREATED, Json(serde_json::json!({ "id": id })))
         }
@@ -374,7 +374,7 @@ pub async fn get_trustmark<S: EvidenceStore>(
     let cached = crate::nats_bridge::CachedScore {
         score_bp: score.score_bp.value(),
         dimensions: serde_json::to_value(&score.dimensions).unwrap_or_default(),
-        tier: serde_json::to_value(&score.tier)
+        tier: serde_json::to_value(score.tier)
             .map(|v| v.as_str().unwrap_or("tier1").to_string())
             .unwrap_or_else(|_| "tier1".to_string()),
         computed_at_ms: score.computed_at_ms,
@@ -403,6 +403,7 @@ pub const MESH_TRUSTMARK_THRESHOLD: f64 = 0.3;
 /// Auth required. Sender identified from NC-Ed25519 pubkey.
 /// Validates sender and recipient TRUSTMARK scores, screens message content,
 /// and delivers via WSS if recipient is online.
+#[allow(clippy::too_many_arguments)]
 pub async fn mesh_send<S: EvidenceStore>(
     Extension(identity): Extension<VerifiedIdentity>,
     Extension(store): Extension<S>,
@@ -491,34 +492,33 @@ pub async fn mesh_send<S: EvidenceStore>(
     // SLM screening -- ALL relay messages must be screened (section 7.4, no fast-path override)
     {
         let heuristic = aegis_slm::engine::heuristic::HeuristicEngine::new();
-        if let Ok(output) = aegis_slm::engine::SlmEngine::generate(&heuristic, &payload.body) {
-            if let Ok(parsed) = aegis_slm::parser::parse_slm_output(
+        if let Ok(output) = aegis_slm::engine::SlmEngine::generate(&heuristic, &payload.body)
+            && let Ok(parsed) = aegis_slm::parser::parse_slm_output(
                 &output,
                 &aegis_slm::types::EngineProfile::Loopback,
-            ) {
-                if !parsed.annotations.is_empty() {
-                    tracing::warn!(
-                        from = %identity.pubkey,
-                        to = %payload.to,
-                        patterns = parsed.annotations.len(),
-                        "mesh relay quarantined: injection detected in relay message"
-                    );
-                    relay_stats.quarantined.fetch_add(1, Ordering::Relaxed);
-                    relay_log.push(RelayEvent {
-                        from: identity.pubkey.clone(),
-                        to: payload.to.clone(),
-                        status: "quarantined".into(),
-                        msg_type: payload.msg_type.clone(),
-                        ts_ms: now_epoch_ms(),
-                    });
-                    return (
-                        StatusCode::FORBIDDEN,
-                        Json(serde_json::json!({
-                            "error": "message quarantined: injection pattern detected"
-                        })),
-                    );
-                }
-            }
+            )
+            && !parsed.annotations.is_empty()
+        {
+            tracing::warn!(
+                from = %identity.pubkey,
+                to = %payload.to,
+                patterns = parsed.annotations.len(),
+                "mesh relay quarantined: injection detected in relay message"
+            );
+            relay_stats.quarantined.fetch_add(1, Ordering::Relaxed);
+            relay_log.push(RelayEvent {
+                from: identity.pubkey.clone(),
+                to: payload.to.clone(),
+                status: "quarantined".into(),
+                msg_type: payload.msg_type.clone(),
+                ts_ms: now_epoch_ms(),
+            });
+            return (
+                StatusCode::FORBIDDEN,
+                Json(serde_json::json!({
+                    "error": "message quarantined: injection pattern detected"
+                })),
+            );
         }
     }
 
