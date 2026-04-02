@@ -280,6 +280,7 @@ pub async fn start(config: AdapterConfig, mode_override: Option<Mode>) -> Result
         data_dir: data_dir.clone(),
         auth_token: generate_dashboard_token(&config),
         trustmark_mode: config.trustmark.mode.clone(),
+        gateway_url: config.gateway_url.clone(),
     });
     let dashboard_router = aegis_dashboard::routes::routes(dashboard_state);
     let dashboard_path = config.dashboard.path.clone();

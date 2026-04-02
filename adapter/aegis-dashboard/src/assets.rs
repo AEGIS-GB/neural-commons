@@ -3,15 +3,18 @@
 //! The full HTML/CSS/JS dashboard is embedded in the binary as a static string.
 //! Total size target: <50KB.
 //!
-//! 8 tabs:
-//!   1. Overview — "nothing changed, here's what we see" (first screen)
-//!   2. Evidence Explorer — receipt chain viewer
-//!   3. Vulnerability Scan — vault findings
-//!   4. Service Access — per-tool access log
-//!   5. Memory Health — memory file integrity
-//!   6. SLM Screening — screening verdicts, timing, threat scores
-//!   7. Traffic Inspector — request/response inspector with SLM column
-//!   8. Emergency Alerts — broadcast messages
+//! 10 tabs:
+//!   1. Trace — primary real-time request trace view
+//!   2. Overview — "nothing changed, here's what we see" + TRUSTMARK
+//!   3. Evidence Explorer — receipt chain viewer
+//!   4. Vulnerability Scan — vault findings
+//!   5. Service Access — per-tool access log
+//!   6. Memory Health — memory file integrity
+//!   7. SLM Screening — screening verdicts, timing, threat scores
+//!   8. Trust — channel trust + context observability
+//!   9. Traffic Inspector — request/response inspector with SLM column
+//!  10. Emergency Alerts — broadcast messages
+//!  11. Mesh — Gateway mesh peer visualization + relay stats
 //!
 //! Refresh: 2s polling via fetch() to /dashboard/api/* endpoints (D12).
 
@@ -150,6 +153,7 @@ table.dtable .screening-row:hover{background:#1c2128}
 <div class="tab" data-tab="trust">Trust</div>
 <div class="tab" data-tab="traffic">Traffic</div>
 <div class="tab" data-tab="alerts">Alerts</div>
+<div class="tab" data-tab="mesh">Mesh</div>
 </div>
 <div class="content">
 <!-- ═══ TRACE PANEL (primary view) ═══ -->
@@ -236,6 +240,21 @@ table.dtable .screening-row:hover{background:#1c2128}
 <div id="traffic-table"></div>
 </div></div>
 <div class="panel" id="panel-alerts"><div class="card"><h2>Emergency Alerts</h2><p>No alerts.</p></div></div>
+<div class="panel" id="panel-mesh">
+<div class="grid" id="mesh-stats"></div>
+<div class="card" id="mesh-peers-card"><h2>Mesh Peers</h2>
+<div id="mesh-peers-table"></div>
+</div>
+<div class="card" id="mesh-relay-card" style="margin-top:16px"><h2>Relay Stats</h2>
+<div id="mesh-relay"></div>
+</div>
+<div class="card" id="mesh-claims-card" style="margin-top:16px"><h2>Claims Summary</h2>
+<div id="mesh-claims"></div>
+</div>
+<div class="card" id="mesh-deaddrops-card" style="margin-top:16px"><h2>Dead-Drop Queue</h2>
+<div id="mesh-deaddrops"></div>
+</div>
+</div>
 </div>
 <script>
 // Auth: cookie-based. Token is set via ?token= on first visit,
@@ -1660,9 +1679,99 @@ function fmtJson(s){
   if(!s)return'(empty)';
   try{return esc(JSON.stringify(JSON.parse(s),null,2));}catch(e){return esc(s);}
 }
+// ═══ MESH TAB ═══
+let meshGatewayUrl=null;
+let meshConfigFetched=false;
+async function pollMesh(){
+  if(activeTab!=='mesh')return;
+  if(!meshConfigFetched){
+    try{
+      const cfg=await(await fetch('/dashboard/api/mesh')).json();
+      meshConfigFetched=true;
+      if(cfg.configured)meshGatewayUrl=cfg.gateway_url;
+    }catch(e){}
+  }
+  const stats=document.getElementById('mesh-stats');
+  const peersTable=document.getElementById('mesh-peers-table');
+  const relayDiv=document.getElementById('mesh-relay');
+  const claimsDiv=document.getElementById('mesh-claims');
+  const deaddropsDiv=document.getElementById('mesh-deaddrops');
+  if(!meshGatewayUrl){
+    stats.innerHTML='<div class="card"><div class="stat status-warn">Not Configured</div><div class="stat-label">Mesh Gateway</div></div>';
+    peersTable.innerHTML='<p class="empty-state">No gateway_url configured. Set <code>gateway_url</code> in config to enable mesh.</p>';
+    relayDiv.innerHTML='';claimsDiv.innerHTML='';deaddropsDiv.innerHTML='';
+    return;
+  }
+  // Fetch mesh endpoints from Gateway
+  let status=null,peers=null,claims=null,deadDrops=null;
+  try{status=await(await fetch(meshGatewayUrl+'/mesh/status')).json();}catch(e){}
+  try{peers=await(await fetch(meshGatewayUrl+'/mesh/peers')).json();}catch(e){}
+  try{claims=await(await fetch(meshGatewayUrl+'/mesh/claims')).json();}catch(e){}
+  try{deadDrops=await(await fetch(meshGatewayUrl+'/mesh/dead-drops')).json();}catch(e){}
+  // Stats bar
+  let sc='';
+  if(status){
+    sc+='<div class="card"><div class="stat status-ok">Connected</div><div class="stat-label">Gateway</div></div>';
+    sc+='<div class="card"><div class="stat">'+(status.peer_count||0)+'</div><div class="stat-label">Peers</div></div>';
+    sc+='<div class="card"><div class="stat">'+(status.evidence_relayed||0)+'</div><div class="stat-label">Evidence Relayed</div></div>';
+    sc+='<div class="card"><div class="stat">'+(status.claims_total||0)+'</div><div class="stat-label">Claims</div></div>';
+  }else{
+    sc+='<div class="card"><div class="stat status-warn">Unreachable</div><div class="stat-label">Gateway</div></div>';
+  }
+  stats.innerHTML=sc;
+  // Peers table
+  if(peers&&Array.isArray(peers.peers)&&peers.peers.length>0){
+    let h='<table class="dtable"><tr><th>Peer ID</th><th>Address</th><th>Status</th><th>Last Seen</th><th>Evidence</th><th>Latency</th></tr>';
+    for(const p of peers.peers){
+      const st=p.status==='healthy'?'<span class="status-ok">healthy</span>':'<span class="status-warn">'+(p.status||'unknown')+'</span>';
+      const ls=p.last_seen?new Date(p.last_seen).toLocaleTimeString():'—';
+      h+='<tr><td style="font-family:monospace;font-size:11px">'+esc(p.peer_id||'')+'</td><td>'+esc(p.address||'')+'</td><td>'+st+'</td><td>'+ls+'</td><td>'+(p.evidence_count||0)+'</td><td>'+(p.latency_ms!=null?p.latency_ms+'ms':'—')+'</td></tr>';
+    }
+    h+='</table>';peersTable.innerHTML=h;
+  }else{
+    peersTable.innerHTML='<p class="empty-state">No peers connected.</p>';
+  }
+  // Relay stats
+  if(status&&status.relay){
+    const r=status.relay;
+    let rh='<div style="display:flex;gap:16px;flex-wrap:wrap;font-size:13px">';
+    rh+='<span>Forwarded: <strong>'+(r.forwarded||0)+'</strong></span>';
+    rh+='<span>Dropped: <strong>'+(r.dropped||0)+'</strong></span>';
+    rh+='<span>Pending: <strong>'+(r.pending||0)+'</strong></span>';
+    rh+='</div>';
+    if(r.forwarded>0||r.dropped>0){
+      const total=r.forwarded+r.dropped;
+      const pct=Math.round(r.forwarded/total*100);
+      rh+='<div style="margin-top:8px;height:12px;border-radius:4px;overflow:hidden;background:#21262d">';
+      rh+='<div style="width:'+pct+'%;height:100%;background:#3fb950"></div></div>';
+      rh+='<div style="font-size:11px;color:#8b949e;margin-top:4px">'+pct+'% relay success rate</div>';
+    }
+    relayDiv.innerHTML=rh;
+  }else{relayDiv.innerHTML='<p class="empty-state">No relay data.</p>';}
+  // Claims
+  if(claims&&Array.isArray(claims.claims)&&claims.claims.length>0){
+    let ch='<table class="dtable"><tr><th>Peer</th><th>Type</th><th>Score</th><th>Verified</th><th>Timestamp</th></tr>';
+    for(const c of claims.claims){
+      const v=c.verified?'<span class="status-ok">Yes</span>':'<span class="status-warn">No</span>';
+      const ts=c.timestamp?new Date(c.timestamp).toLocaleTimeString():'—';
+      ch+='<tr><td style="font-family:monospace;font-size:11px">'+esc(c.peer_id||'')+'</td><td>'+esc(c.claim_type||'')+'</td><td>'+(c.score!=null?c.score:'—')+'</td><td>'+v+'</td><td>'+ts+'</td></tr>';
+    }
+    ch+='</table>';claimsDiv.innerHTML=ch;
+  }else{claimsDiv.innerHTML='<p class="empty-state">No claims.</p>';}
+  // Dead-drops
+  if(deadDrops&&Array.isArray(deadDrops.drops)&&deadDrops.drops.length>0){
+    let dh='<table class="dtable"><tr><th>ID</th><th>From</th><th>To</th><th>Type</th><th>Size</th><th>Created</th></tr>';
+    for(const d of deadDrops.drops){
+      const ts=d.created?new Date(d.created).toLocaleTimeString():'—';
+      dh+='<tr><td style="font-family:monospace;font-size:11px">'+esc(d.id||'')+'</td><td>'+esc(d.from||'')+'</td><td>'+esc(d.to||'')+'</td><td>'+esc(d.drop_type||'')+'</td><td>'+(d.size_bytes||0)+'</td><td>'+ts+'</td></tr>';
+    }
+    dh+='</table>';deaddropsDiv.innerHTML=dh;
+  }else{deaddropsDiv.innerHTML='<p class="empty-state">No dead-drops in queue.</p>';}
+}
 function schedule(fn,ms){fn().finally(()=>setTimeout(()=>schedule(fn,ms),ms));}
 schedule(poll,2000);
 schedule(fetchAlerts,5000);
+schedule(pollMesh,2000);
 </script>
 </body>
 </html>"#;

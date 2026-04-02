@@ -76,6 +76,8 @@ pub struct DashboardSharedState {
     pub auth_token: Option<String>,
     /// TRUSTMARK scoring mode ("warden" or "mesh").
     pub trustmark_mode: String,
+    /// Gateway URL for mesh status fetching (optional).
+    pub gateway_url: Option<String>,
 }
 
 // ── Router ───────────────────────────────────────────────────────────────────
@@ -100,6 +102,7 @@ pub fn routes(state: Arc<DashboardSharedState>) -> Router {
         .route("/api/trust/add", post(api_trust_add))
         .route("/api/trust/remove", post(api_trust_remove))
         .route("/api/trustmark", get(api_trustmark))
+        .route("/api/mesh", get(api_mesh))
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
             dashboard_auth_middleware,
@@ -1406,5 +1409,15 @@ async fn api_trust(State(state): State<Arc<DashboardSharedState>>) -> Json<serde
     Json(serde_json::json!({
         "screening_by_trust": trust_counts,
         "total_screened": total_screened,
+    }))
+}
+
+/// GET /dashboard/api/mesh — returns gateway URL config for frontend to fetch mesh
+/// data directly from the Gateway. The dashboard JS uses this URL to poll
+/// `/mesh/status`, `/mesh/peers`, `/mesh/claims`, and `/mesh/dead-drops`.
+async fn api_mesh(State(state): State<Arc<DashboardSharedState>>) -> Json<serde_json::Value> {
+    Json(serde_json::json!({
+        "gateway_url": state.gateway_url,
+        "configured": state.gateway_url.is_some(),
     }))
 }
