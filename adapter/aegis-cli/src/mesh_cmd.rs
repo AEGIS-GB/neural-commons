@@ -54,23 +54,23 @@ pub struct ClaimsResponse {
 #[derive(Deserialize, Debug)]
 pub struct PendingVote {
     pub claim_id: String,
-    pub votes: usize,
-    pub required: usize,
+    pub votes_cast: usize,
+    pub validators_total: usize,
     pub namespace: String,
 }
 
 #[derive(Deserialize, Debug)]
 pub struct DeadDropsResponse {
-    pub total_queued: usize,
-    pub recipients: usize,
-    pub queues: Vec<DeadDropQueue>,
+    pub total: usize,
+    pub recipients_count: usize,
+    pub recipients: Vec<DeadDropQueue>,
 }
 
 #[derive(Deserialize, Debug)]
 pub struct DeadDropQueue {
     pub bot_id: String,
-    pub queued: usize,
-    pub oldest_ms: i64,
+    pub count: usize,
+    pub oldest_age_ms: Option<i64>,
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────
@@ -306,8 +306,8 @@ pub fn run_claims(gateway_url: &str) {
             println!(
                 "  claim {}  votes: {}/{}  namespace: {}",
                 format_bot_id_short(&vote.claim_id),
-                vote.votes,
-                vote.required,
+                vote.votes_cast,
+                vote.validators_total,
                 vote.namespace
             );
         }
@@ -333,28 +333,26 @@ pub fn run_dead_drops(gateway_url: &str) {
         }
     };
 
-    let now_ms = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis() as i64;
-
     println!();
     println!("━━━ Dead-Drops ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
     println!();
-    println!("  Total queued:    {}", data.total_queued);
-    println!("  Recipients:      {}", data.recipients);
+    println!("  Total queued:    {}", data.total);
+    println!("  Recipients:      {}", data.recipients_count);
 
-    if !data.queues.is_empty() {
+    if !data.recipients.is_empty() {
         println!();
         println!("  {:<20} {:<10} {}", "Bot ID", "Queued", "Oldest");
         println!(
             "  {:<20} {:<10} {}",
             "──────────────────", "──────", "──────"
         );
-        for q in &data.queues {
+        for q in &data.recipients {
             let id_short = format_bot_id_short(&q.bot_id);
-            let age = format_age_ms(now_ms - q.oldest_ms);
-            println!("  {:<20} {:>6}    {}", id_short, q.queued, age);
+            let age = match q.oldest_age_ms {
+                Some(ms) => format_age_ms(ms),
+                None => "—".to_string(),
+            };
+            println!("  {:<20} {:>6}    {}", id_short, q.count, age);
         }
     }
     println!();
