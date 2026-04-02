@@ -39,6 +39,7 @@ use clap::{Parser, Subcommand};
 use aegis_adapter::config::{AdapterConfig, AdapterMode};
 
 mod backup;
+mod mesh_cmd;
 mod trace;
 mod trustmark_cmd;
 use aegis_adapter::Mode;
@@ -244,6 +245,16 @@ enum Commands {
         json: bool,
     },
 
+    /// Mesh network status and monitoring
+    Mesh {
+        #[command(subcommand)]
+        action: MeshCommands,
+
+        /// Gateway URL
+        #[arg(long, default_value = "http://127.0.0.1:8080")]
+        gateway_url: String,
+    },
+
     /// Show version information
     Version,
 }
@@ -359,6 +370,20 @@ enum TrustmarkCommands {
         #[arg(long)]
         json: bool,
     },
+}
+
+#[derive(Subcommand)]
+enum MeshCommands {
+    /// Show mesh gateway connection status
+    Status,
+    /// List connected peer bots with TRUSTMARK scores
+    Peers,
+    /// Show relay message statistics
+    Relay,
+    /// Show Botawiki claim summary
+    Claims,
+    /// Show dead-drop queue status
+    DeadDrops,
 }
 
 #[derive(Subcommand)]
@@ -1114,6 +1139,17 @@ fn main() {
                 trustmark_cmd::run_history(&config.data_dir, limit, json)
             }
             None => trustmark_cmd::run(&config.data_dir, false),
+        },
+
+        Some(Commands::Mesh {
+            action,
+            gateway_url,
+        }) => match action {
+            MeshCommands::Status => mesh_cmd::run_status(&gateway_url),
+            MeshCommands::Peers => mesh_cmd::run_peers(&gateway_url),
+            MeshCommands::Relay => mesh_cmd::run_relay(&gateway_url),
+            MeshCommands::Claims => mesh_cmd::run_claims(&gateway_url),
+            MeshCommands::DeadDrops => mesh_cmd::run_dead_drops(&gateway_url),
         },
 
         Some(Commands::Version) => {
