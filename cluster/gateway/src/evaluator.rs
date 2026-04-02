@@ -99,11 +99,7 @@ impl EvaluatorService {
         }
 
         // Prevent double voting
-        if request
-            .votes
-            .iter()
-            .any(|v| v.evaluator_id == evaluator_id)
-        {
+        if request.votes.iter().any(|v| v.evaluator_id == evaluator_id) {
             return Err(format!("{evaluator_id} has already voted"));
         }
 
