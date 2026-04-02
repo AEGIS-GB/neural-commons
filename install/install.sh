@@ -189,17 +189,17 @@ add_to_path() {
 # --- NER PII model download ---
 
 download_ner_model() {
-    local models_dir="${DATA_DIR}/models/pii-ner"
-    local ner_base="https://huggingface.co/Ar86Bat/multilang-pii-ner/resolve/main"
+    local models_dir="${DATA_DIR}/models/distilbert-ner"
+    local ner_base="https://huggingface.co/dslim/distilbert-NER/resolve/main/onnx"
 
-    if [ -f "${models_dir}/model.onnx" ]; then
+    # Also accept legacy pii-ner model
+    if [ -f "${models_dir}/model.onnx" ] || [ -f "${DATA_DIR}/models/pii-ner/model.onnx" ]; then
         info "NER PII model already installed."
         return
     fi
 
-    info "Downloading NER PII detection model (~300 MB)..."
-    info "This enables automatic detection and redaction of personal names,"
-    info "phone numbers, SSNs, credit cards, and addresses in LLM responses."
+    info "Downloading NER PII detection model (DistilBERT-NER, ~250 MB)..."
+    info "Detects person names in LLM responses using GDPR/NIST-compliant filtering."
     echo ""
 
     mkdir -p "$models_dir"
