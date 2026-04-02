@@ -13,7 +13,7 @@
 //! - Ctrl+C signal → graceful shutdown
 //! - All background tasks cancelled via tokio::CancellationToken
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -1197,7 +1197,7 @@ fn create_middleware_hooks(
 }
 
 /// Load a signing key from disk or generate a new one.
-fn load_or_generate_key(data_dir: &PathBuf) -> Result<SigningKey, StartupError> {
+fn load_or_generate_key(data_dir: &Path) -> Result<SigningKey, StartupError> {
     let key_path = data_dir.join("identity.key");
 
     if key_path.exists() {
@@ -1243,11 +1243,11 @@ fn load_or_generate_key(data_dir: &PathBuf) -> Result<SigningKey, StartupError> 
 /// Generate or retrieve the dashboard auth token.
 /// If configured in config.toml, use that. Otherwise generate and log it.
 fn generate_dashboard_token(config: &AdapterConfig) -> Option<String> {
-    if let Some(ref token) = config.dashboard.auth_token {
-        if !token.is_empty() {
-            info!("dashboard auth: token configured");
-            return Some(token.clone());
-        }
+    if let Some(ref token) = config.dashboard.auth_token
+        && !token.is_empty()
+    {
+        info!("dashboard auth: token configured");
+        return Some(token.clone());
     }
 
     // Auto-generate a token

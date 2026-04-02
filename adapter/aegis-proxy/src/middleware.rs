@@ -242,6 +242,7 @@ pub trait SlmHook: Send + Sync {
     /// The String in the tuple is the classifier advisory (if any) to pass to screen_deep.
     /// `classifier_blocking`: if false, classifier is advisory only (trusted sources).
     /// `request_id`: pipeline request ID for receipt correlation.
+    #[allow(clippy::type_complexity)]
     fn screen_fast<'a>(
         &'a self,
         content: &'a str,

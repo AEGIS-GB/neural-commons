@@ -320,10 +320,10 @@ fn check_tools_with_policy(
     // Anthropic format
     if let Some(blocks) = json.get("content").and_then(|c| c.as_array()) {
         for block in blocks {
-            if block.get("type").and_then(|t| t.as_str()) == Some("tool_use") {
-                if let Some(name) = block.get("name").and_then(|n| n.as_str()) {
-                    tool_names.push(name.to_string());
-                }
+            if block.get("type").and_then(|t| t.as_str()) == Some("tool_use")
+                && let Some(name) = block.get("name").and_then(|n| n.as_str())
+            {
+                tool_names.push(name.to_string());
             }
         }
     }

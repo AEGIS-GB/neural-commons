@@ -57,10 +57,10 @@ impl EvaluatorService {
         let mut requests = self.requests.write().await;
 
         // Check if there's already a pending request
-        if let Some(existing) = requests.get(bot_id) {
-            if existing.status == AdmissionStatus::Pending {
-                return Err("admission request already pending".to_string());
-            }
+        if let Some(existing) = requests.get(bot_id)
+            && existing.status == AdmissionStatus::Pending
+        {
+            return Err("admission request already pending".to_string());
         }
 
         let request = AdmissionRequest {

@@ -19,19 +19,25 @@ struct TrafficSummary {
     method: String,
     #[allow(dead_code)]
     path: String,
+    #[allow(dead_code)]
     status: u16,
+    #[allow(dead_code)]
     request_size: usize,
+    #[allow(dead_code)]
     response_size: usize,
     duration_ms: u64,
     #[allow(dead_code)]
     is_streaming: bool,
+    #[allow(dead_code)]
     slm_duration_ms: Option<u64>,
     slm_verdict: Option<String>,
     slm_threat_score: Option<u32>,
     channel: Option<String>,
     trust_level: Option<String>,
     model: Option<String>,
+    #[allow(dead_code)]
     context: Option<String>,
+    #[allow(dead_code)]
     response_screen: Option<serde_json::Value>,
     request_id: Option<String>,
 }
@@ -61,14 +67,17 @@ struct TrafficDetailEntry {
     channel: Option<String>,
     trust_level: Option<String>,
     model: Option<String>,
+    #[allow(dead_code)]
     context: Option<String>,
     response_screen: Option<serde_json::Value>,
+    #[allow(dead_code)]
     request_id: Option<String>,
     slm_detail: Option<serde_json::Value>,
 }
 
 #[derive(Deserialize, Debug)]
 struct ReceiptsResponse {
+    #[allow(dead_code)]
     request_id: Option<String>,
     receipts: Option<Vec<ReceiptInfo>>,
 }
@@ -78,6 +87,7 @@ struct ReceiptInfo {
     receipt_type: Option<String>,
     action: Option<String>,
     outcome: Option<String>,
+    #[allow(dead_code)]
     id: Option<String>,
 }
 
@@ -88,11 +98,14 @@ struct SlmList {
 
 #[derive(Deserialize, Debug)]
 struct SlmEntry {
+    #[allow(dead_code)]
     ts_ms: Option<i64>,
     action: Option<String>,
     threat_score: Option<u32>,
     screening_ms: Option<u64>,
+    #[allow(dead_code)]
     channel: Option<String>,
+    #[allow(dead_code)]
     trust_level: Option<String>,
 }
 
@@ -107,11 +120,13 @@ fn extract_model(req_body: &str) -> Option<String> {
 
 /// Estimate token counts from request/response sizes.
 /// Rough heuristic: ~4 chars per token for English text.
+#[allow(dead_code)]
 fn estimate_tokens(size: usize) -> usize {
     size / 4
 }
 
 /// Extract the last user message from the request body.
+#[allow(dead_code)]
 fn extract_last_user_message(req_body: &str) -> Option<String> {
     let json: serde_json::Value = serde_json::from_str(req_body).ok()?;
     let messages = json.get("messages")?.as_array()?;
@@ -155,6 +170,7 @@ fn format_ts(ts_ms: i64) -> String {
 }
 
 /// Run the trace command.
+#[allow(clippy::too_many_arguments)]
 pub fn run(
     aegis_url: &str,
     id: Option<u64>,
@@ -767,84 +783,82 @@ fn show_detail(base: &str, id: u64, show_body: bool, section: Option<&str>, json
     }
 
     // === Response Screening (DLP) ===
-    if show_all || sec == "dlp" {
-        if let Some(ref rs) = e.response_screen {
-            let blocked = rs.get("blocked").and_then(|v| v.as_bool()).unwrap_or(false);
-            let redactions = rs
-                .get("redaction_count")
-                .and_then(|v| v.as_u64())
-                .unwrap_or(0);
+    if (show_all || sec == "dlp")
+        && let Some(ref rs) = e.response_screen
+    {
+        let blocked = rs.get("blocked").and_then(|v| v.as_bool()).unwrap_or(false);
+        let redactions = rs
+            .get("redaction_count")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
 
-            println!();
-            section_header("Response Screening (DLP)");
+        println!();
+        section_header("Response Screening (DLP)");
 
-            if blocked {
-                let reason = rs
-                    .get("block_reason")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("dangerous operation");
-                println!(
-                    "  {:<13}\x1b[31mBLOCKED\x1b[0m \u{2014} {}",
-                    "Status", reason
-                );
-            } else if redactions > 0 {
-                println!(
-                    "  {:<13}{} redaction{}",
-                    "Status",
-                    redactions,
-                    if redactions > 1 { "s" } else { "" }
-                );
-            } else {
-                println!("  {:<13}\x1b[32mclean\x1b[0m", "Status");
-            }
+        if blocked {
+            let reason = rs
+                .get("block_reason")
+                .and_then(|v| v.as_str())
+                .unwrap_or("dangerous operation");
+            println!(
+                "  {:<13}\x1b[31mBLOCKED\x1b[0m \u{2014} {}",
+                "Status", reason
+            );
+        } else if redactions > 0 {
+            println!(
+                "  {:<13}{} redaction{}",
+                "Status",
+                redactions,
+                if redactions > 1 { "s" } else { "" }
+            );
+        } else {
+            println!("  {:<13}\x1b[32mclean\x1b[0m", "Status");
+        }
 
-            if let Some(findings) = rs.get("findings").and_then(|v| v.as_array()) {
-                for f in findings {
-                    let cat = f.get("category").and_then(|v| v.as_str()).unwrap_or("?");
-                    let desc = f.get("description").and_then(|v| v.as_str()).unwrap_or("");
-                    let loc_suffix = match f.get("location").and_then(|v| v.as_str()) {
-                        Some("message_content") => "  [message]",
-                        Some("tool_call") => "  [tool call]",
-                        Some("api_protocol") => "  [API metadata]",
-                        _ => "",
-                    };
-                    println!("    {:<10} {}{}", cat, desc, loc_suffix);
-                }
+        if let Some(findings) = rs.get("findings").and_then(|v| v.as_array()) {
+            for f in findings {
+                let cat = f.get("category").and_then(|v| v.as_str()).unwrap_or("?");
+                let desc = f.get("description").and_then(|v| v.as_str()).unwrap_or("");
+                let loc_suffix = match f.get("location").and_then(|v| v.as_str()) {
+                    Some("message_content") => "  [message]",
+                    Some("tool_call") => "  [tool call]",
+                    Some("api_protocol") => "  [API metadata]",
+                    _ => "",
+                };
+                println!("    {:<10} {}{}", cat, desc, loc_suffix);
             }
         }
     }
 
     // === Conversation ===
-    if show_all || sec == "conversation" {
-        if let Some(ref chat) = detail.chat {
-            if let Some(messages) = chat.as_array() {
-                if !messages.is_empty() {
-                    println!();
-                    section_header("Conversation");
-                    for msg in messages {
-                        let role = msg.get("role").and_then(|v| v.as_str()).unwrap_or("?");
-                        let content = msg.get("content").and_then(|v| v.as_str()).unwrap_or("");
-                        let display = if role == "system" {
-                            // Truncate system message to first line
-                            let first_line = content.lines().next().unwrap_or(content);
-                            let trunc: String = first_line.chars().take(80).collect();
-                            if content.len() > trunc.len() {
-                                format!("{}...", trunc)
-                            } else {
-                                trunc
-                            }
-                        } else {
-                            let trunc: String = content.chars().take(200).collect();
-                            if content.len() > trunc.len() {
-                                format!("{}...", trunc)
-                            } else {
-                                trunc
-                            }
-                        };
-                        println!("  \x1b[2m[{}]\x1b[0m     {}", role, display);
-                    }
+    if (show_all || sec == "conversation")
+        && let Some(ref chat) = detail.chat
+        && let Some(messages) = chat.as_array()
+        && !messages.is_empty()
+    {
+        println!();
+        section_header("Conversation");
+        for msg in messages {
+            let role = msg.get("role").and_then(|v| v.as_str()).unwrap_or("?");
+            let content = msg.get("content").and_then(|v| v.as_str()).unwrap_or("");
+            let display = if role == "system" {
+                // Truncate system message to first line
+                let first_line = content.lines().next().unwrap_or(content);
+                let trunc: String = first_line.chars().take(80).collect();
+                if content.len() > trunc.len() {
+                    format!("{}...", trunc)
+                } else {
+                    trunc
                 }
-            }
+            } else {
+                let trunc: String = content.chars().take(200).collect();
+                if content.len() > trunc.len() {
+                    format!("{}...", trunc)
+                } else {
+                    trunc
+                }
+            };
+            println!("  \x1b[2m[{}]\x1b[0m     {}", role, display);
         }
     }
 
@@ -1074,6 +1088,7 @@ fn show_slm_health(aegis_url: &str) {
 }
 
 /// Simple text wrapping.
+#[allow(dead_code)]
 fn textwrap(text: &str, width: usize) -> Vec<String> {
     let mut lines = Vec::new();
     let mut current = String::new();

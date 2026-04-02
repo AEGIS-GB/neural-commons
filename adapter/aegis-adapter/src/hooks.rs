@@ -77,19 +77,19 @@ fn record_receipt(
     }
 
     // Push SSE alert for critical receipt types
-    if is_critical(&receipt_type) {
-        if let Some(tx) = alert_tx {
-            let alert = crate::state::DashboardAlert {
-                ts_ms: std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_millis() as u64,
-                kind: format!("{:?}", receipt_type).to_lowercase(),
-                message: format!("{}: {}", action, outcome),
-                receipt_seq: recorder.chain_head().head_seq,
-            };
-            let _ = tx.send(alert);
-        }
+    if is_critical(&receipt_type)
+        && let Some(tx) = alert_tx
+    {
+        let alert = crate::state::DashboardAlert {
+            ts_ms: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis() as u64,
+            kind: format!("{:?}", receipt_type).to_lowercase(),
+            message: format!("{}: {}", action, outcome),
+            receipt_seq: recorder.chain_head().head_seq,
+        };
+        let _ = tx.send(alert);
     }
 }
 

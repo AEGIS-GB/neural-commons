@@ -110,12 +110,11 @@ impl Provider {
                 return Provider::OpenAiCompat;
             }
             // Ollama default port
-            if h == "localhost" || h == "127.0.0.1" || h == "::1" {
-                if let Some(port) = Self::extract_port(url) {
-                    if port == 11434 {
-                        return Provider::Ollama;
-                    }
-                }
+            if (h == "localhost" || h == "127.0.0.1" || h == "::1")
+                && let Some(port) = Self::extract_port(url)
+                && port == 11434
+            {
+                return Provider::Ollama;
             }
         }
 

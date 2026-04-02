@@ -135,13 +135,12 @@ pub fn decode_encoded_content(content: &str) -> Option<String> {
     // Base64: find base64-like strings (20+ chars, A-Za-z0-9+/=)
     let b64_re = regex::Regex::new(r"[A-Za-z0-9+/]{20,}={0,3}").ok()?;
     for m in b64_re.find_iter(content) {
-        if let Some(text) = simple_base64_decode(m.as_str()) {
-            if text
+        if let Some(text) = simple_base64_decode(m.as_str())
+            && text
                 .chars()
                 .all(|c| c.is_ascii_graphic() || c.is_ascii_whitespace())
-            {
-                decoded_parts.push(text);
-            }
+        {
+            decoded_parts.push(text);
         }
     }
 
@@ -154,15 +153,13 @@ pub fn decode_encoded_content(content: &str) -> Option<String> {
                 .step_by(2)
                 .map(|i| u8::from_str_radix(&hex_str[i..i + 2], 16).ok())
                 .collect();
-            if let Some(bytes) = bytes {
-                if let Ok(text) = String::from_utf8(bytes) {
-                    if text
-                        .chars()
-                        .all(|c| c.is_ascii_graphic() || c.is_ascii_whitespace())
-                    {
-                        decoded_parts.push(text);
-                    }
-                }
+            if let Some(bytes) = bytes
+                && let Ok(text) = String::from_utf8(bytes)
+                && text
+                    .chars()
+                    .all(|c| c.is_ascii_graphic() || c.is_ascii_whitespace())
+            {
+                decoded_parts.push(text);
             }
         }
     }
