@@ -26,7 +26,7 @@ use tokio::sync::RwLock;
 use crate::auth::VerifiedIdentity;
 use crate::botawiki::BotawikiStore;
 use crate::evaluator::EvaluatorService;
-use crate::mesh_routes::RelayStats;
+use crate::mesh_routes::{RelayEvent, RelayLog, RelayStats};
 use crate::nats_bridge::{NatsBridge, TrustmarkCache};
 use crate::store::{EvidenceRecord, EvidenceStore};
 use crate::ws::{DeadDropStore, RelayEnvelope, WssConnectionRegistry};
@@ -369,6 +369,18 @@ pub async fn get_trustmark<S: EvidenceStore>(
     }
 
     let score = compute_trustmark_from_evidence(&records);
+
+    // Populate cache on compute so relay/mesh works without NATS
+    let cached = crate::nats_bridge::CachedScore {
+        score_bp: score.score_bp.value(),
+        dimensions: serde_json::to_value(&score.dimensions).unwrap_or_default(),
+        tier: serde_json::to_value(&score.tier)
+            .map(|v| v.as_str().unwrap_or("tier1").to_string())
+            .unwrap_or_else(|_| "tier1".to_string()),
+        computed_at_ms: score.computed_at_ms,
+    };
+    cache.insert(bot_id, cached).await;
+
     (StatusCode::OK, Json(score)).into_response()
 }
 
@@ -398,6 +410,7 @@ pub async fn mesh_send<S: EvidenceStore>(
     Extension(wss_registry): Extension<Arc<WssConnectionRegistry>>,
     Extension(dead_drop_store): Extension<Arc<DeadDropStore>>,
     Extension(relay_stats): Extension<Arc<RelayStats>>,
+    Extension(relay_log): Extension<Arc<RelayLog>>,
     Json(payload): Json<MeshSendRequest>,
 ) -> impl IntoResponse {
     // Validate request
@@ -491,6 +504,13 @@ pub async fn mesh_send<S: EvidenceStore>(
                         "mesh relay quarantined: injection detected in relay message"
                     );
                     relay_stats.quarantined.fetch_add(1, Ordering::Relaxed);
+                    relay_log.push(RelayEvent {
+                        from: identity.pubkey.clone(),
+                        to: payload.to.clone(),
+                        status: "quarantined".into(),
+                        msg_type: payload.msg_type.clone(),
+                        ts_ms: now_epoch_ms(),
+                    });
                     return (
                         StatusCode::FORBIDDEN,
                         Json(serde_json::json!({
@@ -524,6 +544,13 @@ pub async fn mesh_send<S: EvidenceStore>(
         let delivered = wss_registry.send_to(&payload.to, &envelope_json).await;
         if delivered {
             relay_stats.sent.fetch_add(1, Ordering::Relaxed);
+            relay_log.push(RelayEvent {
+                from: identity.pubkey.clone(),
+                to: payload.to.clone(),
+                status: "delivered".into(),
+                msg_type: payload.msg_type.clone(),
+                ts_ms: now_epoch_ms(),
+            });
             tracing::info!(
                 from = %identity.pubkey,
                 to = %payload.to,
@@ -550,6 +577,13 @@ pub async fn mesh_send<S: EvidenceStore>(
         {
             Ok(()) => {
                 relay_stats.dead_dropped.fetch_add(1, Ordering::Relaxed);
+                relay_log.push(RelayEvent {
+                    from: identity.pubkey.clone(),
+                    to: payload.to.clone(),
+                    status: "dead_dropped".into(),
+                    msg_type: payload.msg_type.clone(),
+                    ts_ms: now_epoch_ms(),
+                });
                 tracing::info!(
                     from = %identity.pubkey,
                     to = %payload.to,
@@ -1110,6 +1144,7 @@ mod tests {
             .layer(Extension(Arc::new(BotawikiRateLimiter::new())))
             .layer(Extension(evaluator_svc))
             .layer(Extension(Arc::new(RelayStats::new())))
+            .layer(Extension(Arc::new(RelayLog::new())))
             .layer(middleware::from_fn(auth::auth_middleware));
 
         Router::new().merge(authed)

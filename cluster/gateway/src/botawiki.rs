@@ -60,6 +60,21 @@ pub struct StoredClaim {
     pub submitted_at_ms: i64,
 }
 
+/// View struct for the full claim list endpoint.
+#[derive(Debug, Clone, Serialize)]
+pub struct StoredClaimView {
+    pub id: Uuid,
+    pub claim_type: serde_json::Value,
+    pub namespace: String,
+    pub attester_id: String,
+    pub confidence_bp: u32,
+    pub status: ClaimStatus,
+    pub votes: Vec<Vote>,
+    pub validators: Vec<String>,
+    pub submitted_at_ms: i64,
+    pub payload: serde_json::Value,
+}
+
 /// In-memory Botawiki claim store.
 #[derive(Debug, Clone, Default)]
 pub struct BotawikiStore {
@@ -175,6 +190,26 @@ impl BotawikiStore {
             pending_votes,
             total,
         }
+    }
+
+    /// Return all stored claims with full metadata.
+    pub async fn list_all(&self) -> Vec<StoredClaimView> {
+        let claims = self.claims.read().await;
+        claims
+            .iter()
+            .map(|(id, sc)| StoredClaimView {
+                id: *id,
+                claim_type: serde_json::to_value(&sc.claim.claim_type).unwrap_or_default(),
+                namespace: sc.claim.namespace.clone(),
+                attester_id: sc.claim.attester_id.clone(),
+                confidence_bp: sc.claim.confidence_bp.value(),
+                status: sc.status.clone(),
+                votes: sc.votes.clone(),
+                validators: sc.validators.clone(),
+                submitted_at_ms: sc.submitted_at_ms,
+                payload: sc.claim.payload.clone(),
+            })
+            .collect()
     }
 
     /// Query canonical claims by namespace and optional claim_type.
@@ -337,6 +372,34 @@ mod tests {
         assert_eq!(summary.disputed, 0);
         assert_eq!(summary.total, 3);
         assert_eq!(summary.pending_votes.len(), 1); // only c3 is quarantined
+    }
+
+    #[tokio::test]
+    async fn list_all_returns_all_claims() {
+        let store = BotawikiStore::new();
+        let validators = vec!["v1".into(), "v2".into(), "v3".into()];
+
+        let c1 = sample_claim();
+        let id1 = c1.id;
+        store.submit(c1, validators.clone()).await;
+
+        let c2 = sample_claim();
+        let id2 = c2.id;
+        store.submit(c2, validators.clone()).await;
+        store.vote(&id2, "v1", true).await.unwrap();
+        store.vote(&id2, "v2", true).await.unwrap();
+
+        let all = store.list_all().await;
+        assert_eq!(all.len(), 2);
+
+        let q = all.iter().find(|c| c.id == id1).unwrap();
+        assert_eq!(q.status, ClaimStatus::Quarantine);
+        assert_eq!(q.namespace, "b/lore");
+        assert_eq!(q.confidence_bp, 8000);
+
+        let can = all.iter().find(|c| c.id == id2).unwrap();
+        assert_eq!(can.status, ClaimStatus::Canonical);
+        assert_eq!(can.votes.len(), 2);
     }
 
     #[tokio::test]
