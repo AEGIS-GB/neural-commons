@@ -17,9 +17,12 @@ use tokio::signal;
 use tracing::info;
 
 use aegis_gateway::auth;
+use aegis_gateway::botawiki::BotawikiStore;
+use aegis_gateway::mesh_routes::{self, RelayStats};
 use aegis_gateway::nats_bridge::{NatsBridge, TrustmarkCache};
 use aegis_gateway::routes;
 use aegis_gateway::store::MemoryStore;
+use aegis_gateway::ws::{DeadDropStore, WssConnectionRegistry};
 
 /// Gateway configuration loaded from TOML file.
 #[derive(Debug, Deserialize)]
@@ -161,6 +164,12 @@ async fn main() {
         }
     };
 
+    // Mesh shared state
+    let wss_registry = Arc::new(WssConnectionRegistry::new());
+    let dead_drop_store = Arc::new(DeadDropStore::new());
+    let botawiki_store = Arc::new(BotawikiStore::new());
+    let relay_stats = Arc::new(RelayStats::new());
+
     // Replay protection (in-memory, inline cleanup)
     let replay_protection = Arc::new(auth::ReplayProtection::new());
 
@@ -183,11 +192,29 @@ async fn main() {
         .layer(middleware::from_fn(auth::auth_middleware))
         .layer(Extension(replay_protection))
         .layer(Extension(tier_rate_limiter))
-        .layer(Extension(trustmark_cache));
+        .layer(Extension(trustmark_cache.clone()))
+        .layer(Extension(wss_registry.clone()))
+        .layer(Extension(dead_drop_store.clone()))
+        .layer(Extension(botawiki_store.clone()))
+        .layer(Extension(relay_stats.clone()));
+
+    // Public mesh status routes (no auth required)
+    let mesh_routes = Router::new()
+        .route("/mesh/status", get(mesh_routes::mesh_status))
+        .route("/mesh/peers", get(mesh_routes::mesh_peers))
+        .route("/mesh/relay/stats", get(mesh_routes::mesh_relay_stats))
+        .route("/mesh/claims", get(mesh_routes::mesh_claims))
+        .route("/mesh/dead-drops", get(mesh_routes::mesh_dead_drops))
+        .layer(Extension(wss_registry))
+        .layer(Extension(trustmark_cache))
+        .layer(Extension(relay_stats))
+        .layer(Extension(botawiki_store))
+        .layer(Extension(dead_drop_store));
 
     // Public routes (no auth) merged with authenticated routes
     let app = Router::new()
         .route("/health", get(health))
+        .merge(mesh_routes)
         .merge(authed_routes);
 
     let addr: SocketAddr = config.listen_addr.parse().unwrap_or_else(|e| {

@@ -12,6 +12,7 @@ pub mod auth;
 pub mod botawiki;
 pub mod embedding_pool;
 pub mod evaluator;
+pub mod mesh_routes;
 pub mod nats_bridge;
 pub mod rate_limit;
 pub mod routes;
