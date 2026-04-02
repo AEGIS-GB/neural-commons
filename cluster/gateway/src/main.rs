@@ -19,7 +19,7 @@ use tracing::info;
 
 use aegis_gateway::auth;
 use aegis_gateway::botawiki::BotawikiStore;
-use aegis_gateway::mesh_routes::{self, RelayStats};
+use aegis_gateway::mesh_routes::{self, RelayLog, RelayStats};
 use aegis_gateway::nats_bridge::{NatsBridge, TrustmarkCache};
 use aegis_gateway::routes;
 use aegis_gateway::store::MemoryStore;
@@ -171,6 +171,7 @@ async fn main() {
     let dead_drop_store = Arc::new(DeadDropStore::new());
     let botawiki_store = Arc::new(BotawikiStore::new());
     let relay_stats = Arc::new(RelayStats::new());
+    let relay_log = Arc::new(RelayLog::new());
 
     // Replay protection (in-memory, inline cleanup)
     let replay_protection = Arc::new(auth::ReplayProtection::new());
@@ -202,18 +203,27 @@ async fn main() {
         .layer(Extension(wss_registry.clone()))
         .layer(Extension(dead_drop_store.clone()))
         .layer(Extension(botawiki_store.clone()))
-        .layer(Extension(relay_stats.clone()));
+        .layer(Extension(relay_stats.clone()))
+        .layer(Extension(relay_log.clone()));
 
     // Public mesh status routes (no auth required)
     let mesh_routes = Router::new()
         .route("/mesh/status", get(mesh_routes::mesh_status))
         .route("/mesh/peers", get(mesh_routes::mesh_peers))
+        .route("/mesh/peers/{bot_id}", get(mesh_routes::mesh_peer_detail))
         .route("/mesh/relay/stats", get(mesh_routes::mesh_relay_stats))
+        .route("/mesh/relay/log", get(mesh_routes::mesh_relay_log))
         .route("/mesh/claims", get(mesh_routes::mesh_claims))
         .route("/mesh/dead-drops", get(mesh_routes::mesh_dead_drops))
+        .route(
+            "/mesh/dead-drops/{bot_id}",
+            get(mesh_routes::mesh_dead_drop_detail),
+        )
+        .route("/botawiki/claims/all", get(mesh_routes::botawiki_list_all))
         .layer(Extension(wss_registry.clone()))
         .layer(Extension(trustmark_cache))
         .layer(Extension(relay_stats))
+        .layer(Extension(relay_log))
         .layer(Extension(botawiki_store))
         .layer(Extension(dead_drop_store));
 

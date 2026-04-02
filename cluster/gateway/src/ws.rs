@@ -428,6 +428,16 @@ impl DeadDropStore {
         drops.values().map(|q| q.len()).sum()
     }
 
+    /// Return all non-expired dead-drops for a specific bot.
+    pub async fn get_for_bot(&self, bot_id: &str) -> Vec<DeadDrop> {
+        let drops = self.drops.read().await;
+        let now = now_epoch_ms();
+        drops
+            .get(bot_id)
+            .map(|q| q.iter().filter(|d| d.expires_ms > now).cloned().collect())
+            .unwrap_or_default()
+    }
+
     /// Return a summary of all dead-drop queues.
     pub async fn summary(&self) -> DeadDropSummary {
         let drops = self.drops.read().await;
@@ -780,6 +790,43 @@ mod tests {
             .find(|r| r.bot_id == "bot_b")
             .unwrap();
         assert_eq!(b.count, 1);
+    }
+
+    #[tokio::test]
+    async fn dead_drop_get_for_bot() {
+        let store = DeadDropStore::new();
+        store.store("bot_a", "x", "m1", "relay").await.unwrap();
+        store.store("bot_a", "y", "m2", "ping").await.unwrap();
+        store.store("bot_b", "x", "m3", "relay").await.unwrap();
+
+        let result = store.get_for_bot("bot_a").await;
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0].body, "m1");
+        assert_eq!(result[1].body, "m2");
+
+        let result_b = store.get_for_bot("bot_b").await;
+        assert_eq!(result_b.len(), 1);
+
+        let result_c = store.get_for_bot("nonexistent").await;
+        assert_eq!(result_c.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn dead_drop_get_for_bot_skips_expired() {
+        let store = DeadDropStore::new();
+        store.store("bot_a", "x", "valid", "relay").await.unwrap();
+        store.store("bot_a", "y", "expired", "relay").await.unwrap();
+
+        // Expire the second message
+        {
+            let mut drops = store.drops.write().await;
+            let queue = drops.get_mut("bot_a").unwrap();
+            queue[1].expires_ms = now_epoch_ms() - 1000;
+        }
+
+        let result = store.get_for_bot("bot_a").await;
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].body, "valid");
     }
 
     #[tokio::test]

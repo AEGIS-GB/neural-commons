@@ -39,6 +39,7 @@ use clap::{Parser, Subcommand};
 use aegis_adapter::config::{AdapterConfig, AdapterMode};
 
 mod backup;
+mod botawiki_cmd;
 mod mesh_cmd;
 mod trace;
 mod trustmark_cmd;
@@ -255,8 +256,34 @@ enum Commands {
         gateway_url: String,
     },
 
+    /// Botawiki knowledge base operations
+    Botawiki {
+        #[command(subcommand)]
+        action: BotawikiCommands,
+
+        /// Gateway URL
+        #[arg(long, default_value = "http://127.0.0.1:8080")]
+        gateway_url: String,
+    },
+
     /// Show version information
     Version,
+}
+
+#[derive(Subcommand)]
+enum BotawikiCommands {
+    /// List all claims
+    List,
+    /// Show a specific claim by ID
+    Show {
+        /// Claim ID (full UUID or prefix)
+        claim_id: String,
+    },
+    /// Search claims by namespace
+    Search {
+        /// Namespace pattern to search for
+        namespace: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -378,12 +405,28 @@ enum MeshCommands {
     Status,
     /// List connected peer bots with TRUSTMARK scores
     Peers,
+    /// Show detail for a specific peer bot
+    Peer {
+        /// Bot ID (full hex or prefix)
+        bot_id: String,
+    },
     /// Show relay message statistics
     Relay,
+    /// Show recent relay message log
+    RelayLog {
+        /// Max events to show
+        #[arg(short, long, default_value = "20")]
+        limit: usize,
+    },
     /// Show Botawiki claim summary
     Claims,
     /// Show dead-drop queue status
     DeadDrops,
+    /// Show dead-drop detail for a bot
+    DeadDrop {
+        /// Recipient bot ID
+        bot_id: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -1147,9 +1190,25 @@ fn main() {
         }) => match action {
             MeshCommands::Status => mesh_cmd::run_status(&gateway_url),
             MeshCommands::Peers => mesh_cmd::run_peers(&gateway_url),
+            MeshCommands::Peer { bot_id } => mesh_cmd::run_peer_detail(&gateway_url, &bot_id),
             MeshCommands::Relay => mesh_cmd::run_relay(&gateway_url),
+            MeshCommands::RelayLog { limit } => mesh_cmd::run_relay_log(&gateway_url, limit),
             MeshCommands::Claims => mesh_cmd::run_claims(&gateway_url),
             MeshCommands::DeadDrops => mesh_cmd::run_dead_drops(&gateway_url),
+            MeshCommands::DeadDrop { bot_id } => {
+                mesh_cmd::run_dead_drop_detail(&gateway_url, &bot_id)
+            }
+        },
+
+        Some(Commands::Botawiki {
+            action,
+            gateway_url,
+        }) => match action {
+            BotawikiCommands::List => botawiki_cmd::run_list(&gateway_url),
+            BotawikiCommands::Show { claim_id } => botawiki_cmd::run_show(&gateway_url, &claim_id),
+            BotawikiCommands::Search { namespace } => {
+                botawiki_cmd::run_search(&gateway_url, &namespace)
+            }
         },
 
         Some(Commands::Version) => {

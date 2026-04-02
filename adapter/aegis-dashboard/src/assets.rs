@@ -3,7 +3,7 @@
 //! The full HTML/CSS/JS dashboard is embedded in the binary as a static string.
 //! Total size target: <50KB.
 //!
-//! 10 tabs:
+//! 12 tabs:
 //!   1. Trace — primary real-time request trace view
 //!   2. Overview — "nothing changed, here's what we see" + TRUSTMARK
 //!   3. Evidence Explorer — receipt chain viewer
@@ -14,7 +14,8 @@
 //!   8. Trust — channel trust + context observability
 //!   9. Traffic Inspector — request/response inspector with SLM column
 //!  10. Emergency Alerts — broadcast messages
-//!  11. Mesh — Gateway mesh peer visualization + relay stats
+//!  11. Mesh — Gateway mesh peer visualization + relay stats + drill-down
+//!  12. Botawiki — knowledge base claims viewer
 //!
 //! Refresh: 2s polling via fetch() to /dashboard/api/* endpoints (D12).
 
@@ -154,6 +155,7 @@ table.dtable .screening-row:hover{background:#1c2128}
 <div class="tab" data-tab="traffic">Traffic</div>
 <div class="tab" data-tab="alerts">Alerts</div>
 <div class="tab" data-tab="mesh">Mesh</div>
+<div class="tab" data-tab="botawiki">Botawiki</div>
 </div>
 <div class="content">
 <!-- ═══ TRACE PANEL (primary view) ═══ -->
@@ -245,14 +247,32 @@ table.dtable .screening-row:hover{background:#1c2128}
 <div class="card" id="mesh-peers-card"><h2>Mesh Peers</h2>
 <div id="mesh-peers-table"></div>
 </div>
+<div class="card" id="mesh-peer-detail-card" style="display:none;margin-top:16px"><h2>Peer Detail</h2>
+<div id="mesh-peer-detail"></div>
+</div>
 <div class="card" id="mesh-relay-card" style="margin-top:16px"><h2>Relay Stats</h2>
 <div id="mesh-relay"></div>
+</div>
+<div class="card" id="mesh-relay-log-card" style="margin-top:16px"><h2>Relay Log</h2>
+<div id="mesh-relay-log"></div>
 </div>
 <div class="card" id="mesh-claims-card" style="margin-top:16px"><h2>Claims Summary</h2>
 <div id="mesh-claims"></div>
 </div>
 <div class="card" id="mesh-deaddrops-card" style="margin-top:16px"><h2>Dead-Drop Queue</h2>
 <div id="mesh-deaddrops"></div>
+</div>
+<div class="card" id="mesh-deaddrop-detail-card" style="display:none;margin-top:16px"><h2>Dead-Drop Messages</h2>
+<div id="mesh-deaddrop-detail"></div>
+</div>
+</div>
+<div class="panel" id="panel-botawiki" style="display:none">
+<div class="grid" id="botawiki-stats"></div>
+<div class="card" id="botawiki-claims-card"><h2>Claims</h2>
+<div id="botawiki-claims-table"></div>
+</div>
+<div class="card" id="botawiki-detail-card" style="display:none;margin-top:16px"><h2>Claim Detail</h2>
+<div id="botawiki-detail"></div>
 </div>
 </div>
 </div>
@@ -1696,18 +1716,19 @@ async function pollMesh(){
   const relayDiv=document.getElementById('mesh-relay');
   const claimsDiv=document.getElementById('mesh-claims');
   const deaddropsDiv=document.getElementById('mesh-deaddrops');
+  const relayLogDiv=document.getElementById('mesh-relay-log');
   if(!meshGatewayUrl){
     stats.innerHTML='<div class="card"><div class="stat status-warn">Not Configured</div><div class="stat-label">Mesh Gateway</div></div>';
     peersTable.innerHTML='<p class="empty-state">No gateway_url configured. Set <code>gateway_url</code> in config to enable mesh.</p>';
-    relayDiv.innerHTML='';claimsDiv.innerHTML='';deaddropsDiv.innerHTML='';
+    relayDiv.innerHTML='';claimsDiv.innerHTML='';deaddropsDiv.innerHTML='';relayLogDiv.innerHTML='';
     return;
   }
-  // Fetch mesh endpoints from Gateway
-  let status=null,peers=null,claims=null,deadDrops=null;
+  let status=null,peers=null,claims=null,deadDrops=null,relayLog=null;
   try{status=await(await fetch(meshGatewayUrl+'/mesh/status')).json();}catch(e){}
   try{peers=await(await fetch(meshGatewayUrl+'/mesh/peers')).json();}catch(e){}
   try{claims=await(await fetch(meshGatewayUrl+'/mesh/claims')).json();}catch(e){}
   try{deadDrops=await(await fetch(meshGatewayUrl+'/mesh/dead-drops')).json();}catch(e){}
+  try{relayLog=await(await fetch(meshGatewayUrl+'/mesh/relay/log?limit=10')).json();}catch(e){}
   // Stats bar
   let sc='';
   if(status){
@@ -1720,15 +1741,18 @@ async function pollMesh(){
     sc+='<div class="card"><div class="stat status-warn">Unreachable</div><div class="stat-label">Gateway at '+esc(meshGatewayUrl)+'</div></div>';
   }
   stats.innerHTML=sc;
-  // Peers table
+  // Peers table (clickable rows)
   if(peers&&Array.isArray(peers.peers)&&peers.peers.length>0){
-    let h='<table class="dtable"><tr><th>Bot ID</th><th>TRUSTMARK</th><th>Tier</th><th>Status</th></tr>';
+    let h='<table class="dtable"><tr><th>Bot ID</th><th>TRUSTMARK</th><th>Tier</th><th>Status</th><th></th></tr>';
     for(const p of peers.peers){
       const id=(p.bot_id||'').substring(0,16)+'...';
       const sc=p.score_bp!=null?p.score_bp+' bp':'—';
       const tier=p.tier||'—';
       const st=p.online?'<span class="status-ok">online</span>':'<span class="status-warn">offline</span>';
-      h+='<tr><td style="font-family:monospace;font-size:11px">'+esc(id)+'</td><td>'+sc+'</td><td>'+esc(tier)+'</td><td>'+st+'</td></tr>';
+      h+='<tr class="screening-row" style="cursor:pointer" onclick="showPeerDetail(\''+esc(p.bot_id)+'\')">';
+      h+='<td style="font-family:monospace;font-size:11px">'+esc(id)+'</td><td>'+sc+'</td><td>'+esc(tier)+'</td><td>'+st+'</td>';
+      h+='<td style="font-size:11px;color:#58a6ff">detail →</td>';
+      h+='</tr>';
     }
     h+='</table>';peersTable.innerHTML=h;
   }else{
@@ -1754,6 +1778,23 @@ async function pollMesh(){
     }
     relayDiv.innerHTML=rh;
   }else{relayDiv.innerHTML='<p class="empty-state">No relay data.</p>';}
+  // Relay log
+  if(relayLog&&relayLog.events&&relayLog.events.length>0){
+    let rl='<table class="dtable"><tr><th>Time</th><th>From</th><th>To</th><th>Status</th><th>Type</th></tr>';
+    for(const e of relayLog.events){
+      const statusColors={delivered:'#3fb950',quarantined:'#f85149',dead_dropped:'#d29922'};
+      const color=statusColors[e.status]||'#8b949e';
+      const fromId=(e.from||'').substring(0,12)+'...';
+      const toId=(e.to||'').substring(0,12)+'...';
+      rl+='<tr><td style="white-space:nowrap;font-size:12px">'+fmtTimeShort(e.ts_ms)+'</td>';
+      rl+='<td style="font-family:monospace;font-size:11px">'+esc(fromId)+'</td>';
+      rl+='<td style="font-family:monospace;font-size:11px">'+esc(toId)+'</td>';
+      rl+='<td style="color:'+color+';font-weight:600">'+e.status+'</td>';
+      rl+='<td>'+esc(e.msg_type)+'</td></tr>';
+    }
+    rl+='</table>';
+    relayLogDiv.innerHTML=rl;
+  }else{relayLogDiv.innerHTML='<p class="empty-state">No relay events recorded yet.</p>';}
   // Claims
   if(claims&&(claims.total||0)>0){
     let ch='<div style="display:flex;gap:24px;flex-wrap:wrap;font-size:13px;margin-bottom:12px">';
@@ -1773,25 +1814,174 @@ async function pollMesh(){
     }
     claimsDiv.innerHTML=ch;
   }else{claimsDiv.innerHTML='<p class="empty-state">No Botawiki claims.</p>';}
-  // Dead-drops
+  // Dead-drops (clickable rows)
   if(deadDrops&&(deadDrops.total||0)>0){
     let dh='<div style="font-size:13px;margin-bottom:12px">Total queued: <strong>'+deadDrops.total+'</strong> for <strong>'+deadDrops.recipients_count+'</strong> recipients</div>';
     if(deadDrops.recipients&&deadDrops.recipients.length>0){
-      dh+='<table class="dtable"><tr><th>Recipient</th><th>Queued</th><th>Oldest</th></tr>';
+      dh+='<table class="dtable"><tr><th>Recipient</th><th>Queued</th><th>Oldest</th><th></th></tr>';
       for(const r of deadDrops.recipients){
         const id=(r.bot_id||'').substring(0,16)+'...';
         const age=r.oldest_age_ms!=null?Math.round(r.oldest_age_ms/60000)+'m ago':'—';
-        dh+='<tr><td style="font-family:monospace;font-size:11px">'+esc(id)+'</td><td>'+r.count+'</td><td>'+age+'</td></tr>';
+        dh+='<tr class="screening-row" style="cursor:pointer" onclick="showDeadDropDetail(\''+esc(r.bot_id)+'\')">';
+        dh+='<td style="font-family:monospace;font-size:11px">'+esc(id)+'</td><td>'+r.count+'</td><td>'+age+'</td>';
+        dh+='<td style="font-size:11px;color:#58a6ff">detail →</td></tr>';
       }
       dh+='</table>';
     }
     deaddropsDiv.innerHTML=dh;
   }else{deaddropsDiv.innerHTML='<p class="empty-state">No dead-drops in queue.</p>';}
 }
+async function showPeerDetail(botId){
+  if(!meshGatewayUrl)return;
+  const card=document.getElementById('mesh-peer-detail-card');
+  const detail=document.getElementById('mesh-peer-detail');
+  try{
+    const d=await(await fetch(meshGatewayUrl+'/mesh/peers/'+encodeURIComponent(botId))).json();
+    if(d.error){detail.innerHTML='<p class="empty-state">'+esc(d.error)+'</p>';card.style.display='block';return;}
+    let h='<span class="detail-back" onclick="document.getElementById(\'mesh-peer-detail-card\').style.display=\'none\'">← Close</span>';
+    h+='<div style="margin-top:12px;display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px">';
+    h+='<div style="padding:10px;background:#0d1117;border:1px solid #30363d;border-radius:6px"><div style="font-size:11px;color:#8b949e">BOT ID</div><div style="font-family:monospace;font-size:11px;margin-top:4px;word-break:break-all">'+esc(d.bot_id)+'</div></div>';
+    h+='<div style="padding:10px;background:#0d1117;border:1px solid #30363d;border-radius:6px"><div style="font-size:11px;color:#8b949e">STATUS</div><div style="font-size:16px;margin-top:4px">'+(d.online?'<span class="status-ok">online</span>':'<span class="status-warn">offline</span>')+'</div></div>';
+    h+='<div style="padding:10px;background:#0d1117;border:1px solid #30363d;border-radius:6px"><div style="font-size:11px;color:#8b949e">TRUSTMARK</div><div style="font-size:20px;font-weight:600;margin-top:4px">'+d.score_bp+' bp</div></div>';
+    h+='<div style="padding:10px;background:#0d1117;border:1px solid #30363d;border-radius:6px"><div style="font-size:11px;color:#8b949e">TIER</div><div style="font-size:16px;font-weight:600;margin-top:4px">'+esc(d.tier)+'</div></div>';
+    h+='<div style="padding:10px;background:#0d1117;border:1px solid #30363d;border-radius:6px"><div style="font-size:11px;color:#8b949e">COMPUTED</div><div style="font-size:12px;margin-top:4px">'+fmtTime(d.computed_at_ms)+'</div></div>';
+    h+='</div>';
+    if(Array.isArray(d.dimensions)&&d.dimensions.length>0){
+      h+='<div style="margin-top:16px;font-size:12px;color:#8b949e;margin-bottom:8px">DIMENSIONS</div>';
+      for(const dim of d.dimensions){
+        const name=dim.name||'?';const score=dim.score||0;const target=dim.target||1;
+        const pct=Math.min(100,Math.round(score/Math.max(target,0.001)*100));
+        const color=pct>=80?'#3fb950':pct>=50?'#d29922':'#f85149';
+        h+='<div class="dim-bar"><span class="dim-bar-label">'+esc(name)+'</span>';
+        h+='<span class="dim-bar-track"><span class="dim-bar-fill" style="width:'+pct+'%;background:'+color+'"></span></span>';
+        h+='<span class="dim-bar-val">'+score.toFixed(3)+'</span></div>';
+      }
+    }
+    detail.innerHTML=h;
+    card.style.display='block';
+  }catch(e){detail.innerHTML='<p class="empty-state">Failed to load peer detail.</p>';card.style.display='block';}
+}
+async function showDeadDropDetail(botId){
+  if(!meshGatewayUrl)return;
+  const card=document.getElementById('mesh-deaddrop-detail-card');
+  const detail=document.getElementById('mesh-deaddrop-detail');
+  try{
+    const d=await(await fetch(meshGatewayUrl+'/mesh/dead-drops/'+encodeURIComponent(botId))).json();
+    let h='<span class="detail-back" onclick="document.getElementById(\'mesh-deaddrop-detail-card\').style.display=\'none\'">← Close</span>';
+    h+='<div style="margin-top:8px;font-size:13px;margin-bottom:12px">Recipient: <strong style="font-family:monospace">'+esc(botId)+'</strong> — '+d.count+' messages</div>';
+    if(d.drops&&d.drops.length>0){
+      h+='<table class="dtable"><tr><th>#</th><th>From</th><th>Type</th><th>Age</th><th>Body Preview</th></tr>';
+      const now=Date.now();
+      for(let i=0;i<d.drops.length;i++){
+        const dd=d.drops[i];
+        const age=Math.round((now-dd.ts_ms)/60000)+'m ago';
+        const body=(dd.body||'').substring(0,60);
+        h+='<tr><td>'+(i+1)+'</td>';
+        h+='<td style="font-family:monospace;font-size:11px">'+esc((dd.from||'').substring(0,12)+'...')+'</td>';
+        h+='<td>'+esc(dd.msg_type)+'</td>';
+        h+='<td>'+age+'</td>';
+        h+='<td style="font-size:12px;color:#8b949e;max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+esc(body)+'</td></tr>';
+      }
+      h+='</table>';
+    }else{h+='<p class="empty-state">No pending messages.</p>';}
+    detail.innerHTML=h;
+    card.style.display='block';
+  }catch(e){detail.innerHTML='<p class="empty-state">Failed to load dead-drop detail.</p>';card.style.display='block';}
+}
+// ═══ BOTAWIKI TAB ═══
+async function pollBotawiki(){
+  if(activeTab!=='botawiki')return;
+  if(!meshGatewayUrl){
+    if(!meshConfigFetched){
+      try{
+        const cfg=await(await fetch('/dashboard/api/mesh')).json();
+        meshConfigFetched=true;
+        if(cfg.configured)meshGatewayUrl=cfg.gateway_url;
+      }catch(e){}
+    }
+    if(!meshGatewayUrl){
+      document.getElementById('botawiki-stats').innerHTML='<div class="card"><div class="stat status-warn">Not Configured</div><div class="stat-label">Gateway</div></div>';
+      document.getElementById('botawiki-claims-table').innerHTML='<p class="empty-state">No gateway configured.</p>';
+      return;
+    }
+  }
+  let allClaims=null;
+  try{allClaims=await(await fetch(meshGatewayUrl+'/botawiki/claims/all')).json();}catch(e){}
+  const statsDiv=document.getElementById('botawiki-stats');
+  const tableDiv=document.getElementById('botawiki-claims-table');
+  if(!allClaims||!allClaims.claims){
+    statsDiv.innerHTML='<div class="card"><div class="stat status-warn">Unreachable</div><div class="stat-label">Gateway</div></div>';
+    tableDiv.innerHTML='';return;
+  }
+  const claims=allClaims.claims;
+  const canonical=claims.filter(c=>c.status==='canonical').length;
+  const quarantine=claims.filter(c=>c.status==='quarantine').length;
+  const tombstoned=claims.filter(c=>c.status==='tombstoned').length;
+  let sc='<div class="card"><div class="stat">'+claims.length+'</div><div class="stat-label">Total Claims</div></div>';
+  sc+='<div class="card"><div class="stat status-ok">'+canonical+'</div><div class="stat-label">Canonical</div></div>';
+  sc+='<div class="card"><div class="stat status-warn">'+quarantine+'</div><div class="stat-label">Quarantine</div></div>';
+  sc+='<div class="card"><div class="stat">'+tombstoned+'</div><div class="stat-label">Tombstoned</div></div>';
+  statsDiv.innerHTML=sc;
+  if(claims.length===0){tableDiv.innerHTML='<p class="empty-state">No claims submitted yet.</p>';return;}
+  let h='<table class="dtable"><tr><th>ID</th><th>Namespace</th><th>Type</th><th>Status</th><th>Confidence</th><th>Votes</th><th>Submitted</th></tr>';
+  for(const c of claims){
+    const id=(c.id||'').substring(0,12)+'...';
+    const ct=typeof c.claim_type==='string'?c.claim_type:JSON.stringify(c.claim_type);
+    const statusClass=c.status==='canonical'?'badge-green':c.status==='quarantine'?'badge-yellow':c.status==='tombstoned'?'badge-red':'badge-gray';
+    const approves=c.votes?c.votes.filter(v=>v.approve).length:0;
+    const totalV=c.votes?c.votes.length:0;
+    h+='<tr class="screening-row" style="cursor:pointer" onclick="showBotawikiDetail(\''+esc(c.id)+'\')">';
+    h+='<td style="font-family:monospace;font-size:11px">'+esc(id)+'</td>';
+    h+='<td>'+esc(c.namespace)+'</td>';
+    h+='<td>'+esc(ct)+'</td>';
+    h+='<td><span class="badge '+statusClass+'">'+c.status+'</span></td>';
+    h+='<td>'+c.confidence_bp+' bp</td>';
+    h+='<td>'+approves+'/'+totalV+'</td>';
+    h+='<td style="font-size:12px">'+fmtTimeShort(c.submitted_at_ms)+'</td>';
+    h+='</tr>';
+  }
+  h+='</table>';
+  tableDiv.innerHTML=h;
+  window._botawikiClaims=claims;
+}
+function showBotawikiDetail(claimId){
+  const claims=window._botawikiClaims||[];
+  const c=claims.find(x=>x.id===claimId);
+  if(!c)return;
+  const card=document.getElementById('botawiki-detail-card');
+  const detail=document.getElementById('botawiki-detail');
+  let h='<span class="detail-back" onclick="document.getElementById(\'botawiki-detail-card\').style.display=\'none\'">← Close</span>';
+  h+='<div style="margin-top:12px;display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px">';
+  h+='<div style="padding:10px;background:#0d1117;border:1px solid #30363d;border-radius:6px"><div style="font-size:11px;color:#8b949e">ID</div><div style="font-family:monospace;font-size:10px;margin-top:4px;word-break:break-all">'+esc(c.id)+'</div></div>';
+  const ct=typeof c.claim_type==='string'?c.claim_type:JSON.stringify(c.claim_type);
+  h+='<div style="padding:10px;background:#0d1117;border:1px solid #30363d;border-radius:6px"><div style="font-size:11px;color:#8b949e">TYPE</div><div style="font-size:14px;margin-top:4px">'+esc(ct)+'</div></div>';
+  h+='<div style="padding:10px;background:#0d1117;border:1px solid #30363d;border-radius:6px"><div style="font-size:11px;color:#8b949e">NAMESPACE</div><div style="font-size:13px;margin-top:4px">'+esc(c.namespace)+'</div></div>';
+  h+='<div style="padding:10px;background:#0d1117;border:1px solid #30363d;border-radius:6px"><div style="font-size:11px;color:#8b949e">ATTESTER</div><div style="font-family:monospace;font-size:11px;margin-top:4px">'+esc((c.attester_id||'').substring(0,16)+'...')+'</div></div>';
+  h+='<div style="padding:10px;background:#0d1117;border:1px solid #30363d;border-radius:6px"><div style="font-size:11px;color:#8b949e">CONFIDENCE</div><div style="font-size:18px;font-weight:600;margin-top:4px">'+c.confidence_bp+' bp</div></div>';
+  const statusClass=c.status==='canonical'?'badge-green':c.status==='quarantine'?'badge-yellow':'badge-red';
+  h+='<div style="padding:10px;background:#0d1117;border:1px solid #30363d;border-radius:6px"><div style="font-size:11px;color:#8b949e">STATUS</div><div style="margin-top:4px"><span class="badge '+statusClass+'">'+c.status+'</span></div></div>';
+  h+='<div style="padding:10px;background:#0d1117;border:1px solid #30363d;border-radius:6px"><div style="font-size:11px;color:#8b949e">SUBMITTED</div><div style="font-size:12px;margin-top:4px">'+fmtTime(c.submitted_at_ms)+'</div></div>';
+  h+='</div>';
+  h+='<div style="margin-top:16px;font-size:12px;color:#8b949e;margin-bottom:8px">PAYLOAD</div>';
+  h+='<div class="json-body">'+tryPrettyJson(JSON.stringify(c.payload))+'</div>';
+  if(c.votes&&c.votes.length>0){
+    h+='<div style="margin-top:16px;font-size:12px;color:#8b949e;margin-bottom:8px">VOTES ('+c.votes.length+')</div>';
+    h+='<table class="dtable"><tr><th>#</th><th>Validator</th><th>Decision</th><th>Time</th></tr>';
+    for(let i=0;i<c.votes.length;i++){
+      const v=c.votes[i];
+      const dec=v.approve?'<span class="badge badge-green">approve</span>':'<span class="badge badge-red">reject</span>';
+      h+='<tr><td>'+(i+1)+'</td><td style="font-family:monospace;font-size:11px">'+esc(v.validator_id)+'</td><td>'+dec+'</td><td>'+fmtTimeShort(v.ts_ms)+'</td></tr>';
+    }
+    h+='</table>';
+  }
+  detail.innerHTML=h;
+  card.style.display='block';
+}
 function schedule(fn,ms){fn().finally(()=>setTimeout(()=>schedule(fn,ms),ms));}
 schedule(poll,2000);
 schedule(fetchAlerts,5000);
 schedule(pollMesh,2000);
+schedule(pollBotawiki,2000);
 </script>
 </body>
 </html>"#;

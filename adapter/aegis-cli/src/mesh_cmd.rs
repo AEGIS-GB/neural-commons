@@ -358,6 +358,245 @@ pub fn run_dead_drops(gateway_url: &str) {
     println!();
 }
 
+// ── Drill-down response types ──────────────────────────────────────
+
+#[derive(Deserialize, Debug)]
+pub struct PeerDetailResponse {
+    pub bot_id: String,
+    pub online: bool,
+    pub score_bp: u32,
+    pub dimensions: serde_json::Value,
+    pub tier: String,
+    pub computed_at_ms: i64,
+}
+
+#[derive(Deserialize, Debug)]
+pub struct RelayLogResponse {
+    pub events: Vec<RelayLogEvent>,
+    #[allow(dead_code)]
+    pub count: usize,
+}
+
+#[derive(Deserialize, Debug)]
+pub struct RelayLogEvent {
+    pub from: String,
+    pub to: String,
+    pub status: String,
+    pub msg_type: String,
+    pub ts_ms: i64,
+}
+
+#[derive(Deserialize, Debug)]
+pub struct DeadDropDetailResponse {
+    pub bot_id: String,
+    pub drops: Vec<DeadDropMessage>,
+    #[allow(dead_code)]
+    pub count: usize,
+}
+
+#[derive(Deserialize, Debug)]
+pub struct DeadDropMessage {
+    pub from: String,
+    pub body: String,
+    pub msg_type: String,
+    pub ts_ms: i64,
+    pub expires_ms: i64,
+}
+
+// ── Drill-down subcommand runners ──────────────────────────────────
+
+pub fn run_peer_detail(gateway_url: &str, bot_id: &str) {
+    let url = format!("{gateway_url}/mesh/peers/{bot_id}");
+    let resp = match client().get(&url).send() {
+        Ok(r) => r,
+        Err(_) => {
+            print_connection_error(gateway_url);
+            std::process::exit(1);
+        }
+    };
+
+    if resp.status().as_u16() == 404 {
+        eprintln!("Error: bot not found: {bot_id}");
+        std::process::exit(1);
+    }
+
+    let data: PeerDetailResponse = match resp.json() {
+        Ok(d) => d,
+        Err(e) => {
+            eprintln!("Error: failed to parse peer detail: {e}");
+            std::process::exit(1);
+        }
+    };
+
+    println!();
+    println!(
+        "\u{2501}\u{2501}\u{2501} Peer Detail \u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}"
+    );
+    println!();
+    println!("  Bot ID:       {}", data.bot_id);
+    println!(
+        "  Status:       {}",
+        if data.online { "online" } else { "offline" }
+    );
+    println!("  TRUSTMARK:    {} bp", data.score_bp);
+    println!("  Tier:         {}", data.tier);
+    println!(
+        "  Computed at:  {}",
+        format_age_ms(now_ms() - data.computed_at_ms)
+    );
+    println!();
+
+    // Render dimensions if available
+    if let Some(dims) = data.dimensions.as_array() {
+        println!("  \u{2500}\u{2500} Dimensions \u{2500}\u{2500}");
+        for dim in dims {
+            let name = dim["name"].as_str().unwrap_or("?");
+            let score = dim["score"].as_f64().unwrap_or(0.0);
+            let target = dim["target"].as_f64().unwrap_or(1.0);
+            let bar_width = 20;
+            let filled = ((score / target.max(0.001)) * bar_width as f64)
+                .round()
+                .min(bar_width as f64) as usize;
+            let empty = bar_width - filled;
+            println!(
+                "  {:<22} {:.3} / {:.3}  {}{}",
+                name,
+                score,
+                target,
+                "\u{2588}".repeat(filled),
+                "\u{2591}".repeat(empty)
+            );
+        }
+    } else if data.dimensions.is_object() {
+        println!("  \u{2500}\u{2500} Dimensions \u{2500}\u{2500}");
+        let pretty = serde_json::to_string_pretty(&data.dimensions).unwrap_or_default();
+        for line in pretty.lines() {
+            println!("  {line}");
+        }
+    }
+    println!();
+}
+
+pub fn run_relay_log(gateway_url: &str, limit: usize) {
+    let url = format!("{gateway_url}/mesh/relay/log?limit={limit}");
+    let resp = match client().get(&url).send() {
+        Ok(r) => r,
+        Err(_) => {
+            print_connection_error(gateway_url);
+            std::process::exit(1);
+        }
+    };
+
+    let data: RelayLogResponse = match resp.json() {
+        Ok(d) => d,
+        Err(e) => {
+            eprintln!("Error: failed to parse relay log: {e}");
+            std::process::exit(1);
+        }
+    };
+
+    println!();
+    println!(
+        "\u{2501}\u{2501}\u{2501} Relay Log \u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}"
+    );
+    println!();
+
+    if data.events.is_empty() {
+        println!("  No relay events recorded yet.");
+        println!();
+        return;
+    }
+
+    println!(
+        "  {:<14} {:<14} {:<14} {:<14} {}",
+        "Time", "From", "To", "Status", "Type"
+    );
+    println!(
+        "  {:<14} {:<14} {:<14} {:<14} {}",
+        "\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}",
+        "\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}",
+        "\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}",
+        "\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}",
+        "\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}",
+    );
+
+    for event in &data.events {
+        let age = format_age_ms(now_ms() - event.ts_ms);
+        println!(
+            "  {:<14} {:<14} {:<14} {:<14} {}",
+            age,
+            format_bot_id_short(&event.from),
+            format_bot_id_short(&event.to),
+            &event.status,
+            &event.msg_type,
+        );
+    }
+
+    println!();
+    println!("  {} events shown", data.events.len());
+    println!();
+}
+
+pub fn run_dead_drop_detail(gateway_url: &str, bot_id: &str) {
+    let url = format!("{gateway_url}/mesh/dead-drops/{bot_id}");
+    let resp = match client().get(&url).send() {
+        Ok(r) => r,
+        Err(_) => {
+            print_connection_error(gateway_url);
+            std::process::exit(1);
+        }
+    };
+
+    let data: DeadDropDetailResponse = match resp.json() {
+        Ok(d) => d,
+        Err(e) => {
+            eprintln!("Error: failed to parse dead-drop detail: {e}");
+            std::process::exit(1);
+        }
+    };
+
+    println!();
+    println!(
+        "\u{2501}\u{2501}\u{2501} Dead-Drops for {} \u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}\u{2501}",
+        format_bot_id_short(bot_id)
+    );
+    println!();
+
+    if data.drops.is_empty() {
+        println!("  No pending dead-drops for this bot.");
+        println!();
+        return;
+    }
+
+    for (i, drop) in data.drops.iter().enumerate() {
+        let age = format_age_ms(now_ms() - drop.ts_ms);
+        let ttl = format_age_ms(drop.expires_ms - now_ms());
+        let body_preview = if drop.body.len() > 80 {
+            format!("{}...", &drop.body[..80])
+        } else {
+            drop.body.clone()
+        };
+
+        println!("  [{}/{}]", i + 1, data.drops.len());
+        println!("    From:    {}", format_bot_id_short(&drop.from));
+        println!("    Type:    {}", drop.msg_type);
+        println!("    Age:     {}", age);
+        println!("    Expires: {}", ttl);
+        println!("    Body:    {}", body_preview);
+        println!();
+    }
+
+    println!("  {} pending messages", data.drops.len());
+    println!();
+}
+
+fn now_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as i64
+}
+
 // ── Tests ───────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -446,6 +685,51 @@ mod tests {
         assert_eq!(format_age_ms(30_000), "0m ago");
         // negative
         assert_eq!(format_age_ms(-1000), "just now");
+    }
+
+    #[test]
+    fn parse_peer_detail_response() {
+        let json = r#"{
+            "bot_id": "a7f3b2c1d9e4f5a2",
+            "online": true,
+            "score_bp": 8420,
+            "dimensions": [{"name": "chain_integrity", "score": 0.95, "target": 1.0}],
+            "tier": "T2",
+            "computed_at_ms": 1700000000000
+        }"#;
+        let resp: PeerDetailResponse = serde_json::from_str(json).unwrap();
+        assert_eq!(resp.bot_id, "a7f3b2c1d9e4f5a2");
+        assert!(resp.online);
+        assert_eq!(resp.score_bp, 8420);
+        assert_eq!(resp.tier, "T2");
+    }
+
+    #[test]
+    fn parse_relay_log_response() {
+        let json = r#"{
+            "events": [
+                {"from": "bot_a", "to": "bot_b", "status": "delivered", "msg_type": "relay", "ts_ms": 1700000000000}
+            ],
+            "count": 1
+        }"#;
+        let resp: RelayLogResponse = serde_json::from_str(json).unwrap();
+        assert_eq!(resp.count, 1);
+        assert_eq!(resp.events[0].status, "delivered");
+    }
+
+    #[test]
+    fn parse_dead_drop_detail_response() {
+        let json = r#"{
+            "bot_id": "bot_b",
+            "drops": [
+                {"from": "bot_a", "body": "hello", "msg_type": "relay", "ts_ms": 1700000000000, "expires_ms": 1700259200000}
+            ],
+            "count": 1
+        }"#;
+        let resp: DeadDropDetailResponse = serde_json::from_str(json).unwrap();
+        assert_eq!(resp.bot_id, "bot_b");
+        assert_eq!(resp.drops.len(), 1);
+        assert_eq!(resp.drops[0].body, "hello");
     }
 
     #[test]
