@@ -783,10 +783,17 @@ pub async fn botawiki_query(
         .unwrap_or(0);
 
     if let Err(e) = rate_limiter.check(&identity.pubkey, score_bp).await {
-        return (StatusCode::TOO_MANY_REQUESTS, Json(serde_json::json!({ "error": e }))).into_response();
+        return (
+            StatusCode::TOO_MANY_REQUESTS,
+            Json(serde_json::json!({ "error": e })),
+        )
+            .into_response();
     }
 
-    let limit = params.limit.unwrap_or(BOTAWIKI_DEFAULT_LIMIT).min(BOTAWIKI_DEFAULT_LIMIT);
+    let limit = params
+        .limit
+        .unwrap_or(BOTAWIKI_DEFAULT_LIMIT)
+        .min(BOTAWIKI_DEFAULT_LIMIT);
 
     let claims = botawiki_store
         .query(
@@ -796,7 +803,11 @@ pub async fn botawiki_query(
         )
         .await;
 
-    (StatusCode::OK, Json(serde_json::json!({ "claims": claims }))).into_response()
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({ "claims": claims })),
+    )
+        .into_response()
 }
 
 /// Minimum TRUSTMARK (basis points) to request Tier 3 admission.
@@ -2327,10 +2338,7 @@ mod tests {
         // Verify claim is in quarantine in the store
         let claim_id: uuid::Uuid = serde_json::from_value(json["claim_id"].clone()).unwrap();
         let stored = botawiki.get(&claim_id).await.unwrap();
-        assert_eq!(
-            stored.status,
-            crate::botawiki::ClaimStatus::Quarantine
-        );
+        assert_eq!(stored.status, crate::botawiki::ClaimStatus::Quarantine);
     }
 
     #[tokio::test]
@@ -2531,8 +2539,7 @@ mod tests {
         botawiki.vote(&claim_id, "v2", true).await.unwrap();
 
         // Query
-        let (pubkey, sig, ts_ms) =
-            sign_request(&sk, "GET", "/botawiki/query", b"");
+        let (pubkey, sig, ts_ms) = sign_request(&sk, "GET", "/botawiki/query", b"");
         let req = Request::builder()
             .method("GET")
             .uri("/botawiki/query?namespace=b/lore")
@@ -2612,8 +2619,7 @@ mod tests {
         }
 
         // Query only skills
-        let (pubkey, sig, ts_ms) =
-            sign_request(&sk, "GET", "/botawiki/query", b"");
+        let (pubkey, sig, ts_ms) = sign_request(&sk, "GET", "/botawiki/query", b"");
         let req = Request::builder()
             .method("GET")
             .uri("/botawiki/query?claim_type=skills")
@@ -2708,8 +2714,7 @@ mod tests {
         let (app, evaluator_svc) =
             evaluator_test_app(&requester, 5000, &evaluators, 80 * 3_600_000).await;
 
-        let (pubkey, sig, ts_ms) =
-            sign_request(&sk, "POST", "/evaluator/request-admission", b"");
+        let (pubkey, sig, ts_ms) = sign_request(&sk, "POST", "/evaluator/request-admission", b"");
         let req = Request::builder()
             .method("POST")
             .uri("/evaluator/request-admission")
@@ -2728,10 +2733,7 @@ mod tests {
         assert!(json["evaluators"].as_array().unwrap().len() >= 3);
 
         let admission = evaluator_svc.get(&requester).await.unwrap();
-        assert_eq!(
-            admission.status,
-            crate::evaluator::AdmissionStatus::Pending
-        );
+        assert_eq!(admission.status, crate::evaluator::AdmissionStatus::Pending);
     }
 
     #[tokio::test]
@@ -2743,8 +2745,7 @@ mod tests {
             evaluator_test_app(&requester, 5000, &evaluators, 80 * 3_600_000).await;
 
         // Request admission
-        let (pubkey, sig, ts_ms) =
-            sign_request(&sk, "POST", "/evaluator/request-admission", b"");
+        let (pubkey, sig, ts_ms) = sign_request(&sk, "POST", "/evaluator/request-admission", b"");
         let req = Request::builder()
             .method("POST")
             .uri("/evaluator/request-admission")
@@ -2757,14 +2758,8 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::CREATED);
 
         // Vote via store directly (HTTP identity doesn't match "e1"/"e2")
-        evaluator_svc
-            .vote(&requester, "e1", true)
-            .await
-            .unwrap();
-        let status = evaluator_svc
-            .vote(&requester, "e2", true)
-            .await
-            .unwrap();
+        evaluator_svc.vote(&requester, "e1", true).await.unwrap();
+        let status = evaluator_svc.vote(&requester, "e2", true).await.unwrap();
         assert_eq!(status, crate::evaluator::AdmissionStatus::Admitted);
     }
 
@@ -2773,11 +2768,9 @@ mod tests {
         let sk = aegis_crypto::ed25519::generate_keypair();
         let requester = hex::encode(sk.verifying_key().as_bytes());
         // Score 3000 < 4000 threshold
-        let (app, _) =
-            evaluator_test_app(&requester, 3000, &[], 80 * 3_600_000).await;
+        let (app, _) = evaluator_test_app(&requester, 3000, &[], 80 * 3_600_000).await;
 
-        let (pubkey, sig, ts_ms) =
-            sign_request(&sk, "POST", "/evaluator/request-admission", b"");
+        let (pubkey, sig, ts_ms) = sign_request(&sk, "POST", "/evaluator/request-admission", b"");
         let req = Request::builder()
             .method("POST")
             .uri("/evaluator/request-admission")
@@ -2806,9 +2799,7 @@ mod tests {
             .unwrap();
 
         // Try to vote as non-evaluator via store
-        let result = evaluator_svc
-            .vote(&requester, "intruder", true)
-            .await;
+        let result = evaluator_svc.vote(&requester, "intruder", true).await;
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("not a selected evaluator"));
     }

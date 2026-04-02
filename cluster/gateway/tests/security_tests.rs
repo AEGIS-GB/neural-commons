@@ -122,10 +122,7 @@ fn default_app_with_replay(replay: Arc<ReplayProtection>) -> Router {
     )
 }
 
-fn app_with_cache_and_limiter(
-    cache: TrustmarkCache,
-    limiter: Arc<TierRateLimiter>,
-) -> Router {
+fn app_with_cache_and_limiter(cache: TrustmarkCache, limiter: Arc<TierRateLimiter>) -> Router {
     security_test_app(
         MemoryStore::new(),
         cache,
@@ -186,7 +183,9 @@ async fn unsigned_request_rejected() {
         .method("POST")
         .uri("/evidence")
         .header("content-type", "application/json")
-        .body(Body::from(serde_json::to_vec(&sample_receipt_json()).unwrap()))
+        .body(Body::from(
+            serde_json::to_vec(&sample_receipt_json()).unwrap(),
+        ))
         .unwrap();
     let resp = app.oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
@@ -792,7 +791,9 @@ async fn invalid_hex_in_auth_rejected() {
         .header("content-type", "application/json")
         .header("authorization", "NC-Ed25519 ZZZZ:ZZZZ")
         .header("x-aegis-timestamp", current_ts_ms().to_string())
-        .body(Body::from(serde_json::to_vec(&sample_receipt_json()).unwrap()))
+        .body(Body::from(
+            serde_json::to_vec(&sample_receipt_json()).unwrap(),
+        ))
         .unwrap();
     let resp = app.oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
@@ -844,7 +845,9 @@ async fn empty_authorization_header_rejected() {
         .uri("/evidence")
         .header("authorization", "")
         .header("x-aegis-timestamp", current_ts_ms().to_string())
-        .body(Body::from(serde_json::to_vec(&sample_receipt_json()).unwrap()))
+        .body(Body::from(
+            serde_json::to_vec(&sample_receipt_json()).unwrap(),
+        ))
         .unwrap();
     let resp = app.oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
@@ -858,7 +861,9 @@ async fn bearer_token_auth_rejected() {
         .uri("/evidence")
         .header("authorization", "Bearer some-jwt-token-here")
         .header("x-aegis-timestamp", current_ts_ms().to_string())
-        .body(Body::from(serde_json::to_vec(&sample_receipt_json()).unwrap()))
+        .body(Body::from(
+            serde_json::to_vec(&sample_receipt_json()).unwrap(),
+        ))
         .unwrap();
     let resp = app.oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);

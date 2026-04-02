@@ -280,7 +280,11 @@ pub async fn auth_middleware(request: Request, next: Next) -> Response {
             .extensions
             .get::<Arc<crate::nats_bridge::TrustmarkCache>>()
         {
-            let score_bp = cache.get(&auth.pubkey).await.map(|s| s.score_bp).unwrap_or(0);
+            let score_bp = cache
+                .get(&auth.pubkey)
+                .await
+                .map(|s| s.score_bp)
+                .unwrap_or(0);
             crate::rate_limit::tier_from_score_bp(score_bp)
         } else {
             1 // default to Tier 1 if no cache
@@ -629,23 +633,24 @@ mod tests {
     fn test_app_with_replay() -> (Router, Arc<ReplayProtection>) {
         let rp = Arc::new(ReplayProtection::new());
         let rp_clone = rp.clone();
-        let authed = Router::new()
-            .route(
-                "/protected",
-                get(|ext: Extension<VerifiedIdentity>| async move {
-                    format!("hello {}", ext.pubkey)
-                }),
-            )
-            .route(
-                "/echo",
-                post(
-                    |ext: Extension<VerifiedIdentity>, body: String| async move {
-                        format!("from {} body={}", ext.pubkey, body)
-                    },
-                ),
-            )
-            .layer(middleware::from_fn(auth_middleware))
-            .layer(Extension(rp_clone));
+        let authed =
+            Router::new()
+                .route(
+                    "/protected",
+                    get(|ext: Extension<VerifiedIdentity>| async move {
+                        format!("hello {}", ext.pubkey)
+                    }),
+                )
+                .route(
+                    "/echo",
+                    post(
+                        |ext: Extension<VerifiedIdentity>, body: String| async move {
+                            format!("from {} body={}", ext.pubkey, body)
+                        },
+                    ),
+                )
+                .layer(middleware::from_fn(auth_middleware))
+                .layer(Extension(rp_clone));
 
         let router = Router::new()
             .route("/health", get(|| async { "ok" }))

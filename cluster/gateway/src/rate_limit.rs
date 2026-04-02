@@ -65,9 +65,9 @@ impl TokenBucket {
 fn tier_limits(tier: u8) -> (f64, f64) {
     match tier {
         1 => (10.0, 10.0 / 60.0),     // 10 req/min
-        2 => (100.0, 100.0 / 60.0),    // 100 req/min
-        3 => (1000.0, 1000.0 / 60.0),  // 1000 req/min
-        _ => (10.0, 10.0 / 60.0),      // default to Tier 1
+        2 => (100.0, 100.0 / 60.0),   // 100 req/min
+        3 => (1000.0, 1000.0 / 60.0), // 1000 req/min
+        _ => (10.0, 10.0 / 60.0),     // default to Tier 1
     }
 }
 

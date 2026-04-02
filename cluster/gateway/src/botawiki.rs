@@ -132,11 +132,7 @@ impl BotawikiStore {
         claims
             .values()
             .filter(|sc| sc.status == ClaimStatus::Canonical)
-            .filter(|sc| {
-                namespace
-                    .map(|ns| sc.claim.namespace == ns)
-                    .unwrap_or(true)
-            })
+            .filter(|sc| namespace.map(|ns| sc.claim.namespace == ns).unwrap_or(true))
             .filter(|sc| {
                 claim_type
                     .map(|ct| {
