@@ -206,6 +206,7 @@ mod receipt_tests {
             (ReceiptType::Evolution, "evolution"),
             (ReceiptType::AuthorizedWrite, "authorized_write"),
             (ReceiptType::BarrierUpdate, "barrier_update"),
+            (ReceiptType::DlpDetection, "dlp_detection"),
         ];
         for (rt, expected) in types_expected {
             let val = serde_json::to_value(&rt).unwrap();
@@ -356,6 +357,7 @@ mod trustmark_tests {
                 contribution_volume: BasisPoints::new(5000).unwrap(),
                 temporal_consistency: BasisPoints::new(7000).unwrap(),
                 vault_hygiene: BasisPoints::new(6000).unwrap(),
+                response_hygiene: BasisPoints::new(8000).unwrap(),
             },
             tier: Tier::Tier2,
             computed_at_ms: 1740000000000,
@@ -377,6 +379,7 @@ mod trustmark_tests {
                 contribution_volume: BasisPoints::new(5000).unwrap(),
                 temporal_consistency: BasisPoints::new(5000).unwrap(),
                 vault_hygiene: BasisPoints::new(5000).unwrap(),
+                response_hygiene: BasisPoints::new(5000).unwrap(),
             },
             tier: Tier::Tier1,
             computed_at_ms: 1740000000000,
@@ -397,6 +400,7 @@ mod trustmark_tests {
                 contribution_volume: BasisPoints::new(5000).unwrap(),
                 temporal_consistency: BasisPoints::new(7000).unwrap(),
                 vault_hygiene: BasisPoints::new(6000).unwrap(),
+                response_hygiene: BasisPoints::new(8000).unwrap(),
             },
             tier: Tier::Tier3,
             computed_at_ms: 1740000000000,
@@ -656,6 +660,7 @@ mod adversarial_tests {
                 contribution_volume: BasisPoints::new(10000).unwrap(),
                 temporal_consistency: BasisPoints::new(0).unwrap(),
                 vault_hygiene: BasisPoints::new(10000).unwrap(),
+                response_hygiene: BasisPoints::new(5000).unwrap(),
             },
             tier: Tier::Tier1,
             computed_at_ms: 1740000000000,

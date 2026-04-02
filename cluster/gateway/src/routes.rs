@@ -313,6 +313,7 @@ pub fn compute_trustmark_from_evidence(
             contribution_volume: bp(contribution_volume),
             temporal_consistency: bp(temporal_consistency),
             vault_hygiene: bp(vault_hygiene),
+            response_hygiene: bp(5000.0), // conservative default until adapter pushes DLP receipts
         },
         tier,
         computed_at_ms: now_ms,

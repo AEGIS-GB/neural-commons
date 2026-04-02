@@ -61,6 +61,8 @@ fn gather_from_evidence(store: &aegis_evidence::EvidenceStore, signals: &mut Loc
     let mut api_call_count: u64 = 0;
     let mut weighted_vault_leaks: f64 = 0.0;
     let mut weighted_vault_scans: f64 = 0.0;
+    let mut dlp_detections: u64 = 0;
+    let mut weighted_dlp_detections: f64 = 0.0;
     let mut timestamps: Vec<u64> = Vec::new();
     let mut seq: u64 = 1;
 
@@ -92,6 +94,10 @@ fn gather_from_evidence(store: &aegis_evidence::EvidenceStore, signals: &mut Loc
                 api_call_count += 1;
                 weighted_vault_scans += weight;
             }
+            if receipt.core.receipt_type == aegis_schemas::ReceiptType::DlpDetection {
+                dlp_detections += 1;
+                weighted_dlp_detections += weight;
+            }
 
             // Timestamps for temporal consistency (all receipts)
             timestamps.push(ts);
@@ -110,6 +116,13 @@ fn gather_from_evidence(store: &aegis_evidence::EvidenceStore, signals: &mut Loc
     signals.vault_scans_total = api_call_count;
     signals.weighted_vault_leaks = weighted_vault_leaks;
     signals.weighted_vault_scans = weighted_vault_scans;
+
+    // DLP/PII detection signals — screens happen per API response (= api_call_count)
+    signals.dlp_detections = dlp_detections;
+    signals.dlp_screens_total = api_call_count;
+    signals.weighted_dlp_detections = weighted_dlp_detections;
+    // DLP screens are co-incident with API calls, so reuse the same weighted count
+    signals.weighted_dlp_screens = weighted_vault_scans;
 
     // Sort timestamps for temporal consistency scoring
     timestamps.sort();
@@ -446,6 +459,55 @@ mod tests {
             vault.value > 0.6 && vault.value < 0.75,
             "3/203 with 0 redacted should be ~0.69: {}",
             vault.value
+        );
+    }
+
+    #[test]
+    fn dlp_detections_gathered() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("evidence.db");
+
+        let key = aegis_crypto::ed25519::generate_keypair();
+        let recorder = aegis_evidence::EvidenceRecorder::new(&db_path, key).unwrap();
+
+        // 100 API calls + 4 DLP detections
+        for _ in 0..100 {
+            recorder
+                .record_simple(aegis_schemas::ReceiptType::ApiCall, "forward", "200")
+                .unwrap();
+        }
+        for _ in 0..4 {
+            recorder
+                .record_simple(
+                    aegis_schemas::ReceiptType::DlpDetection,
+                    "dlp_response /v1/messages",
+                    "redacted (categories=pii, redactions=2)",
+                )
+                .unwrap();
+        }
+
+        let signals = gather_local_signals(dir.path());
+
+        assert_eq!(signals.dlp_detections, 4);
+        assert_eq!(signals.dlp_screens_total, 100); // ApiCall count
+        assert!(
+            (signals.weighted_dlp_detections - 4.0).abs() < 1.0,
+            "fresh DLP detections should have weight ~1.0: {}",
+            signals.weighted_dlp_detections
+        );
+
+        // Score the response_hygiene dimension
+        let score = crate::scoring::TrustmarkScore::compute(&signals);
+        let rh = score
+            .dimensions
+            .iter()
+            .find(|d| d.name == "response_hygiene")
+            .unwrap();
+        // 4/100 = 4% detection rate → (0.96 * 0.7) + (0.0 * 0.3) ≈ 0.672
+        assert!(
+            rh.value > 0.6 && rh.value < 0.75,
+            "4/100 DLP rate should be ~0.67: {}",
+            rh.value
         );
     }
 }

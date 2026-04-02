@@ -1343,6 +1343,53 @@ async fn forward_request(
             let hash_hex = hex::encode(hasher.finalize());
             let _ = evidence_tx.send((hash_hex, total));
 
+            // Screen the accumulated streaming response for DLP.
+            // Extract text content from SSE chunks before DLP scanning,
+            // because SSE splits text across delta chunks.
+            let stream_dlp_result = std::str::from_utf8(&accumulated).ok().map(|sse| {
+                let extracted = extract_text_from_sse(sse);
+                let target = if extracted.is_empty() {
+                    sse.to_string()
+                } else {
+                    extracted
+                };
+                crate::response_screen::screen_response_with_policy(&target, &stream_trust_policy)
+            });
+
+            // Record DLP detection in evidence chain for streaming responses
+            if let Some((_, ref screen_result)) = stream_dlp_result {
+                if (screen_result.screened || screen_result.blocked)
+                    && !screen_result.findings.is_empty()
+                {
+                    let categories: Vec<String> = screen_result
+                        .findings
+                        .iter()
+                        .map(|f| f.category.clone())
+                        .collect();
+                    if let Some(ref evidence) = stream_evidence
+                        && let Err(e) = evidence
+                            .on_dlp_detection(
+                                &stream_path,
+                                &categories,
+                                screen_result.redaction_count,
+                                screen_result.blocked,
+                                &stream_request_id,
+                            )
+                            .await
+                    {
+                        warn!("evidence hook error on streaming DLP detection: {e}");
+                    }
+                }
+            }
+
+            let stream_dlp_json = stream_dlp_result.and_then(|(_, r)| {
+                if r.screened || r.blocked {
+                    serde_json::to_value(&r).ok()
+                } else {
+                    None
+                }
+            });
+
             // Record streaming traffic IMMEDIATELY — recording is a first citizen.
             // If SLM is deferred, entry appears with slm=None, updated when SLM finishes.
             let entry_id = if let Some(ref recorder) = stream_traffic_recorder {
@@ -1362,30 +1409,7 @@ async fn forward_request(
                     stream_slm_verdict
                         .as_ref()
                         .and_then(|v| serde_json::to_value(v).ok()),
-                    // Screen the accumulated streaming response.
-                    // Extract text content from SSE chunks before DLP scanning,
-                    // because SSE splits text across delta chunks.
-                    std::str::from_utf8(&accumulated)
-                        .ok()
-                        .map(|sse| {
-                            let extracted = extract_text_from_sse(sse);
-                            let target = if extracted.is_empty() {
-                                sse.to_string()
-                            } else {
-                                extracted
-                            };
-                            crate::response_screen::screen_response_with_policy(
-                                &target,
-                                &stream_trust_policy,
-                            )
-                        })
-                        .and_then(|(_, r)| {
-                            if r.screened || r.blocked {
-                                serde_json::to_value(&r).ok()
-                            } else {
-                                None
-                            }
-                        }),
+                    stream_dlp_json,
                     Some(stream_request_id.as_str()),
                 )
             } else {
@@ -1558,14 +1582,38 @@ async fn forward_request(
                 return Ok(resp);
             }
 
-            if screen_result.screened {
-                info!(
-                    path = %path,
-                    redactions = screen_result.redaction_count,
-                    categories = ?screen_result.findings.iter().map(|f| &f.category).collect::<Vec<_>>(),
-                    "DLP: response redacted"
-                );
-                final_body = screened_text.into_bytes();
+            if screen_result.screened || screen_result.blocked {
+                let categories: Vec<String> = screen_result
+                    .findings
+                    .iter()
+                    .map(|f| f.category.clone())
+                    .collect();
+
+                if screen_result.screened {
+                    info!(
+                        path = %path,
+                        redactions = screen_result.redaction_count,
+                        categories = ?categories,
+                        "DLP: response redacted"
+                    );
+                    final_body = screened_text.into_bytes();
+                }
+
+                // Record DLP detection in evidence chain
+                if let Some(ref evidence) = state.hooks.evidence
+                    && !categories.is_empty()
+                    && let Err(e) = evidence
+                        .on_dlp_detection(
+                            &path,
+                            &categories,
+                            screen_result.redaction_count,
+                            screen_result.blocked,
+                            &req_info.request_id,
+                        )
+                        .await
+                {
+                    warn!("evidence hook error on DLP detection: {e}");
+                }
             }
             response_screen_result = Some(screen_result);
         }

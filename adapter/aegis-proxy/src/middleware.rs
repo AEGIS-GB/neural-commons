@@ -100,6 +100,16 @@ pub trait EvidenceHook: Send + Sync {
         secrets: &'a [String],
         request_id: &'a str,
     ) -> Pin<Box<dyn Future<Output = Result<(), ProxyError>> + Send + 'a>>;
+
+    /// Called when DLP/PII screening detects findings in a response.
+    fn on_dlp_detection<'a>(
+        &'a self,
+        path: &'a str,
+        categories: &'a [String],
+        redaction_count: u32,
+        blocked: bool,
+        request_id: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<(), ProxyError>> + Send + 'a>>;
 }
 
 // ---------------------------------------------------------------------------
@@ -363,6 +373,17 @@ impl EvidenceHook for NoopEvidenceHook {
         _path: &'a str,
         _direction: &'a str,
         _secrets: &'a [String],
+        _request_id: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<(), ProxyError>> + Send + 'a>> {
+        Box::pin(async { Ok(()) })
+    }
+
+    fn on_dlp_detection<'a>(
+        &'a self,
+        _path: &'a str,
+        _categories: &'a [String],
+        _redaction_count: u32,
+        _blocked: bool,
         _request_id: &'a str,
     ) -> Pin<Box<dyn Future<Output = Result<(), ProxyError>> + Send + 'a>> {
         Box::pin(async { Ok(()) })

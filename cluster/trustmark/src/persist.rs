@@ -144,7 +144,7 @@ mod tests {
         // Load it back
         let loaded = load_latest_snapshot(dir.path()).unwrap();
         assert!((loaded.total - score.total).abs() < f64::EPSILON);
-        assert_eq!(loaded.dimensions.len(), 6);
+        assert_eq!(loaded.dimensions.len(), 7);
     }
 
     #[test]

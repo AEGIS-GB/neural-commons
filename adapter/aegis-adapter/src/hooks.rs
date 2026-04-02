@@ -225,6 +225,67 @@ impl EvidenceHook for EvidenceHookImpl {
             Ok(())
         })
     }
+
+    fn on_dlp_detection<'a>(
+        &'a self,
+        path: &'a str,
+        categories: &'a [String],
+        redaction_count: u32,
+        blocked: bool,
+        request_id: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<(), ProxyError>> + Send + 'a>> {
+        Box::pin(async move {
+            let action = format!("dlp_response {}", path);
+            let outcome = if blocked {
+                format!(
+                    "blocked (categories={}, redactions={})",
+                    categories.join(", "),
+                    redaction_count,
+                )
+            } else {
+                format!(
+                    "redacted (categories={}, redactions={})",
+                    categories.join(", "),
+                    redaction_count,
+                )
+            };
+
+            record_receipt(
+                &self.recorder,
+                ReceiptType::DlpDetection,
+                &action,
+                &outcome,
+                None,
+                Some(&self.alert_tx),
+                Some(request_id),
+            );
+
+            let _ = self.alert_tx.send(crate::state::DashboardAlert {
+                ts_ms: std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_millis() as u64,
+                kind: "dlp_detection".to_string(),
+                message: format!(
+                    "DLP: {} finding(s) in response {} ({} redactions{})",
+                    categories.len(),
+                    path,
+                    redaction_count,
+                    if blocked { ", BLOCKED" } else { "" },
+                ),
+                receipt_seq: self.recorder.chain_head().head_seq,
+            });
+
+            info!(
+                path = %path,
+                categories = ?categories,
+                redaction_count = redaction_count,
+                blocked = blocked,
+                "evidence: DLP detection recorded"
+            );
+            Ok(())
+        })
+    }
 }
 
 // ---------------------------------------------------------------------------

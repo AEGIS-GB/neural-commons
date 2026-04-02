@@ -6,7 +6,7 @@
 use crate::BasisPoints;
 use serde::{Deserialize, Serialize};
 
-/// TRUSTMARK score — 6-dimensional weighted sum.
+/// TRUSTMARK score — 7-dimensional weighted sum.
 /// All values in basis points (0-10000).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct TrustmarkScore {
@@ -27,7 +27,7 @@ pub struct TrustmarkScore {
 /// All values in basis points (0-10000).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct TrustmarkDimensions {
-    /// Does this bot reliably relay mesh messages? Weight: 0.15
+    /// Does this bot reliably relay mesh messages? Weight: 0.10
     pub relay_reliability: BasisPoints,
     /// Is SOUL.md intact, no unauthorized changes? Weight: 0.25
     pub persona_integrity: BasisPoints,
@@ -35,10 +35,13 @@ pub struct TrustmarkDimensions {
     pub chain_integrity: BasisPoints,
     /// How active is this bot? Weight: 0.10
     pub contribution_volume: BasisPoints,
-    /// Is activity consistent over time? Weight: 0.15
+    /// Is activity consistent over time? Weight: 0.10
     pub temporal_consistency: BasisPoints,
     /// Are credentials properly secured? Weight: 0.15
     pub vault_hygiene: BasisPoints,
+    /// Is PII/PHI properly screened in responses? Weight: 0.10
+    #[serde(default)]
+    pub response_hygiene: BasisPoints,
 }
 
 /// Trust tier (D14)

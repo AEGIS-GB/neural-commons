@@ -175,6 +175,8 @@ pub enum ReceiptType {
     AuthorizedWrite,
     /// Barrier file list update
     BarrierUpdate,
+    /// DLP / PII detection in response
+    DlpDetection,
 }
 
 /// Merkle rollup receipt detail (D1).

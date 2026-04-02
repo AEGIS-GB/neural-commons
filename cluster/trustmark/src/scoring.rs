@@ -1,4 +1,4 @@
-//! TRUSTMARK score computation (D13) — weighted sum of 6 dimensions.
+//! TRUSTMARK score computation (D13) — weighted sum of 7 dimensions.
 //!
 //! # WARNING: unsafe float arithmetic
 //!
@@ -17,9 +17,10 @@ use serde::{Deserialize, Serialize};
 pub const WEIGHT_PERSONA_INTEGRITY: f64 = 0.25;
 pub const WEIGHT_CHAIN_INTEGRITY: f64 = 0.20;
 pub const WEIGHT_VAULT_HYGIENE: f64 = 0.15;
-pub const WEIGHT_TEMPORAL_CONSISTENCY: f64 = 0.15;
-pub const WEIGHT_RELAY_RELIABILITY: f64 = 0.15;
+pub const WEIGHT_TEMPORAL_CONSISTENCY: f64 = 0.10;
+pub const WEIGHT_RELAY_RELIABILITY: f64 = 0.10;
 pub const WEIGHT_CONTRIBUTION_VOLUME: f64 = 0.10;
+pub const WEIGHT_RESPONSE_HYGIENE: f64 = 0.10;
 
 /// A single dimension score with its weight.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -96,6 +97,18 @@ pub struct LocalSignals {
     // ── Relay Reliability (placeholder until mesh) ──
     pub relay_forwarded: u64,
     pub relay_failed: u64,
+
+    // ── Response Hygiene (DLP/PII detection in responses) ──
+    /// Total responses screened by DLP (= ApiCall response receipts).
+    pub dlp_screens_total: u64,
+    /// Number of DLP detections (PII, PHI, system prompt leaks, etc.)
+    pub dlp_detections: u64,
+    /// Number of DLP detections where content was redacted.
+    pub dlp_redacted: u64,
+    /// Decay-weighted DLP detection count.
+    pub weighted_dlp_detections: f64,
+    /// Decay-weighted DLP screen count.
+    pub weighted_dlp_screens: f64,
 }
 
 impl TrustmarkScore {
@@ -108,6 +121,7 @@ impl TrustmarkScore {
             Self::score_temporal_consistency(signals),
             Self::score_relay_reliability(signals),
             Self::score_contribution_volume(signals),
+            Self::score_response_hygiene(signals),
         ];
 
         let total: f64 = dims.iter().map(|d| d.contribution).sum();
@@ -437,6 +451,63 @@ impl TrustmarkScore {
         d
     }
 
+    fn score_response_hygiene(s: &LocalSignals) -> DimensionScore {
+        // Use decay-weighted counts when available, else fall back to raw counts
+        let (detections, screens) = if s.weighted_dlp_screens > 0.0 {
+            (s.weighted_dlp_detections, s.weighted_dlp_screens)
+        } else {
+            (s.dlp_detections as f64, s.dlp_screens_total as f64)
+        };
+
+        let (value, reason) = if screens == 0.0 {
+            (0.5, "no DLP screens performed yet".into())
+        } else if detections == 0.0 {
+            (
+                1.0,
+                format!("{} responses screened, 0 PII findings", s.dlp_screens_total),
+            )
+        } else {
+            let detection_rate = detections / screens;
+            let redaction_rate = if s.dlp_detections > 0 {
+                s.dlp_redacted as f64 / s.dlp_detections as f64
+            } else {
+                1.0
+            };
+            let value = ((1.0 - detection_rate) * 0.7 + redaction_rate * 0.3).clamp(0.0, 1.0);
+            (
+                value,
+                format!(
+                    "{} DLP findings in {} responses ({:.1}% weighted), {} redacted",
+                    s.dlp_detections,
+                    s.dlp_screens_total,
+                    detection_rate * 100.0,
+                    s.dlp_redacted,
+                ),
+            )
+        };
+        let formula = "(1 - decay_weighted_detection_rate) × 0.7 + redaction_rate × 0.3".into();
+        let inputs = format!(
+            "{} detections / {} screens · {} redacted · weighted detections={:.1} screens={:.1}",
+            s.dlp_detections, s.dlp_screens_total, s.dlp_redacted, detections, screens,
+        );
+        let improve = if value >= 0.95 {
+            String::new()
+        } else if s.dlp_redacted == 0 && s.dlp_detections > 0 {
+            "Enable enforce mode to auto-redact PII in responses. Check which responses contain personal data in the Trace tab.".into()
+        } else {
+            "Reduce PII/PHI exposure in LLM responses. Consider stricter system prompts or trust-level adjustments.".into()
+        };
+        dim(
+            "response_hygiene",
+            value,
+            WEIGHT_RESPONSE_HYGIENE,
+            reason,
+            formula,
+            inputs,
+            improve,
+        )
+    }
+
     /// Compute TRUSTMARK score in warden mode (self-attested, no mesh relay).
     ///
     /// Excludes relay_reliability (always estimated in warden mode) and
@@ -499,6 +570,7 @@ impl TrustmarkScore {
             contribution_volume: to_bp(dim_val("contribution_volume")),
             temporal_consistency: to_bp(dim_val("temporal_consistency")),
             vault_hygiene: to_bp(dim_val("vault_hygiene")),
+            response_hygiene: to_bp(dim_val("response_hygiene")),
         };
 
         let tier = if self.total >= 0.40 {
@@ -527,6 +599,7 @@ fn target_for(name: &str) -> f64 {
         "temporal_consistency" => 0.80, // regular traffic pattern (CV < 1.0)
         "relay_reliability" => 0.50,    // placeholder until mesh
         "contribution_volume" => 0.50,  // at least half the baseline
+        "response_hygiene" => 0.90,     // < 3% PII detection rate or redacted
         _ => 0.80,
     }
 }
@@ -580,7 +653,7 @@ mod tests {
             "fresh install should be moderate: {}",
             score.total
         );
-        assert_eq!(score.dimensions.len(), 6);
+        assert_eq!(score.dimensions.len(), 7);
     }
 
     #[test]
@@ -602,6 +675,11 @@ mod tests {
             volume_baseline: Some(100),
             relay_forwarded: 100,
             relay_failed: 0,
+            dlp_screens_total: 500,
+            dlp_detections: 0,
+            dlp_redacted: 0,
+            weighted_dlp_detections: 0.0,
+            weighted_dlp_screens: 0.0,
         };
         let score = TrustmarkScore::compute(&signals);
         assert!(
@@ -630,6 +708,11 @@ mod tests {
             volume_baseline: Some(100),
             relay_forwarded: 10,
             relay_failed: 90,
+            dlp_screens_total: 100,
+            dlp_detections: 40,
+            dlp_redacted: 5,
+            weighted_dlp_detections: 40.0,
+            weighted_dlp_screens: 100.0,
         };
         let score = TrustmarkScore::compute(&signals);
         assert!(
@@ -772,13 +855,44 @@ mod tests {
     }
 
     #[test]
+    fn response_hygiene_no_screens_is_default() {
+        let score = TrustmarkScore::compute(&LocalSignals::default());
+        assert!((score.dimensions[6].value - 0.5).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn response_hygiene_no_detections_is_1() {
+        let s = LocalSignals {
+            dlp_screens_total: 100,
+            dlp_detections: 0,
+            ..Default::default()
+        };
+        let score = TrustmarkScore::compute(&s);
+        assert!((score.dimensions[6].value - 1.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn response_hygiene_with_detections() {
+        let s = LocalSignals {
+            dlp_screens_total: 100,
+            dlp_detections: 10,
+            dlp_redacted: 8,
+            ..Default::default()
+        };
+        let score = TrustmarkScore::compute(&s);
+        // (1-0.1)*0.7 + (0.8)*0.3 = 0.63 + 0.24 = 0.87
+        assert!(score.dimensions[6].value > 0.8 && score.dimensions[6].value < 0.95);
+    }
+
+    #[test]
     fn weights_sum_to_one() {
         let sum = WEIGHT_PERSONA_INTEGRITY
             + WEIGHT_CHAIN_INTEGRITY
             + WEIGHT_VAULT_HYGIENE
             + WEIGHT_TEMPORAL_CONSISTENCY
             + WEIGHT_RELAY_RELIABILITY
-            + WEIGHT_CONTRIBUTION_VOLUME;
+            + WEIGHT_CONTRIBUTION_VOLUME
+            + WEIGHT_RESPONSE_HYGIENE;
         assert!((sum - 1.0).abs() < f64::EPSILON);
     }
 
@@ -801,6 +915,11 @@ mod tests {
             volume_baseline: Some(100),
             relay_forwarded: 100,
             relay_failed: 0,
+            dlp_screens_total: 500,
+            dlp_detections: 0,
+            dlp_redacted: 0,
+            weighted_dlp_detections: 0.0,
+            weighted_dlp_screens: 0.0,
         };
         let internal = TrustmarkScore::compute(&signals);
         let schema = internal.to_schema_score();
@@ -813,6 +932,7 @@ mod tests {
         assert!(schema.dimensions.temporal_consistency.value() <= 10000);
         assert!(schema.dimensions.relay_reliability.value() <= 10000);
         assert!(schema.dimensions.contribution_volume.value() <= 10000);
+        assert!(schema.dimensions.response_hygiene.value() <= 10000);
 
         // Perfect signals should produce a high score
         assert!(
