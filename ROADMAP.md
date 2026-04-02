@@ -1,115 +1,95 @@
 # Aegis Roadmap
 
-> Current release: **v0.2.33** (Tier 1 — Local Adapter + Channel Trust)
+> Current release: **v0.7.1** (Cluster Layer + GDPR/NIST DLP)
 > Tracking: [GitHub Milestones](https://github.com/AEGIS-GB/neural-commons/milestones)
 
-## What's Shipped (v0.2.x — Tier 1)
+## What's Shipped
 
-The local adapter is feature-complete with 461+ unit tests, 94 end-to-end tests, 76 security tests, and 71 CVE attack simulations passing.
+### v0.7.1 — GDPR/NIST-Compliant DLP
+- DistilBERT-NER ONNX model for PII detection in responses
+- Context-aware: skips dates, city names without addresses, version numbers
+- Trust-level controls: log-only, redact, or block
+- GDPR Article 9 + NIST SP 800-188 alignment
 
-- **4-layer screening pipeline** — Defense-in-depth prompt injection detection:
-  1. Heuristic (<1ms) — 14-pattern regex + SSRF detection (internal IPs, cloud metadata, fetch→exfil)
-  2. ProtectAI Classifier (~30ms) — ONNX DeBERTa-v2 model, cached at startup via `OnceLock`
-  3. SLM Deep Analysis (2-3s) — Local 30B model (Qwen3) async alongside LLM forwarding
-  4. Metaprompt Hardening (0ms) — 7 security rules injected into system message (format-agnostic)
-- **Channel trust (TRUSTMARK v0.3)** — Trust level resolved per-channel via signed Ed25519 certificates. Configurable channel patterns with glob matching. Trust determines classifier policy (blocking vs advisory), holster presets, and SSRF policy. [Issue #83](https://github.com/AEGIS-GB/neural-commons/issues/83)
-- **OpenClaw plugin** — `aegis-channel-trust` plugin auto-registers channel context on every incoming Telegram/Discord/Slack message with Ed25519 signed payloads
-- **Cognitive bridge** — `/aegis/register-channel`, `/aegis/channel-context` tool endpoints for agent frameworks
-- **Core proxy** — HTTP forwarding with SSE streaming, incremental SHA-256 hashing, provider detection (Anthropic + OpenAI), format-agnostic metaprompt injection
-- **Evidence chain** — SHA-256 hash chain in append-only SQLite WAL. Tamper-evident. Verifiable with `aegis export --verify`. Channel trust tagged on every receipt
-- **Credential vault** — Regex-based scanner, AES-256-GCM encryption, HKDF-SHA256 key derivation (D9), request + response scanning, VaultDetection receipts
-- **Write barrier** — Filesystem watcher on identity/memory files, snapshot-based restore in enforce mode, severity heuristics
-- **Memory monitor** — Change detection on MEMORY.md, memory/*.md, HEARTBEAT.md, SSE push
-- **Dashboard** — 9-tab web UI (Overview, Evidence, Vault, Access, Memory, SLM Screening, Channel Trust, Traffic, Alerts), SSE alert stream, unified request view with screening pipeline visualization
-- **CLI** — `aegis start/stop/restart`, `setup openclaw`, `scan`, `vault`, `export`, `update`, `slm use/engine/server`
-- **CI/CD** — Auto-release on merge, cross-platform builds (Linux, macOS x86/ARM, Windows), SHA-256 checksums
+### v0.7.0 — Cluster Layer (21 PRs, 28 pen tests)
+- **Edge Gateway** — axum server, NC-Ed25519 auth, health endpoint, graceful shutdown
+- **NATS Bridge** — evidence publishing, TRUSTMARK recomputation, cache subscriptions
+- **Adapter → Gateway Client** — evidence batch push, WSS connection, challenge-response auth
+- **Mesh Relay** — trust-weighted routing (TRUSTMARK ≥ 0.3), SLM screening on relay content
+- **Dead-Drops** — offline message storage (72h TTL, 500/identity quota)
+- **Botawiki** — claim submission, quarantine, 2/3 validator quorum, canonical status
+- **Evaluator** — Tier 3 admission, 2/3 evaluator quorum, chain verification
+- **Security** — replay protection, per-tier rate limiting, 28 penetration tests
 
----
+### v0.5.x–v0.6.x — TRUSTMARK + Pipeline + CLI
+- **TRUSTMARK as Health Monitor** — 6-dimension scoring, 90-day temporal decay, health circuit breaker, warden mode, per-dimension alerts, auto-tighten holster
+- **PipelineState** — UUID v7 request_id linking TrafficEntry ↔ Receipt(s), full lifecycle tracking
+- **DLP Location Tagging** — findings tagged as message_content, tool_call, or api_protocol
+- **CLI Trace Overhaul** — `aegis trace --watch` (live like top), rich detail view, per-layer breakdown, threat dimension bars, --section and --json flags
+- **Dashboard** — TRUSTMARK gauge, receipts panel linked by request_id, DLP location column
 
-## v0.3.0 — Tier 1 Hardening
-
-[Milestone](https://github.com/AEGIS-GB/neural-commons/milestone/1) · Target: April 2026
-
-Stability, security, and developer experience improvements. Channel trust hardening.
-
-### Quick Wins (~2 days)
-
-| Issue | What | Effort |
-|-------|------|--------|
-| [#36](https://github.com/AEGIS-GB/neural-commons/issues/36) | Graceful shutdown — flush receipts on Ctrl+C | 2h |
-| [#37](https://github.com/AEGIS-GB/neural-commons/issues/37) | Holster presets from config TOML | 2h |
-| [#38](https://github.com/AEGIS-GB/neural-commons/issues/38) | Snapshot store for `.env*` and glob files | 2h |
-| [#39](https://github.com/AEGIS-GB/neural-commons/issues/39) | Update snapshots after file evolution | 1h |
-| [#40](https://github.com/AEGIS-GB/neural-commons/issues/40) | Vault scanning for SSE/streamed responses | 1d |
-| [#41](https://github.com/AEGIS-GB/neural-commons/issues/41) | Structured error codes | 4h |
-| [#55](https://github.com/AEGIS-GB/neural-commons/issues/55) | `aegis setup slm` — guided Ollama + model install | 2h |
-
-### Medium Effort (~3 days)
-
-| Issue | What | Effort |
-|-------|------|--------|
-| [#42](https://github.com/AEGIS-GB/neural-commons/issues/42) | Dashboard HTML/JS as separate files | 4h |
-| [#43](https://github.com/AEGIS-GB/neural-commons/issues/43) | Binary signature verification | 1-2d |
-| [#44](https://github.com/AEGIS-GB/neural-commons/issues/44) | WebSocket proxy support | 2-3d |
-| [#45](https://github.com/AEGIS-GB/neural-commons/issues/45) | Dashboard authentication | 4h |
+### v0.2.x–v0.4.x — Local Adapter (Tier 1)
+- **5-layer screening pipeline** — heuristic + ProtectAI classifier + SLM + NER + metaprompt
+- **Evidence chain** — SHA-256 hash-linked, Ed25519 signed, append-only SQLite WAL
+- **Credential vault** — AES-256-GCM, HKDF-SHA256, request + response scanning
+- **Write barrier** — filesystem watcher, snapshot-based restore, triple-layer detection
+- **Memory monitor** — change detection, SSE push
+- **Channel trust** — Ed25519 signed certificates, trust-based screening policy
+- **Dashboard** — 9-tab web UI, SSE alert stream
+- **OpenClaw plugin** — auto-register channel context with signed payloads
+- **CLI** — setup, scan, vault, export, trust, slm management
+- **CI/CD** — auto-release, cross-platform builds, SHA-256 checksums
+- **30 security/design fixes** — key zeroization, RFC 8785 UTF-16 sorting, fail-closed on lock poison, atomic snapshot restore, config validation, deadlock fix
 
 ---
 
-## v0.4.0 — Cluster Foundation
+## What's Next
 
-[Milestone](https://github.com/AEGIS-GB/neural-commons/milestone/2) · Target: June 2026
+### v0.8.0 — Persistence + E2E Integration
 
-First cluster infrastructure. Adapters connect to the mesh. Full TRUSTMARK scoring.
+| Priority | What | Why |
+|----------|------|-----|
+| **P0** | PostgreSQL persistence for Gateway | Replace in-memory stores (EvidenceStore, BotawikiStore, EvaluatorService) |
+| **P0** | MinIO dead-drop storage | Replace in-memory dead-drops |
+| **P0** | Real two-bot E2E integration test | Gateway + NATS + two adapters, full message flow |
+| **P1** | NER false positive reduction | Improve model confidence thresholds on API metadata |
+| **P1** | Evaluator accountability (D20) | Evaluators must stake reputation when vouching |
+| **P2** | Botawiki semantic search (pgvector) | Vector similarity for knowledge queries |
 
-| Issue | What | Decisions |
-|-------|------|-----------|
-| [#46](https://github.com/AEGIS-GB/neural-commons/issues/46) | Edge Gateway routes | D3, D24 |
-| [#47](https://github.com/AEGIS-GB/neural-commons/issues/47) | TRUSTMARK scoring engine (6-dimension, temporal decay) | D13, D14, D15 |
-| [#48](https://github.com/AEGIS-GB/neural-commons/issues/48) | Evaluator system | D20 |
-| [#49](https://github.com/AEGIS-GB/neural-commons/issues/49) | Botawiki read API | D22, D28, D29 |
-| [#50](https://github.com/AEGIS-GB/neural-commons/issues/50) | NATS bridge | D3 v3 |
-| [#56](https://github.com/AEGIS-GB/neural-commons/issues/56) | Standalone SLM — bundle ONNX model, drop Ollama dependency | D4 |
-| [#83](https://github.com/AEGIS-GB/neural-commons/issues/83) | TRUSTMARK v0.4 — effective trust formula, per-channel scoring, distributed trust | D13-D15 |
+### v0.9.0 — Mesh Mode
 
-**Depends on:** All v0.3.0 hardening complete. Channel trust foundation shipped in v0.2.x. Gateway auth already implemented (Ed25519 stateless).
+| Priority | What | Why |
+|----------|------|-----|
+| **P0** | Peer-verified TRUSTMARK | Other bots attest scores, not just self-reporting |
+| **P0** | libp2p mesh relay | Direct bot-to-bot communication |
+| **P1** | Relay reliability dimension (live) | Observed by peers, not estimated |
+| **P1** | Chain integrity cross-verification | Peers download and verify each other's chains |
+| **P2** | Centaur anomaly detection (D34) | ML-powered behavioral analysis |
 
----
+### v1.0.0 — Production
 
-## v0.5.0 — Mesh & Intelligence
-
-[Milestone](https://github.com/AEGIS-GB/neural-commons/milestone/3) · Target: TBD
-
-ML-powered anomaly detection, multi-bot coordination, shared knowledge.
-
-| Issue | What | Decisions |
-|-------|------|-----------|
-| [#51](https://github.com/AEGIS-GB/neural-commons/issues/51) | Centaur anomaly detection | D34 |
-| [#52](https://github.com/AEGIS-GB/neural-commons/issues/52) | Swarm coordination | D33 |
-| [#53](https://github.com/AEGIS-GB/neural-commons/issues/53) | Botawiki write path + disputes | — |
-| [#54](https://github.com/AEGIS-GB/neural-commons/issues/54) | Foundation broadcast | — |
-
-**Depends on:** v0.4.0 cluster foundation (Gateway, TRUSTMARK, Evaluator, Botawiki read).
+| Priority | What | Why |
+|----------|------|-----|
+| **P0** | Binary signature verification | Verify update authenticity |
+| **P0** | WebSocket proxy support | Agent frameworks using WS |
+| **P1** | Swarm coordination (D33) | Multi-bot task coordination |
+| **P1** | Foundation broadcast | Network-wide announcements |
+| **P2** | Standalone SLM (D4) | Bundle ONNX model, drop external SLM dependency |
 
 ---
 
 ## Decision Register
 
-All architectural decisions are tracked in [DECISIONS.md](DECISIONS.md).
+All architectural decisions tracked in [DECISIONS.md](DECISIONS.md).
 
 | Phase | Decisions | Status |
 |-------|-----------|--------|
-| Phase 0 (Foundation) | D0–D5 | LOCKED ✅ |
-| Phase 1 (Tier 1) | D6–D12, D30–D31 | LOCKED ✅ |
-| Phase 2 (Cluster) | D13–D29, D32–D35 | Decided, not implemented |
+| Phase 0 (Foundation) | D0–D5 | LOCKED |
+| Phase 1 (Tier 1) | D6–D12, D30–D31 | LOCKED |
+| Phase 2 (Cluster) | D13–D29, D32–D35 | Implemented (v0.7.0) |
 
 ---
 
 ## Contributing
 
-Pick any issue from the [v0.3.0 milestone](https://github.com/AEGIS-GB/neural-commons/milestone/1). The quick wins (#36-#41) are good first issues — each is self-contained with clear scope.
-
-```bash
-# Build and test
-cargo test --workspace
-./tests/e2e/smoke_test.sh
-```
+See [CONTRIBUTING.md](CONTRIBUTING.md). The [summary issue #218](https://github.com/AEGIS-GB/neural-commons/issues/218) lists all planned work with context.
