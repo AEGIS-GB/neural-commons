@@ -153,6 +153,11 @@ async fn main() {
                     tracing::warn!("failed to subscribe to trustmark.updated: {e}");
                 }
 
+                // Set up JetStream durable streams
+                if let Err(e) = bridge.setup_jetstream().await {
+                    tracing::warn!("JetStream setup failed: {e}, streams may not be durable");
+                }
+
                 Some(bridge)
             }
             Err(e) => {
@@ -172,6 +177,21 @@ async fn main() {
     let botawiki_store = Arc::new(BotawikiStore::new());
     let relay_stats = Arc::new(RelayStats::new());
     let relay_log = Arc::new(RelayLog::new());
+
+    // Replay MESH stream to rebuild in-memory state from NATS
+    if let Some(bridge) = &nats_bridge {
+        match bridge
+            .replay_mesh_stream(
+                botawiki_store.clone(),
+                relay_log.clone(),
+                dead_drop_store.clone(),
+            )
+            .await
+        {
+            Ok(count) => tracing::info!(count, "mesh state restored from NATS"),
+            Err(e) => tracing::warn!("mesh replay failed: {e}"),
+        }
+    }
 
     // Replay protection (in-memory, inline cleanup)
     let replay_protection = Arc::new(auth::ReplayProtection::new());

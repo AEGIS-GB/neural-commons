@@ -16,8 +16,11 @@ use async_nats::Client;
 use futures::StreamExt;
 use tokio::sync::RwLock;
 
+use crate::botawiki::BotawikiStore;
+use crate::mesh_routes::{RelayEvent, RelayLog};
 use crate::routes::compute_trustmark_from_evidence;
 use crate::store::EvidenceStore;
+use crate::ws::DeadDropStore;
 
 // Re-exported from axum (which re-exports from hyper/http-body/bytes)
 type Bytes = axum::body::Bytes;
@@ -51,6 +54,131 @@ impl NatsBridge {
         self.client
             .publish("evidence.new", Bytes::copy_from_slice(receipt_json))
             .await
+    }
+
+    /// Set up JetStream streams for durable persistence.
+    /// Creates streams if they don't exist, or verifies existing ones.
+    pub async fn setup_jetstream(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let jetstream = async_nats::jetstream::new(self.client.clone());
+
+        // EVIDENCE stream — file-backed, 30-day retention
+        let _ = jetstream
+            .get_or_create_stream(async_nats::jetstream::stream::Config {
+                name: "EVIDENCE".to_string(),
+                subjects: vec!["evidence.>".to_string()],
+                retention: async_nats::jetstream::stream::RetentionPolicy::Limits,
+                max_age: std::time::Duration::from_secs(30 * 24 * 3600), // 30 days
+                storage: async_nats::jetstream::stream::StorageType::File,
+                ..Default::default()
+            })
+            .await?;
+
+        // MESH stream — relay events, claims, dead-drops
+        let _ = jetstream
+            .get_or_create_stream(async_nats::jetstream::stream::Config {
+                name: "MESH".to_string(),
+                subjects: vec!["mesh.>".to_string(), "botawiki.>".to_string()],
+                retention: async_nats::jetstream::stream::RetentionPolicy::Limits,
+                max_age: std::time::Duration::from_secs(7 * 24 * 3600), // 7 days
+                storage: async_nats::jetstream::stream::StorageType::File,
+                ..Default::default()
+            })
+            .await?;
+
+        // TRUSTMARK stream — latest scores only
+        let _ = jetstream
+            .get_or_create_stream(async_nats::jetstream::stream::Config {
+                name: "TRUSTMARK".to_string(),
+                subjects: vec!["trustmark.>".to_string()],
+                retention: async_nats::jetstream::stream::RetentionPolicy::Limits,
+                max_age: std::time::Duration::from_secs(7 * 24 * 3600),
+                storage: async_nats::jetstream::stream::StorageType::File,
+                ..Default::default()
+            })
+            .await?;
+
+        tracing::info!("JetStream streams configured (EVIDENCE, MESH, TRUSTMARK)");
+        Ok(())
+    }
+
+    /// Publish a mesh event (relay, claim, dead-drop) to a NATS subject.
+    ///
+    /// JetStream captures these via subject matching on the MESH stream.
+    pub async fn publish_mesh_event(
+        &self,
+        subject: &str,
+        payload: &[u8],
+    ) -> Result<(), async_nats::PublishError> {
+        self.client
+            .publish(subject.to_string(), Bytes::copy_from_slice(payload))
+            .await
+    }
+
+    /// Replay the MESH stream to rebuild in-memory state.
+    /// Called once on Gateway startup after JetStream setup.
+    pub async fn replay_mesh_stream(
+        &self,
+        botawiki_store: Arc<BotawikiStore>,
+        relay_log: Arc<RelayLog>,
+        _dead_drop_store: Arc<DeadDropStore>,
+    ) -> Result<usize, Box<dyn std::error::Error + Send + Sync>> {
+        let jetstream = async_nats::jetstream::new(self.client.clone());
+
+        let mut stream = match jetstream.get_stream("MESH").await {
+            Ok(s) => s,
+            Err(_) => {
+                tracing::info!("MESH stream not found, nothing to replay");
+                return Ok(0);
+            }
+        };
+
+        let info = stream.info().await?;
+        let msg_count = info.state.messages;
+        tracing::info!(messages = msg_count, "replaying MESH stream");
+
+        // Create an ephemeral consumer that starts from the beginning
+        let consumer = stream
+            .create_consumer(async_nats::jetstream::consumer::pull::Config {
+                deliver_policy: async_nats::jetstream::consumer::DeliverPolicy::All,
+                ack_policy: async_nats::jetstream::consumer::AckPolicy::None,
+                name: Some(format!("replay-{}", std::process::id())),
+                ..Default::default()
+            })
+            .await?;
+
+        let mut messages = consumer.messages().await?;
+        let mut replayed = 0u64;
+
+        // Use timeout to stop when no more messages
+        while let Ok(Some(msg)) = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            futures::StreamExt::next(&mut messages),
+        )
+        .await
+        {
+            if let Ok(msg) = msg {
+                let subject = msg.subject.as_str();
+                match subject {
+                    "mesh.relay" => {
+                        if let Ok(event) = serde_json::from_slice::<RelayEvent>(&msg.payload) {
+                            relay_log.push(event);
+                        }
+                    }
+                    "botawiki.claim.stored" => {
+                        if let Ok(stored) =
+                            serde_json::from_slice::<crate::botawiki::StoredClaim>(&msg.payload)
+                        {
+                            botawiki_store.restore(stored).await;
+                        }
+                    }
+                    _ => {}
+                }
+                replayed += 1;
+            }
+        }
+
+        tracing::info!(replayed, "MESH stream replay complete");
+        Ok(replayed as usize)
     }
 
     /// Publish an evidence rollup to `evidence.rollup`.
@@ -295,6 +423,16 @@ mod tests {
             result.is_err(),
             "should fail to connect to non-running NATS"
         );
+    }
+
+    #[tokio::test]
+    async fn setup_jetstream_without_nats() {
+        // Verify graceful failure when NATS is not running
+        let result = NatsBridge::connect("nats://127.0.0.1:14222").await;
+        assert!(result.is_err(), "should fail without NATS server");
+        // The Gateway handles this by skipping JetStream setup entirely
+        // when NatsBridge::connect fails. This test verifies the connect
+        // path returns Err (not panic) so the caller can handle it.
     }
 
     #[test]

@@ -410,6 +410,7 @@ pub async fn mesh_send<S: EvidenceStore>(
     Extension(trustmark_cache): Extension<Arc<TrustmarkCache>>,
     Extension(wss_registry): Extension<Arc<WssConnectionRegistry>>,
     Extension(dead_drop_store): Extension<Arc<DeadDropStore>>,
+    Extension(nats_bridge): Extension<Option<Arc<NatsBridge>>>,
     Extension(relay_stats): Extension<Arc<RelayStats>>,
     Extension(relay_log): Extension<Arc<RelayLog>>,
     Json(payload): Json<MeshSendRequest>,
@@ -506,13 +507,20 @@ pub async fn mesh_send<S: EvidenceStore>(
                 "mesh relay quarantined: injection detected in relay message"
             );
             relay_stats.quarantined.fetch_add(1, Ordering::Relaxed);
-            relay_log.push(RelayEvent {
+            let relay_event = RelayEvent {
                 from: identity.pubkey.clone(),
                 to: payload.to.clone(),
                 status: "quarantined".into(),
                 msg_type: payload.msg_type.clone(),
                 ts_ms: now_epoch_ms(),
-            });
+                reason: "injection pattern detected".into(),
+                body_preview: payload.body.chars().take(100).collect(),
+            };
+            relay_log.push(relay_event.clone());
+            if let Some(bridge) = nats_bridge.as_ref() {
+                let event_json = serde_json::to_vec(&relay_event).unwrap_or_default();
+                let _ = bridge.publish_mesh_event("mesh.relay", &event_json).await;
+            }
             return (
                 StatusCode::FORBIDDEN,
                 Json(serde_json::json!({
@@ -544,13 +552,20 @@ pub async fn mesh_send<S: EvidenceStore>(
         let delivered = wss_registry.send_to(&payload.to, &envelope_json).await;
         if delivered {
             relay_stats.sent.fetch_add(1, Ordering::Relaxed);
-            relay_log.push(RelayEvent {
+            let relay_event = RelayEvent {
                 from: identity.pubkey.clone(),
                 to: payload.to.clone(),
                 status: "delivered".into(),
                 msg_type: payload.msg_type.clone(),
                 ts_ms: now_epoch_ms(),
-            });
+                reason: String::new(),
+                body_preview: payload.body.chars().take(100).collect(),
+            };
+            relay_log.push(relay_event.clone());
+            if let Some(bridge) = nats_bridge.as_ref() {
+                let event_json = serde_json::to_vec(&relay_event).unwrap_or_default();
+                let _ = bridge.publish_mesh_event("mesh.relay", &event_json).await;
+            }
             tracing::info!(
                 from = %identity.pubkey,
                 to = %payload.to,
@@ -577,13 +592,20 @@ pub async fn mesh_send<S: EvidenceStore>(
         {
             Ok(()) => {
                 relay_stats.dead_dropped.fetch_add(1, Ordering::Relaxed);
-                relay_log.push(RelayEvent {
+                let relay_event = RelayEvent {
                     from: identity.pubkey.clone(),
                     to: payload.to.clone(),
                     status: "dead_dropped".into(),
                     msg_type: payload.msg_type.clone(),
                     ts_ms: now_epoch_ms(),
-                });
+                    reason: "recipient offline".into(),
+                    body_preview: payload.body.chars().take(100).collect(),
+                };
+                relay_log.push(relay_event.clone());
+                if let Some(bridge) = nats_bridge.as_ref() {
+                    let event_json = serde_json::to_vec(&relay_event).unwrap_or_default();
+                    let _ = bridge.publish_mesh_event("mesh.relay", &event_json).await;
+                }
                 tracing::info!(
                     from = %identity.pubkey,
                     to = %payload.to,
@@ -640,6 +662,7 @@ pub async fn botawiki_submit_claim(
     Extension(identity): Extension<VerifiedIdentity>,
     Extension(trustmark_cache): Extension<Arc<TrustmarkCache>>,
     Extension(botawiki_store): Extension<Arc<BotawikiStore>>,
+    Extension(nats_bridge): Extension<Option<Arc<NatsBridge>>>,
     Json(req): Json<SubmitClaimRequest>,
 ) -> impl IntoResponse {
     // 1. Verify sender has TRUSTMARK >= 0.3
@@ -694,7 +717,17 @@ pub async fn botawiki_submit_claim(
     // 5. Store in quarantine
     let claim_id = botawiki_store.submit(claim, validators.clone()).await;
 
-    // 6. Return 201 with claim ID and selected validators
+    // 6. Publish to NATS for persistence
+    if let Some(bridge) = nats_bridge.as_ref()
+        && let Some(stored) = botawiki_store.get(&claim_id).await
+    {
+        let json = serde_json::to_vec(&stored).unwrap_or_default();
+        let _ = bridge
+            .publish_mesh_event("botawiki.claim.stored", &json)
+            .await;
+    }
+
+    // 7. Return 201 with claim ID and selected validators
     (
         StatusCode::CREATED,
         Json(serde_json::json!({
@@ -717,20 +750,32 @@ pub struct VoteRequest {
 pub async fn botawiki_vote(
     Extension(identity): Extension<VerifiedIdentity>,
     Extension(botawiki_store): Extension<Arc<BotawikiStore>>,
+    Extension(nats_bridge): Extension<Option<Arc<NatsBridge>>>,
     Json(req): Json<VoteRequest>,
 ) -> impl IntoResponse {
     match botawiki_store
         .vote(&req.claim_id, &identity.pubkey, req.approve)
         .await
     {
-        Ok(status) => (
-            StatusCode::OK,
-            Json(serde_json::json!({
-                "claim_id": req.claim_id,
-                "status": status,
-            })),
-        )
-            .into_response(),
+        Ok(status) => {
+            // Publish updated claim to NATS for persistence
+            if let Some(bridge) = nats_bridge.as_ref()
+                && let Some(stored) = botawiki_store.get(&req.claim_id).await
+            {
+                let json = serde_json::to_vec(&stored).unwrap_or_default();
+                let _ = bridge
+                    .publish_mesh_event("botawiki.claim.stored", &json)
+                    .await;
+            }
+            (
+                StatusCode::OK,
+                Json(serde_json::json!({
+                    "claim_id": req.claim_id,
+                    "status": status,
+                })),
+            )
+                .into_response()
+        }
         Err(e) if e.contains("not a selected validator") => (
             StatusCode::FORBIDDEN,
             Json(serde_json::json!({ "error": e })),

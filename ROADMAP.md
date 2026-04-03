@@ -45,7 +45,17 @@
 
 ## What's Next
 
-### v0.8.0 — Persistence + E2E Integration
+### v0.8.0 — JetStream Persistence + Peer Attestation Foundation
+
+| Priority | What | Why |
+|----------|------|-----|
+| **P0** | NATS JetStream durable streams | Mesh state survives Gateway restart |
+| **P0** | Relay log with screening detail | Quarantine reasons visible in dashboard + CLI |
+| **P1** | Peer attestation model (Issue #228) | TRUSTMARK from peer observations, not self-reporting |
+| **P1** | Stream replay on startup | Gateway rebuilds Botawiki/relay state from NATS |
+| **P2** | Cross-node chain verification | Nodes verify each other's event chains |
+
+### v0.8.1 — Persistence + E2E Integration
 
 | Priority | What | Why |
 |----------|------|-----|

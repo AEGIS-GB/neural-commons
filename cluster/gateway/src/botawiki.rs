@@ -150,6 +150,11 @@ impl BotawikiStore {
         Ok(stored.status.clone())
     }
 
+    /// Restore a stored claim from replay (used during startup).
+    pub async fn restore(&self, stored: StoredClaim) {
+        self.claims.write().await.insert(stored.claim.id, stored);
+    }
+
     /// Get a stored claim by ID.
     pub async fn get(&self, id: &Uuid) -> Option<StoredClaim> {
         self.claims.read().await.get(id).cloned()
@@ -400,6 +405,40 @@ mod tests {
         let can = all.iter().find(|c| c.id == id2).unwrap();
         assert_eq!(can.status, ClaimStatus::Canonical);
         assert_eq!(can.votes.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn botawiki_restore() {
+        let store = BotawikiStore::new();
+        let claim = sample_claim();
+        let id = claim.id;
+
+        let stored = StoredClaim {
+            claim,
+            status: ClaimStatus::Canonical,
+            votes: vec![
+                Vote {
+                    validator_id: "v1".into(),
+                    approve: true,
+                    ts_ms: 1700000000000,
+                },
+                Vote {
+                    validator_id: "v2".into(),
+                    approve: true,
+                    ts_ms: 1700000000001,
+                },
+            ],
+            validators: vec!["v1".into(), "v2".into(), "v3".into()],
+            submitted_at_ms: 1700000000000,
+        };
+
+        store.restore(stored).await;
+
+        let retrieved = store.get(&id).await.unwrap();
+        assert_eq!(retrieved.status, ClaimStatus::Canonical);
+        assert_eq!(retrieved.votes.len(), 2);
+        assert_eq!(retrieved.validators.len(), 3);
+        assert_eq!(retrieved.claim.namespace, "b/lore");
     }
 
     #[tokio::test]

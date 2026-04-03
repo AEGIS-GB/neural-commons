@@ -1780,17 +1780,23 @@ async function pollMesh(){
   }else{relayDiv.innerHTML='<p class="empty-state">No relay data.</p>';}
   // Relay log
   if(relayLog&&relayLog.events&&relayLog.events.length>0){
-    let rl='<table class="dtable"><tr><th>Time</th><th>From</th><th>To</th><th>Status</th><th>Type</th></tr>';
+    let rl='<table class="dtable"><tr><th>Time</th><th>From</th><th>To</th><th>Status</th><th>Reason</th><th>Type</th><th>Preview</th></tr>';
     for(const e of relayLog.events){
       const statusColors={delivered:'#3fb950',quarantined:'#f85149',dead_dropped:'#d29922'};
       const color=statusColors[e.status]||'#8b949e';
       const fromId=(e.from||'').substring(0,12)+'...';
       const toId=(e.to||'').substring(0,12)+'...';
-      rl+='<tr><td style="white-space:nowrap;font-size:12px">'+fmtTimeShort(e.ts_ms)+'</td>';
+      const reason=e.reason||'';
+      const preview=(e.body_preview||'').substring(0,60);
+      rl+='<tr style="cursor:pointer" title="'+esc(e.body_preview||'')+'">';
+      rl+='<td style="white-space:nowrap;font-size:12px">'+fmtTimeShort(e.ts_ms)+'</td>';
       rl+='<td style="font-family:monospace;font-size:11px">'+esc(fromId)+'</td>';
       rl+='<td style="font-family:monospace;font-size:11px">'+esc(toId)+'</td>';
-      rl+='<td style="color:'+color+';font-weight:600">'+e.status+'</td>';
-      rl+='<td>'+esc(e.msg_type)+'</td></tr>';
+      rl+='<td><span style="color:'+color+';font-weight:600;padding:2px 6px;border-radius:4px;background:'+color+'22">'+e.status+'</span></td>';
+      rl+='<td style="font-size:11px;color:#8b949e">'+esc(reason)+'</td>';
+      rl+='<td>'+esc(e.msg_type)+'</td>';
+      rl+='<td style="font-family:monospace;font-size:11px;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+esc(preview)+'</td>';
+      rl+='</tr>';
     }
     rl+='</table>';
     relayLogDiv.innerHTML=rl;
