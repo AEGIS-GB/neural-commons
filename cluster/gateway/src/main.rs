@@ -185,6 +185,8 @@ async fn main() {
                 botawiki_store.clone(),
                 relay_log.clone(),
                 dead_drop_store.clone(),
+                Some(evidence_store.clone()),
+                Some(trustmark_cache.clone()),
             )
             .await
         {
@@ -245,7 +247,7 @@ async fn main() {
         .layer(Extension(relay_stats))
         .layer(Extension(relay_log))
         .layer(Extension(botawiki_store))
-        .layer(Extension(dead_drop_store));
+        .layer(Extension(dead_drop_store.clone()));
 
     // CORS — allow dashboard on any origin to fetch mesh status
     let cors = CorsLayer::new()
@@ -254,7 +256,10 @@ async fn main() {
         .allow_headers(Any);
 
     // WSS route (challenge-response auth handled internally in ws.rs)
-    let ws_state = Arc::new(GatewayWsState { wss_registry });
+    let ws_state = Arc::new(GatewayWsState {
+        wss_registry,
+        dead_drop_store,
+    });
     let ws_routes = Router::new()
         .route("/ws", get(ws::ws_upgrade))
         .with_state(ws_state);
