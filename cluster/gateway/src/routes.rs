@@ -510,7 +510,7 @@ pub async fn mesh_send<S: EvidenceStore>(
                 msg_type: payload.msg_type.clone(),
                 ts_ms: now_epoch_ms(),
                 reason: "injection pattern detected".into(),
-                body_preview: payload.body.chars().take(100).collect(),
+                body_preview: payload.body.clone(),
             };
             relay_log.push(relay_event.clone());
             if let Some(bridge) = nats_bridge.as_ref() {
@@ -555,7 +555,7 @@ pub async fn mesh_send<S: EvidenceStore>(
                 msg_type: payload.msg_type.clone(),
                 ts_ms: now_epoch_ms(),
                 reason: String::new(),
-                body_preview: payload.body.chars().take(100).collect(),
+                body_preview: payload.body.clone(),
             };
             relay_log.push(relay_event.clone());
             if let Some(bridge) = nats_bridge.as_ref() {
@@ -595,7 +595,7 @@ pub async fn mesh_send<S: EvidenceStore>(
                     msg_type: payload.msg_type.clone(),
                     ts_ms: now_epoch_ms(),
                     reason: "recipient offline".into(),
-                    body_preview: payload.body.chars().take(100).collect(),
+                    body_preview: payload.body.clone(),
                 };
                 relay_log.push(relay_event.clone());
                 if let Some(bridge) = nats_bridge.as_ref() {

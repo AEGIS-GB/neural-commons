@@ -553,6 +553,7 @@ function shortHash(h){return h?h.substring(0,12)+'...':'—';}
 function fmtTime(ms){return new Date(ms).toLocaleString();}
 function fmtTimeShort(ms){return new Date(ms).toLocaleTimeString();}
 function esc(s){if(!s)return'—';const d=document.createElement('div');d.textContent=s;return d.innerHTML;}
+function tryPrettyJson(s){try{return'<pre style="margin:0;white-space:pre-wrap;word-break:break-word;font-size:12px;color:#c9d1d9">'+esc(JSON.stringify(JSON.parse(s),null,2))+'</pre>';}catch(e){return'<pre style="margin:0;font-size:12px;color:#c9d1d9">'+esc(s)+'</pre>';}}
 function renderEvidence(e){
   const stats=document.getElementById('evidence-stats');
   const tbl=document.getElementById('evidence-table');
@@ -1778,25 +1779,31 @@ async function pollMesh(){
     }
     relayDiv.innerHTML=rh;
   }else{relayDiv.innerHTML='<p class="empty-state">No relay data.</p>';}
-  // Relay log
+  // Relay log — clickable rows expand to show full message
   if(relayLog&&relayLog.events&&relayLog.events.length>0){
-    let rl='<table class="dtable"><tr><th>Time</th><th>From</th><th>To</th><th>Status</th><th>Reason</th><th>Type</th><th>Preview</th></tr>';
-    for(const e of relayLog.events){
+    let rl='<table class="dtable"><tr><th>Time</th><th>From</th><th>To</th><th>Status</th><th>Reason</th><th>Message</th></tr>';
+    for(let i=0;i<relayLog.events.length;i++){
+      const e=relayLog.events[i];
       const statusColors={delivered:'#3fb950',quarantined:'#f85149',dead_dropped:'#d29922'};
       const color=statusColors[e.status]||'#8b949e';
       const fromId=(e.from||'').substring(0,12)+'...';
       const toId=(e.to||'').substring(0,12)+'...';
-      const reason=e.reason||'';
-      const preview=(e.body_preview||'').substring(0,60);
-      rl+='<tr style="cursor:pointer" title="'+esc(e.body_preview||'')+'">';
+      const reason=e.reason||'—';
+      const preview=(e.body_preview||'').substring(0,50);
+      rl+='<tr style="cursor:pointer" onclick="document.getElementById(\'relay-detail-'+i+'\').style.display=document.getElementById(\'relay-detail-'+i+'\').style.display===\'none\'?\'table-row\':\'none\'">';
       rl+='<td style="white-space:nowrap;font-size:12px">'+fmtTimeShort(e.ts_ms)+'</td>';
       rl+='<td style="font-family:monospace;font-size:11px">'+esc(fromId)+'</td>';
       rl+='<td style="font-family:monospace;font-size:11px">'+esc(toId)+'</td>';
       rl+='<td><span style="color:'+color+';font-weight:600;padding:2px 6px;border-radius:4px;background:'+color+'22">'+e.status+'</span></td>';
       rl+='<td style="font-size:11px;color:#8b949e">'+esc(reason)+'</td>';
-      rl+='<td>'+esc(e.msg_type)+'</td>';
-      rl+='<td style="font-family:monospace;font-size:11px;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+esc(preview)+'</td>';
+      rl+='<td style="font-size:11px">'+esc(preview)+'...</td>';
       rl+='</tr>';
+      rl+='<tr id="relay-detail-'+i+'" style="display:none"><td colspan="6" style="padding:12px;background:#0d1117;border:1px solid #30363d">';
+      rl+='<div style="font-size:11px;color:#8b949e;margin-bottom:4px">FULL MESSAGE</div>';
+      rl+='<div style="font-family:monospace;font-size:12px;white-space:pre-wrap;word-break:break-word;color:#c9d1d9;padding:8px;background:#161b22;border-radius:4px">'+esc(e.body_preview||'')+'</div>';
+      rl+='<div style="margin-top:8px;font-size:11px;color:#8b949e">From: <span style="font-family:monospace">'+esc(e.from||'')+'</span></div>';
+      rl+='<div style="font-size:11px;color:#8b949e">To: <span style="font-family:monospace">'+esc(e.to||'')+'</span></div>';
+      rl+='</td></tr>';
     }
     rl+='</table>';
     relayLogDiv.innerHTML=rl;
