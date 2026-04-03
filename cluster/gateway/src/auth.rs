@@ -111,13 +111,17 @@ pub struct WssChallenge {
     pub ts_ms: i64,
 }
 
-/// WSS challenge response from adapter
+/// WSS challenge response from adapter.
+/// The adapter may include a `type` field which we ignore.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WssChallengeResponse {
     /// Transport public key, lowercase hex
     pub pubkey: String,
     /// Ed25519(transport_key, JCS({nonce, ts_ms}))
     pub sig: String,
+    /// Optional type field (adapter sends "auth_response", Gateway ignores)
+    #[serde(rename = "type", default)]
+    pub msg_type: Option<String>,
 }
 
 /// Parse an NC-Ed25519 authorization header.

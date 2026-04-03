@@ -127,8 +127,14 @@ async fn handle_ws(socket: WebSocket, state: Arc<GatewayWsState>) {
         nonce: nonce.clone(),
         ts_ms,
     };
-    let challenge_json = match serde_json::to_string(&challenge) {
-        Ok(j) => j,
+    // Include "type":"challenge" so adapters can use tagged enum deserialization
+    let challenge_json = match serde_json::to_value(&challenge) {
+        Ok(mut v) => {
+            v.as_object_mut()
+                .unwrap()
+                .insert("type".to_string(), serde_json::json!("challenge"));
+            serde_json::to_string(&v).unwrap()
+        }
         Err(e) => {
             warn!(error = %e, "failed to serialize WSS challenge");
             return;
@@ -573,6 +579,7 @@ mod tests {
         let response = WssChallengeResponse {
             pubkey: hex::encode(sk.verifying_key().as_bytes()),
             sig: hex::encode(sig.to_bytes()),
+            msg_type: None,
         };
         let response_json = serde_json::to_string(&response).unwrap();
 
@@ -597,6 +604,7 @@ mod tests {
         let response = WssChallengeResponse {
             pubkey: hex::encode(sk.verifying_key().as_bytes()),
             sig: hex::encode(sig.to_bytes()),
+            msg_type: None,
         };
         let response_json = serde_json::to_string(&response).unwrap();
 
