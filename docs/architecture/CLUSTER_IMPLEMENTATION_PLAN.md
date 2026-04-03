@@ -2,6 +2,27 @@
 
 > From stubs to working bot-to-bot communication with full security verification.
 
+## Agents vs Cluster Nodes
+
+**Agents run Aegis Adapters** — one per bot, on the bot's machine. The adapter proxies LLM traffic, screens for injection, records evidence locally, and connects to the cluster.
+
+**The cluster is shared infrastructure** — 5 nodes running Gateway, NATS, PostgreSQL, Botawiki, TRUSTMARK Engine, Mesh Relay, and MinIO. Agents don't run cluster nodes. They connect as clients.
+
+```
+10 agents (each runs Aegis Adapter)
+    |
+    +--HTTPS/WSS--> Edge Gateway (Node 2)
+                        |
+                      NATS Bus
+                        |
+                 +------+------+
+              Node 1  Node 3  Node 5
+              Evidence Botawiki MinIO
+              PostgreSQL pgvector
+```
+
+The cluster operator runs the infrastructure. Wardens run adapters. Trust comes from cryptographic signatures — the cluster can't forge bot-signed evidence or peer attestations.
+
 ## Goal
 
 Two bots, run by different wardens on different machines, communicate securely through the Aegis cluster. Each bot's Aegis adapter:

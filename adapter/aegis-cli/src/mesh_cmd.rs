@@ -381,6 +381,10 @@ pub struct RelayLogEvent {
     pub status: String,
     pub msg_type: String,
     pub ts_ms: i64,
+    #[serde(default)]
+    pub reason: String,
+    #[serde(default)]
+    pub body_preview: String,
 }
 
 #[derive(Deserialize, Debug)]
@@ -506,26 +510,41 @@ pub fn run_relay_log(gateway_url: &str, limit: usize) {
     }
 
     println!(
-        "  {:<14} {:<14} {:<14} {:<14} Type",
-        "Time", "From", "To", "Status"
+        "  {:<14} {:<14} {:<14} {:<14} {:<8} {:<24} Preview",
+        "Time", "From", "To", "Status", "Type", "Reason"
     );
     println!(
-        "  {:<14} {:<14} {:<14} {:<14} \u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}",
+        "  {:<14} {:<14} {:<14} {:<14} {:<8} {:<24} \u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}",
         "\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}",
         "\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}",
         "\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}",
         "\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}",
+        "\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}",
+        "\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}",
     );
 
     for event in &data.events {
         let age = format_age_ms(now_ms() - event.ts_ms);
+        let reason = if event.reason.is_empty() {
+            "\u{2014}".to_string()
+        } else {
+            event.reason.clone()
+        };
+        let preview: String = event.body_preview.chars().take(40).collect();
+        let preview = if event.body_preview.len() > 40 {
+            format!("{preview}...")
+        } else {
+            preview
+        };
         println!(
-            "  {:<14} {:<14} {:<14} {:<14} {}",
+            "  {:<14} {:<14} {:<14} {:<14} {:<8} {:<24} {}",
             age,
             format_bot_id_short(&event.from),
             format_bot_id_short(&event.to),
             &event.status,
             &event.msg_type,
+            reason,
+            preview,
         );
     }
 
