@@ -244,10 +244,13 @@ async fn main() {
         .route("/botawiki/claims/all", get(mesh_routes::botawiki_list_all))
         .layer(Extension(wss_registry.clone()))
         .layer(Extension(trustmark_cache))
-        .layer(Extension(relay_stats))
+        .layer(Extension(relay_stats.clone()))
         .layer(Extension(relay_log))
         .layer(Extension(botawiki_store))
         .layer(Extension(dead_drop_store.clone()));
+
+    // Clone relay_stats for WSS handler (dead-drop delivery counter)
+    let relay_stats_for_ws = relay_stats;
 
     // CORS — allow dashboard on any origin to fetch mesh status
     let cors = CorsLayer::new()
@@ -259,6 +262,7 @@ async fn main() {
     let ws_state = Arc::new(GatewayWsState {
         wss_registry,
         dead_drop_store,
+        relay_stats: relay_stats_for_ws,
     });
     let ws_routes = Router::new()
         .route("/ws", get(ws::ws_upgrade))

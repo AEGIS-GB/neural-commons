@@ -254,6 +254,10 @@ enum Commands {
         /// Gateway URL
         #[arg(long, default_value = "http://127.0.0.1:8080")]
         gateway_url: String,
+
+        /// Output raw JSON (for piping to jq or Claude Code)
+        #[arg(long)]
+        json: bool,
     },
 
     /// Botawiki knowledge base operations
@@ -1187,7 +1191,16 @@ fn main() {
         Some(Commands::Mesh {
             action,
             gateway_url,
+            json,
         }) => match action {
+            MeshCommands::Status if json => mesh_cmd::run_json(&gateway_url, "/mesh/status"),
+            MeshCommands::Peers if json => mesh_cmd::run_json(&gateway_url, "/mesh/peers"),
+            MeshCommands::Relay if json => mesh_cmd::run_json(&gateway_url, "/mesh/relay/stats"),
+            MeshCommands::Claims if json => mesh_cmd::run_json(&gateway_url, "/mesh/claims"),
+            MeshCommands::DeadDrops if json => mesh_cmd::run_json(&gateway_url, "/mesh/dead-drops"),
+            MeshCommands::RelayLog { limit } if json => {
+                mesh_cmd::run_json(&gateway_url, &format!("/mesh/relay/log?limit={limit}"))
+            }
             MeshCommands::Status => mesh_cmd::run_status(&gateway_url),
             MeshCommands::Peers => mesh_cmd::run_peers(&gateway_url),
             MeshCommands::Peer { bot_id } => mesh_cmd::run_peer_detail(&gateway_url, &bot_id),

@@ -27,6 +27,7 @@ pub struct RelayStats {
     pub received: AtomicU64,
     pub quarantined: AtomicU64,
     pub dead_dropped: AtomicU64,
+    pub dead_drops_delivered: AtomicU64,
 }
 
 impl RelayStats {
@@ -40,6 +41,7 @@ impl RelayStats {
             received: self.received.load(Ordering::Relaxed),
             quarantined: self.quarantined.load(Ordering::Relaxed),
             dead_dropped: self.dead_dropped.load(Ordering::Relaxed),
+            dead_drops_delivered: self.dead_drops_delivered.load(Ordering::Relaxed),
         }
     }
 }
@@ -51,6 +53,7 @@ pub struct RelayStatsSnapshot {
     pub received: u64,
     pub quarantined: u64,
     pub dead_dropped: u64,
+    pub dead_drops_delivered: u64,
 }
 
 /// GET /mesh/status — gateway health overview.
@@ -258,6 +261,7 @@ mod tests {
             received: 8,
             quarantined: 1,
             dead_dropped: 3,
+            dead_drops_delivered: 2,
         };
         let json = serde_json::to_string(&snap).unwrap();
         assert!(json.contains("\"sent\":10"));

@@ -39,6 +39,7 @@ pub const AUTH_TIMEOUT_SECS: u64 = 10;
 pub struct GatewayWsState {
     pub wss_registry: Arc<WssConnectionRegistry>,
     pub dead_drop_store: Arc<DeadDropStore>,
+    pub relay_stats: Arc<crate::mesh_routes::RelayStats>,
 }
 
 /// Registry of active WSS connections, keyed by bot_id (pubkey hex).
@@ -208,7 +209,8 @@ async fn handle_ws(socket: WebSocket, state: Arc<GatewayWsState>) {
     // 4b. Deliver pending dead-drops (D25: deliver on reconnect)
     let pending = state.dead_drop_store.drain(&bot_id).await;
     if !pending.is_empty() {
-        info!(bot_id = %bot_id, count = pending.len(), "delivering dead-drops on reconnect");
+        let delivered_count = pending.len();
+        info!(bot_id = %bot_id, count = delivered_count, "delivering dead-drops on reconnect");
         for drop in &pending {
             let envelope = RelayEnvelope {
                 from: drop.from.clone(),
@@ -220,6 +222,10 @@ async fn handle_ws(socket: WebSocket, state: Arc<GatewayWsState>) {
                 let _ = msg_tx.send(json).await;
             }
         }
+        state
+            .relay_stats
+            .dead_drops_delivered
+            .fetch_add(delivered_count as u64, std::sync::atomic::Ordering::Relaxed);
     }
 
     // 5. Message forwarding loop

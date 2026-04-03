@@ -22,6 +22,8 @@ pub struct RelayStats {
     pub received: u64,
     pub quarantined: u64,
     pub dead_dropped: u64,
+    #[serde(default)]
+    pub dead_drops_delivered: u64,
 }
 
 #[derive(Deserialize, Debug)]
@@ -126,6 +128,30 @@ fn client() -> reqwest::blocking::Client {
 
 // ── Subcommand runners ──────────────────────────────────────────────
 
+/// Raw JSON output — fetches an endpoint and prints the response as-is.
+/// Used with `--json` flag for piping to jq or machine consumption.
+pub fn run_json(gateway_url: &str, path: &str) {
+    let url = format!("{gateway_url}{path}");
+    let resp = match client().get(&url).send() {
+        Ok(r) => r,
+        Err(_) => {
+            print_connection_error(gateway_url);
+            std::process::exit(1);
+        }
+    };
+    let json: serde_json::Value = match resp.json() {
+        Ok(j) => j,
+        Err(e) => {
+            eprintln!("Error: {e}");
+            std::process::exit(1);
+        }
+    };
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&json).unwrap_or_default()
+    );
+}
+
 pub fn run_status(gateway_url: &str) {
     let url = format!("{gateway_url}/mesh/status");
     let resp = match client().get(&url).send() {
@@ -156,6 +182,7 @@ pub fn run_status(gateway_url: &str) {
     println!("  Received:        {}", status.relay.received);
     println!("  Quarantined:     {}", status.relay.quarantined);
     println!("  Dead-dropped:    {}", status.relay.dead_dropped);
+    println!("  DD delivered:    {}", status.relay.dead_drops_delivered);
     println!();
 }
 

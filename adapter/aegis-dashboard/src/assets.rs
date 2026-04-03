@@ -266,7 +266,7 @@ table.dtable .screening-row:hover{background:#1c2128}
 <div id="mesh-deaddrop-detail"></div>
 </div>
 </div>
-<div class="panel" id="panel-botawiki" style="display:none">
+<div class="panel" id="panel-botawiki">
 <div class="grid" id="botawiki-stats"></div>
 <div class="card" id="botawiki-claims-card"><h2>Claims</h2>
 <div id="botawiki-claims-table"></div>
