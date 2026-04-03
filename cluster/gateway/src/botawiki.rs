@@ -136,10 +136,18 @@ impl BotawikiStore {
             ts_ms: now_ms(),
         });
 
-        // Check quorum (2/3)
+        // Adaptive quorum: 2/3 of selected validators, minimum 1.
+        // With 1 validator: quorum = 1 (single approval suffices)
+        // With 2 validators: quorum = 2 (both must agree)
+        // With 3+ validators: quorum = 2 (standard 2/3)
         let approve_count = stored.votes.iter().filter(|v| v.approve).count();
         let reject_count = stored.votes.iter().filter(|v| !v.approve).count();
-        let quorum = 2;
+        let validator_count = stored.validators.len();
+        let quorum = if validator_count == 0 {
+            1 // edge case — shouldn't happen
+        } else {
+            (validator_count * 2).div_ceil(3) // ceiling of 2/3
+        };
 
         if approve_count >= quorum {
             stored.status = ClaimStatus::Canonical;
@@ -460,5 +468,88 @@ mod tests {
         let results = store.query(Some("b/lore"), None, 50).await;
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].id, id1);
+    }
+
+    // ── Adaptive quorum tests ──
+
+    #[tokio::test]
+    async fn single_validator_quorum_one_approval_suffices() {
+        // With only 1 validator, quorum = 1
+        let store = BotawikiStore::new();
+        let claim = sample_claim();
+        let id = claim.id;
+        let validators = vec!["v1".into()]; // only 1 validator
+        store.submit(claim, validators).await;
+
+        let status = store.vote(&id, "v1", true).await.unwrap();
+        assert_eq!(status, ClaimStatus::Canonical); // 1/1 = quorum met
+    }
+
+    #[tokio::test]
+    async fn single_validator_quorum_one_rejection_tombstones() {
+        let store = BotawikiStore::new();
+        let claim = sample_claim();
+        let id = claim.id;
+        let validators = vec!["v1".into()];
+        store.submit(claim, validators).await;
+
+        let status = store.vote(&id, "v1", false).await.unwrap();
+        assert_eq!(status, ClaimStatus::Tombstoned);
+    }
+
+    #[tokio::test]
+    async fn two_validator_quorum_needs_both() {
+        // With 2 validators, quorum = 2 (both must agree)
+        let store = BotawikiStore::new();
+        let claim = sample_claim();
+        let id = claim.id;
+        let validators = vec!["v1".into(), "v2".into()];
+        store.submit(claim, validators).await;
+
+        let status = store.vote(&id, "v1", true).await.unwrap();
+        assert_eq!(status, ClaimStatus::Quarantine); // 1/2, not enough
+
+        let status = store.vote(&id, "v2", true).await.unwrap();
+        assert_eq!(status, ClaimStatus::Canonical); // 2/2 = quorum met
+    }
+
+    #[tokio::test]
+    async fn three_validator_quorum_two_suffices() {
+        // With 3 validators, quorum = 2 (standard 2/3)
+        let store = BotawikiStore::new();
+        let claim = sample_claim();
+        let id = claim.id;
+        let validators = vec!["v1".into(), "v2".into(), "v3".into()];
+        store.submit(claim, validators).await;
+
+        let status = store.vote(&id, "v1", true).await.unwrap();
+        assert_eq!(status, ClaimStatus::Quarantine); // 1/3
+
+        let status = store.vote(&id, "v2", true).await.unwrap();
+        assert_eq!(status, ClaimStatus::Canonical); // 2/3 = quorum met
+    }
+
+    #[tokio::test]
+    async fn five_validator_quorum_needs_four() {
+        // With 5 validators, quorum = ceil(5*2/3) = 4
+        let store = BotawikiStore::new();
+        let claim = sample_claim();
+        let id = claim.id;
+        let validators = vec![
+            "v1".into(),
+            "v2".into(),
+            "v3".into(),
+            "v4".into(),
+            "v5".into(),
+        ];
+        store.submit(claim, validators).await;
+
+        store.vote(&id, "v1", true).await.unwrap();
+        store.vote(&id, "v2", true).await.unwrap();
+        let status = store.vote(&id, "v3", true).await.unwrap();
+        assert_eq!(status, ClaimStatus::Quarantine); // 3/5 < 4
+
+        let status = store.vote(&id, "v4", true).await.unwrap();
+        assert_eq!(status, ClaimStatus::Canonical); // 4/5 >= 4
     }
 }

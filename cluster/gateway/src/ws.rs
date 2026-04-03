@@ -38,6 +38,7 @@ pub const AUTH_TIMEOUT_SECS: u64 = 10;
 /// Passed via axum State extractor.
 pub struct GatewayWsState {
     pub wss_registry: Arc<WssConnectionRegistry>,
+    pub dead_drop_store: Arc<DeadDropStore>,
 }
 
 /// Registry of active WSS connections, keyed by bot_id (pubkey hex).
@@ -200,9 +201,26 @@ async fn handle_ws(socket: WebSocket, state: Arc<GatewayWsState>) {
 
     // 4. Register connection with mpsc channel for message forwarding
     let (msg_tx, mut msg_rx) = mpsc::channel::<String>(256);
-    state.wss_registry.register(&bot_id, msg_tx).await;
+    state.wss_registry.register(&bot_id, msg_tx.clone()).await;
 
     info!(bot_id = %bot_id, "WSS authenticated and registered");
+
+    // 4b. Deliver pending dead-drops (D25: deliver on reconnect)
+    let pending = state.dead_drop_store.drain(&bot_id).await;
+    if !pending.is_empty() {
+        info!(bot_id = %bot_id, count = pending.len(), "delivering dead-drops on reconnect");
+        for drop in &pending {
+            let envelope = RelayEnvelope {
+                from: drop.from.clone(),
+                body: drop.body.clone(),
+                msg_type: drop.msg_type.clone(),
+                ts_ms: drop.ts_ms,
+            };
+            if let Ok(json) = serde_json::to_string(&envelope) {
+                let _ = msg_tx.send(json).await;
+            }
+        }
+    }
 
     // 5. Message forwarding loop
     // Forward messages from the registry channel to the WebSocket

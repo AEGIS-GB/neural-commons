@@ -126,13 +126,14 @@ pub async fn post_evidence<S: EvidenceStore>(
         }
     };
 
-    let core_json = record.core_json.clone();
     let id = record.id.clone();
+    // Serialize the full record (includes bot_fingerprint) for NATS replay
+    let record_json = serde_json::to_vec(&record).unwrap_or_default();
     match store.insert(record).await {
         Ok(_) => {
             // Publish to NATS if bridge is available (fire-and-forget with warning)
             if let Some(bridge) = nats_bridge.as_ref()
-                && let Err(e) = bridge.publish_evidence(core_json.as_bytes()).await
+                && let Err(e) = bridge.publish_evidence(&record_json).await
             {
                 tracing::warn!(id = %id, error = %e, "failed to publish evidence to NATS");
             }
@@ -451,23 +452,18 @@ pub async fn mesh_send<S: EvidenceStore>(
     // D21: routing weight = TRUSTMARK^2 (for future multi-path routing)
     let _routing_weight = score * score;
 
-    // Validate recipient exists in evidence store
-    match store.count_for_bot(&payload.to).await {
-        Ok(0) => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(serde_json::json!({
-                    "error": format!("recipient {} not found", payload.to)
-                })),
-            );
-        }
-        Err(e) => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({ "error": e })),
-            );
-        }
-        _ => {}
+    // Validate recipient exists: check evidence store OR TRUSTMARK cache OR WSS registry
+    let recipient_known = matches!(store.count_for_bot(&payload.to).await, Ok(count) if count > 0)
+        || trustmark_cache.get(&payload.to).await.is_some()
+        || wss_registry.is_online(&payload.to).await;
+
+    if !recipient_known {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({
+                "error": format!("recipient {} not found", payload.to)
+            })),
+        );
     }
 
     // Trust gate (D21): recipient TRUSTMARK >= 0.3 required

@@ -114,71 +114,154 @@ impl NatsBridge {
             .await
     }
 
-    /// Replay the MESH stream to rebuild in-memory state.
+    /// Replay JetStream streams to rebuild in-memory state.
     /// Called once on Gateway startup after JetStream setup.
-    pub async fn replay_mesh_stream(
+    /// Replays MESH stream (relay log, Botawiki claims) and EVIDENCE stream (evidence store).
+    pub async fn replay_mesh_stream<S: EvidenceStore>(
         &self,
         botawiki_store: Arc<BotawikiStore>,
         relay_log: Arc<RelayLog>,
         _dead_drop_store: Arc<DeadDropStore>,
+        evidence_store: Option<S>,
+        trustmark_cache: Option<Arc<TrustmarkCache>>,
     ) -> Result<usize, Box<dyn std::error::Error + Send + Sync>> {
         let jetstream = async_nats::jetstream::new(self.client.clone());
+        let mut total_replayed = 0usize;
 
-        let mut stream = match jetstream.get_stream("MESH").await {
-            Ok(s) => s,
-            Err(_) => {
-                tracing::info!("MESH stream not found, nothing to replay");
-                return Ok(0);
-            }
-        };
+        // Replay MESH stream (relay log + Botawiki claims)
+        if let Ok(mut stream) = jetstream.get_stream("MESH").await {
+            let info = stream.info().await?;
+            tracing::info!(messages = info.state.messages, "replaying MESH stream");
 
-        let info = stream.info().await?;
-        let msg_count = info.state.messages;
-        tracing::info!(messages = msg_count, "replaying MESH stream");
+            let consumer = stream
+                .create_consumer(async_nats::jetstream::consumer::pull::Config {
+                    deliver_policy: async_nats::jetstream::consumer::DeliverPolicy::All,
+                    ack_policy: async_nats::jetstream::consumer::AckPolicy::None,
+                    name: Some(format!("replay-mesh-{}", std::process::id())),
+                    ..Default::default()
+                })
+                .await?;
 
-        // Create an ephemeral consumer that starts from the beginning
-        let consumer = stream
-            .create_consumer(async_nats::jetstream::consumer::pull::Config {
-                deliver_policy: async_nats::jetstream::consumer::DeliverPolicy::All,
-                ack_policy: async_nats::jetstream::consumer::AckPolicy::None,
-                name: Some(format!("replay-{}", std::process::id())),
-                ..Default::default()
-            })
-            .await?;
-
-        let mut messages = consumer.messages().await?;
-        let mut replayed = 0u64;
-
-        // Use timeout to stop when no more messages
-        while let Ok(Some(msg)) = tokio::time::timeout(
-            std::time::Duration::from_secs(2),
-            futures::StreamExt::next(&mut messages),
-        )
-        .await
-        {
-            if let Ok(msg) = msg {
-                let subject = msg.subject.as_str();
-                match subject {
-                    "mesh.relay" => {
-                        if let Ok(event) = serde_json::from_slice::<RelayEvent>(&msg.payload) {
-                            relay_log.push(event);
+            let mut messages = consumer.messages().await?;
+            while let Ok(Some(msg)) = tokio::time::timeout(
+                std::time::Duration::from_secs(2),
+                futures::StreamExt::next(&mut messages),
+            )
+            .await
+            {
+                if let Ok(msg) = msg {
+                    let subject = msg.subject.as_str();
+                    match subject {
+                        "mesh.relay" => {
+                            if let Ok(event) = serde_json::from_slice::<RelayEvent>(&msg.payload) {
+                                relay_log.push(event);
+                            }
                         }
-                    }
-                    "botawiki.claim.stored" => {
-                        if let Ok(stored) =
-                            serde_json::from_slice::<crate::botawiki::StoredClaim>(&msg.payload)
-                        {
-                            botawiki_store.restore(stored).await;
+                        "botawiki.claim.stored" => {
+                            if let Ok(stored) =
+                                serde_json::from_slice::<crate::botawiki::StoredClaim>(&msg.payload)
+                            {
+                                botawiki_store.restore(stored).await;
+                            }
                         }
+                        _ => {}
                     }
-                    _ => {}
+                    total_replayed += 1;
                 }
-                replayed += 1;
+            }
+        } else {
+            tracing::info!("MESH stream not found, nothing to replay");
+        }
+
+        // Replay EVIDENCE stream (rebuild evidence store + TRUSTMARK cache)
+        if let (Some(store), Some(cache)) = (&evidence_store, &trustmark_cache)
+            && let Ok(mut stream) = jetstream.get_stream("EVIDENCE").await
+        {
+            let info = stream.info().await?;
+            tracing::info!(messages = info.state.messages, "replaying EVIDENCE stream");
+
+            let consumer = stream
+                .create_consumer(async_nats::jetstream::consumer::pull::Config {
+                    deliver_policy: async_nats::jetstream::consumer::DeliverPolicy::All,
+                    ack_policy: async_nats::jetstream::consumer::AckPolicy::None,
+                    name: Some(format!("replay-evidence-{}", std::process::id())),
+                    ..Default::default()
+                })
+                .await?;
+
+            let mut messages = consumer.messages().await?;
+            let mut evidence_count = 0u64;
+            let mut bot_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+            while let Ok(Some(msg)) = tokio::time::timeout(
+                std::time::Duration::from_secs(2),
+                futures::StreamExt::next(&mut messages),
+            )
+            .await
+            {
+                if let Ok(msg) = msg {
+                    // Parse the submitted receipt and insert into store
+                    if let Ok(receipt) =
+                        serde_json::from_slice::<crate::routes::SubmittedReceipt>(&msg.payload)
+                    {
+                        // Extract bot_fingerprint from the receipt's context
+                        // The receipt was published with the full JSON; we need the bot_fingerprint
+                        // which is stored in the evidence record, not the receipt itself.
+                        // Use the bot_fingerprint field if present, otherwise try to extract from JSON
+                        if let Ok(val) = serde_json::from_slice::<serde_json::Value>(&msg.payload)
+                            && let Some(fp) = val.get("bot_fingerprint").and_then(|v| v.as_str())
+                        {
+                            bot_ids.insert(fp.to_string());
+                            let record = crate::store::EvidenceRecord {
+                                id: receipt.id.clone(),
+                                bot_fingerprint: fp.to_string(),
+                                seq: receipt.seq,
+                                receipt_type: receipt.receipt_type.clone(),
+                                ts_ms: receipt.ts_ms,
+                                core_json: String::from_utf8_lossy(&msg.payload).to_string(),
+                                receipt_hash: receipt.receipt_hash.clone(),
+                                request_id: receipt.request_id.clone(),
+                            };
+                            let _ = store.insert(record).await;
+                            evidence_count += 1;
+                        }
+                    }
+                    total_replayed += 1;
+                }
+            }
+
+            tracing::info!(
+                evidence_count,
+                bots = bot_ids.len(),
+                "evidence replay complete"
+            );
+
+            // Recompute TRUSTMARK for all seen bots
+            for bot_id in &bot_ids {
+                if let Ok(records) = store.get_for_bot(bot_id).await
+                    && !records.is_empty()
+                {
+                    let score = crate::routes::compute_trustmark_from_evidence(&records);
+                    let cached = CachedScore {
+                        score_bp: score.score_bp.value(),
+                        dimensions: serde_json::to_value(&score.dimensions).unwrap_or_default(),
+                        tier: serde_json::to_value(score.tier)
+                            .map(|v| v.as_str().unwrap_or("tier1").to_string())
+                            .unwrap_or_else(|_| "tier1".to_string()),
+                        computed_at_ms: score.computed_at_ms,
+                    };
+                    cache.insert(bot_id.clone(), cached).await;
+                    tracing::debug!(
+                        bot_id,
+                        score_bp = score.score_bp.value(),
+                        "TRUSTMARK recomputed from evidence replay"
+                    );
+                }
             }
         }
 
-        tracing::info!(replayed, "MESH stream replay complete");
-        Ok(replayed as usize)
+        tracing::info!(total_replayed, "stream replay complete");
+        Ok(total_replayed)
     }
 
     /// Publish an evidence rollup to `evidence.rollup`.
