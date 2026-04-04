@@ -265,6 +265,9 @@ table.dtable .screening-row:hover{background:#1c2128}
 <div class="card" id="mesh-deaddrop-detail-card" style="display:none;margin-top:16px"><h2>Dead-Drop Messages</h2>
 <div id="mesh-deaddrop-detail"></div>
 </div>
+<div class="card" id="mesh-inbox-card" style="margin-top:16px"><h2>Relay Inbox</h2>
+<div id="mesh-inbox"></div>
+</div>
 </div>
 <div class="panel" id="panel-botawiki">
 <div class="grid" id="botawiki-stats"></div>
@@ -1721,15 +1724,16 @@ async function pollMesh(){
   if(!meshGatewayUrl){
     stats.innerHTML='<div class="card"><div class="stat status-warn">Not Configured</div><div class="stat-label">Mesh Gateway</div></div>';
     peersTable.innerHTML='<p class="empty-state">No gateway_url configured. Set <code>gateway_url</code> in config to enable mesh.</p>';
-    relayDiv.innerHTML='';claimsDiv.innerHTML='';deaddropsDiv.innerHTML='';relayLogDiv.innerHTML='';
+    relayDiv.innerHTML='';claimsDiv.innerHTML='';deaddropsDiv.innerHTML='';relayLogDiv.innerHTML='';document.getElementById('mesh-inbox').innerHTML='';
     return;
   }
-  let status=null,peers=null,claims=null,deadDrops=null,relayLog=null;
+  let status=null,peers=null,claims=null,deadDrops=null,relayLog=null,inbox=null;
   try{status=await(await fetch(meshGatewayUrl+'/mesh/status')).json();}catch(e){}
   try{peers=await(await fetch(meshGatewayUrl+'/mesh/peers')).json();}catch(e){}
   try{claims=await(await fetch(meshGatewayUrl+'/mesh/claims')).json();}catch(e){}
   try{deadDrops=await(await fetch(meshGatewayUrl+'/mesh/dead-drops')).json();}catch(e){}
   try{relayLog=await(await fetch(meshGatewayUrl+'/mesh/relay/log?limit=10')).json();}catch(e){}
+  try{const inboxResp=await fetch('/aegis/relay/inbox');if(inboxResp.ok){inbox=await inboxResp.json();}}catch(e){}
   // Stats bar
   let sc='';
   if(status){
@@ -1738,6 +1742,7 @@ async function pollMesh(){
     sc+='<div class="card"><div class="stat">'+(status.cached_scores||0)+'</div><div class="stat-label">Cached Scores</div></div>';
     const rl=status.relay||{};
     sc+='<div class="card"><div class="stat">'+((rl.sent||0)+(rl.dead_dropped||0))+'</div><div class="stat-label">Relay Total</div></div>';
+    if(inbox){sc+='<div class="card"><div class="stat">'+(inbox.count||0)+'</div><div class="stat-label">Inbox</div></div>';}
   }else{
     sc+='<div class="card"><div class="stat status-warn">Unreachable</div><div class="stat-label">Gateway at '+esc(meshGatewayUrl)+'</div></div>';
   }
@@ -1843,6 +1848,28 @@ async function pollMesh(){
     }
     deaddropsDiv.innerHTML=dh;
   }else{deaddropsDiv.innerHTML='<p class="empty-state">No dead-drops in queue.</p>';}
+  // Relay Inbox (from adapter, not gateway)
+  const inboxDiv=document.getElementById('mesh-inbox');
+  if(inbox&&inbox.count>0){
+    let ih='<table class="dtable"><tr><th>Time</th><th>From</th><th>Message</th><th>Read</th></tr>';
+    for(const m of inbox.messages){
+      const fromId=(m.from||'').substring(0,16)+'...';
+      const readBadge=m.read?'<span class="badge badge-green">read</span>':'<span class="badge badge-yellow">new</span>';
+      ih+='<tr style="cursor:pointer" onclick="this.nextElementSibling.style.display=this.nextElementSibling.style.display===\'none\'?\'table-row\':\'none\'">';
+      ih+='<td style="white-space:nowrap;font-size:12px">'+fmtTimeShort(m.ts_ms)+'</td>';
+      ih+='<td style="font-family:monospace;font-size:11px">'+esc(fromId)+'</td>';
+      ih+='<td style="font-size:12px;max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+esc(m.body.substring(0,60))+'</td>';
+      ih+='<td>'+readBadge+'</td>';
+      ih+='</tr>';
+      ih+='<tr style="display:none"><td colspan="4" style="padding:12px;background:#0d1117;border:1px solid #30363d">';
+      ih+='<div style="font-size:11px;color:#8b949e;margin-bottom:4px">FULL MESSAGE</div>';
+      ih+='<div style="font-family:monospace;font-size:12px;white-space:pre-wrap;word-break:break-word;color:#c9d1d9;padding:8px;background:#161b22;border-radius:4px">'+esc(m.body)+'</div>';
+      ih+='<div style="margin-top:8px;font-size:11px;color:#8b949e">From: <span style="font-family:monospace">'+esc(m.from)+'</span></div>';
+      ih+='</td></tr>';
+    }
+    ih+='</table>';
+    inboxDiv.innerHTML=ih;
+  }else{inboxDiv.innerHTML='<p class="empty-state">No relay messages received.</p>';}
 }
 async function showPeerDetail(botId){
   if(!meshGatewayUrl)return;

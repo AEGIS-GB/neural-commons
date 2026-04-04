@@ -382,6 +382,22 @@ pub fn run_dead_drops(gateway_url: &str) {
     println!();
 }
 
+// ── Relay Inbox types ──────────────────────────────────────────────
+
+#[derive(Deserialize, Debug)]
+pub struct InboxResponse {
+    pub messages: Vec<InboxMessage>,
+    pub count: usize,
+}
+
+#[derive(Deserialize, Debug)]
+pub struct InboxMessage {
+    pub from: String,
+    pub body: String,
+    pub ts_ms: u64,
+    pub read: bool,
+}
+
 // ── Drill-down response types ──────────────────────────────────────
 
 #[derive(Deserialize, Debug)]
@@ -630,6 +646,66 @@ pub fn run_dead_drop_detail(gateway_url: &str, bot_id: &str) {
     }
 
     println!("  {} pending messages", data.drops.len());
+    println!();
+}
+
+pub fn run_inbox(adapter_url: &str) {
+    let url = format!("{adapter_url}/aegis/relay/inbox");
+    let resp = match client().get(&url).send() {
+        Ok(r) => r,
+        Err(_) => {
+            eprintln!("Error: cannot connect to Adapter at {adapter_url}");
+            eprintln!("  Is the Adapter running? Start with: aegis (default listens on port 3141)");
+            std::process::exit(1);
+        }
+    };
+
+    let data: InboxResponse = match resp.json() {
+        Ok(d) => d,
+        Err(e) => {
+            eprintln!("Error: failed to parse inbox response: {e}");
+            std::process::exit(1);
+        }
+    };
+
+    println!();
+    println!("━━━ Relay Inbox ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+    println!();
+    println!("  Messages: {}", data.count);
+
+    if data.messages.is_empty() {
+        println!();
+        println!("  No relay messages received.");
+        println!();
+        return;
+    }
+
+    println!();
+    println!("  {:<14} {:<20} {:<6} Message", "Time", "From", "Read");
+    println!(
+        "  {:<14} {:<20} {:<6} ──────────────────────────────",
+        "────────────", "──────────────────", "────"
+    );
+
+    for msg in &data.messages {
+        let age = format_age_ms(now_ms() - msg.ts_ms as i64);
+        let from_short = format_bot_id_short(&msg.from);
+        let read_str = if msg.read { "yes" } else { "NEW" };
+        let preview: String = msg.body.chars().take(50).collect();
+        let preview = if msg.body.len() > 50 {
+            format!("{preview}...")
+        } else {
+            preview
+        };
+        println!(
+            "  {:<14} {:<20} {:<6} {}",
+            age, from_short, read_str, preview,
+        );
+    }
+
+    println!();
+    let unread = data.messages.iter().filter(|m| !m.read).count();
+    println!("  {} total, {} unread", data.messages.len(), unread);
     println!();
 }
 

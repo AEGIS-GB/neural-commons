@@ -441,6 +441,12 @@ enum MeshCommands {
         /// Recipient bot ID
         bot_id: String,
     },
+    /// Read relay inbox messages from the adapter
+    Inbox {
+        /// Adapter URL (default: http://127.0.0.1:3141)
+        #[arg(long, default_value = "http://127.0.0.1:3141")]
+        adapter_url: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -1227,6 +1233,7 @@ fn main() {
             MeshCommands::DeadDrop { bot_id } => {
                 mesh_cmd::run_dead_drop_detail(&gateway_url, &bot_id)
             }
+            MeshCommands::Inbox { adapter_url } => mesh_cmd::run_inbox(&adapter_url),
         },
 
         Some(Commands::Botawiki {
