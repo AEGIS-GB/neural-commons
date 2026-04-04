@@ -763,16 +763,41 @@ async fn mesh_status_handler(
     }
 }
 
-/// GET /aegis/botawiki/search?ns=... — proxies to Gateway /botawiki/query?namespace=...
+/// GET /aegis/botawiki/search?ns=... — fetches all claims and filters by namespace.
+/// Uses the public /botawiki/claims/all endpoint (no auth required).
 async fn botawiki_search_handler(
     State(state): State<crate::proxy::AppState>,
     axum::extract::Query(query): axum::extract::Query<BotawikiSearchQuery>,
 ) -> Json<serde_json::Value> {
     let ns = query.ns.unwrap_or_default();
-    let path = format!("/botawiki/query?namespace={}", ns);
-    match gateway_fetch(&state, &path).await {
-        Some(data) => Json(data),
-        None => Json(serde_json::json!({"error": "gateway unreachable", "results": []})),
+    match gateway_fetch(&state, "/botawiki/claims/all").await {
+        Some(data) => {
+            // Filter claims by namespace prefix
+            let claims = data
+                .get("claims")
+                .and_then(|c| c.as_array())
+                .map(|arr| {
+                    arr.iter()
+                        .filter(|c| {
+                            ns.is_empty()
+                                || c.get("namespace")
+                                    .and_then(|n| n.as_str())
+                                    .map(|n| n.starts_with(&ns))
+                                    .unwrap_or(false)
+                        })
+                        .cloned()
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            Json(serde_json::json!({
+                "results": claims,
+                "count": claims.len(),
+                "namespace_filter": ns,
+            }))
+        }
+        None => {
+            Json(serde_json::json!({"error": "gateway unreachable", "results": [], "count": 0}))
+        }
     }
 }
 
