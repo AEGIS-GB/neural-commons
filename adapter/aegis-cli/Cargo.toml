@@ -28,3 +28,6 @@ anyhow.workspace = true
 dirs = "5"
 toml.workspace = true
 reqwest.workspace = true
+regex.workspace = true
+hex.workspace = true
+ed25519-dalek.workspace = true

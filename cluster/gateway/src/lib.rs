@@ -18,3 +18,9 @@ pub mod rate_limit;
 pub mod routes;
 pub mod store;
 pub mod ws;
+
+/// Screening engines for relay messages (3-layer cascade).
+pub struct RelayScreening {
+    pub prompt_guard: Option<aegis_slm::engine::prompt_guard::PromptGuardEngine>,
+    pub slm_engine: Option<aegis_slm::engine::openai_compat::OpenAiCompatEngine>,
+}

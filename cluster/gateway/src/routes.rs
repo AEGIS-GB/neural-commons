@@ -23,6 +23,7 @@ use axum::{Extension, Json};
 use serde::Deserialize;
 use tokio::sync::RwLock;
 
+use crate::RelayScreening;
 use crate::auth::VerifiedIdentity;
 use crate::botawiki::BotawikiStore;
 use crate::evaluator::EvaluatorService;
@@ -414,6 +415,7 @@ pub async fn mesh_send<S: EvidenceStore>(
     Extension(nats_bridge): Extension<Option<Arc<NatsBridge>>>,
     Extension(relay_stats): Extension<Arc<RelayStats>>,
     Extension(relay_log): Extension<Arc<RelayLog>>,
+    Extension(relay_screening): Extension<Arc<RelayScreening>>,
     Json(payload): Json<MeshSendRequest>,
 ) -> impl IntoResponse {
     // Validate request
@@ -487,43 +489,126 @@ pub async fn mesh_send<S: EvidenceStore>(
     }
 
     // SLM screening -- ALL relay messages must be screened (section 7.4, no fast-path override)
-    {
-        let heuristic = aegis_slm::engine::heuristic::HeuristicEngine::new();
-        if let Ok(output) = aegis_slm::engine::SlmEngine::generate(&heuristic, &payload.body)
-            && let Ok(parsed) = aegis_slm::parser::parse_slm_output(
-                &output,
-                &aegis_slm::types::EngineProfile::Loopback,
-            )
-            && !parsed.annotations.is_empty()
+    // 3-layer cascade: heuristic (<1ms) -> classifier (~15ms) -> deep SLM (2-3s)
+    // Each layer only runs if the previous one found nothing.
+    let quarantine_reason = {
+        let mut reason: Option<String> = None;
+
+        // Layer 1: Heuristic (<1ms)
         {
-            tracing::warn!(
-                from = %identity.pubkey,
-                to = %payload.to,
-                patterns = parsed.annotations.len(),
-                "mesh relay quarantined: injection detected in relay message"
-            );
-            relay_stats.quarantined.fetch_add(1, Ordering::Relaxed);
-            let relay_event = RelayEvent {
-                from: identity.pubkey.clone(),
-                to: payload.to.clone(),
-                status: "quarantined".into(),
-                msg_type: payload.msg_type.clone(),
-                ts_ms: now_epoch_ms(),
-                reason: "injection pattern detected".into(),
-                body_preview: payload.body.clone(),
-            };
-            relay_log.push(relay_event.clone());
-            if let Some(bridge) = nats_bridge.as_ref() {
-                let event_json = serde_json::to_vec(&relay_event).unwrap_or_default();
-                let _ = bridge.publish_mesh_event("mesh.relay", &event_json).await;
+            let heuristic = aegis_slm::engine::heuristic::HeuristicEngine::new();
+            if let Ok(output) = aegis_slm::engine::SlmEngine::generate(&heuristic, &payload.body) {
+                if let Ok(parsed) = aegis_slm::parser::parse_slm_output(
+                    &output,
+                    &aegis_slm::types::EngineProfile::Loopback,
+                ) {
+                    if !parsed.annotations.is_empty() {
+                        reason = Some(format!(
+                            "heuristic: {}",
+                            parsed
+                                .annotations
+                                .iter()
+                                .map(|a| serde_json::to_value(&a.pattern)
+                                    .ok()
+                                    .and_then(|v| v.as_str().map(String::from))
+                                    .unwrap_or_else(|| format!("{:?}", a.pattern)))
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        ));
+                    }
+                }
             }
-            return (
-                StatusCode::FORBIDDEN,
-                Json(serde_json::json!({
-                    "error": "message quarantined: injection pattern detected"
-                })),
-            );
         }
+
+        // Layer 2: Classifier (if available, ~15ms)
+        if reason.is_none() {
+            if let Some(ref pg) = relay_screening.prompt_guard {
+                match pg.screen(&payload.body) {
+                    Ok(parsed) if !parsed.annotations.is_empty() => {
+                        reason = Some(format!(
+                            "classifier: {}",
+                            parsed
+                                .annotations
+                                .iter()
+                                .map(|a| serde_json::to_value(&a.pattern)
+                                    .ok()
+                                    .and_then(|v| v.as_str().map(String::from))
+                                    .unwrap_or_else(|| format!("{:?}", a.pattern)))
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        ));
+                    }
+                    Err(e) => {
+                        tracing::warn!("PromptGuard classifier error: {e}");
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        // Layer 3: Deep SLM (if available, 2-3s)
+        // OpenAiCompatEngine uses reqwest::blocking — must run off the async runtime.
+        if reason.is_none() {
+            if let Some(ref slm) = relay_screening.slm_engine {
+                let body = payload.body.clone();
+                let result = tokio::task::block_in_place(|| {
+                    aegis_slm::engine::SlmEngine::generate(slm, &body)
+                });
+                if let Ok(output) = result {
+                    if let Ok(parsed) = aegis_slm::parser::parse_slm_output(
+                        &output,
+                        &aegis_slm::types::EngineProfile::Loopback,
+                    ) {
+                        if !parsed.annotations.is_empty() {
+                            reason = Some(format!(
+                                "deep_slm: {}",
+                                parsed
+                                    .annotations
+                                    .iter()
+                                    .map(|a| serde_json::to_value(&a.pattern)
+                                        .ok()
+                                        .and_then(|v| v.as_str().map(String::from))
+                                        .unwrap_or_else(|| format!("{:?}", a.pattern)))
+                                    .collect::<Vec<_>>()
+                                    .join(", ")
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+
+        reason
+    };
+
+    if let Some(ref reason) = quarantine_reason {
+        tracing::warn!(
+            from = %identity.pubkey,
+            to = %payload.to,
+            reason = %reason,
+            "mesh relay quarantined: injection detected in relay message"
+        );
+        relay_stats.quarantined.fetch_add(1, Ordering::Relaxed);
+        let relay_event = RelayEvent {
+            from: identity.pubkey.clone(),
+            to: payload.to.clone(),
+            status: "quarantined".into(),
+            msg_type: payload.msg_type.clone(),
+            ts_ms: now_epoch_ms(),
+            reason: reason.clone(),
+            body_preview: payload.body.clone(),
+        };
+        relay_log.push(relay_event.clone());
+        if let Some(bridge) = nats_bridge.as_ref() {
+            let event_json = serde_json::to_vec(&relay_event).unwrap_or_default();
+            let _ = bridge.publish_mesh_event("mesh.relay", &event_json).await;
+        }
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({
+                "error": format!("message quarantined: {reason}")
+            })),
+        );
     }
 
     // Build relay envelope
@@ -1186,6 +1271,10 @@ mod tests {
             .layer(Extension(evaluator_svc))
             .layer(Extension(Arc::new(RelayStats::new())))
             .layer(Extension(Arc::new(RelayLog::new())))
+            .layer(Extension(Arc::new(RelayScreening {
+                prompt_guard: None,
+                slm_engine: None,
+            })))
             .layer(middleware::from_fn(auth::auth_middleware));
 
         Router::new().merge(authed)
