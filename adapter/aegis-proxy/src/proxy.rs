@@ -129,6 +129,10 @@ pub struct AppState {
     /// Updated by the adapter's TRUSTMARK snapshot task.
     /// When true, Permissive holster is downgraded to Balanced.
     pub trustmark_degraded: Arc<std::sync::atomic::AtomicBool>,
+    /// Gateway URL for proxying mesh/peer/botawiki requests.
+    pub gateway_url: Option<String>,
+    /// Relay inbox for incoming mesh relay messages.
+    pub relay_inbox: Arc<crate::cognitive_bridge::RelayInbox>,
 }
 
 /// Build the axum router for the proxy server.
@@ -229,6 +233,34 @@ pub async fn start_with_traffic_full_ex(
     trust_config: crate::channel_trust::TrustConfig,
     trustmark_degraded: Arc<std::sync::atomic::AtomicBool>,
 ) -> Result<(), ProxyError> {
+    start_with_traffic_full_ex2(
+        config,
+        hooks,
+        dashboard,
+        traffic_recorder,
+        traffic_slm_updater,
+        trust_config,
+        trustmark_degraded,
+        None,
+        Arc::new(crate::cognitive_bridge::RelayInbox::new(100)),
+    )
+    .await
+}
+
+/// Start the proxy server with full traffic recording, TRUSTMARK degradation flag,
+/// gateway URL, and relay inbox.
+#[allow(clippy::too_many_arguments)]
+pub async fn start_with_traffic_full_ex2(
+    config: ProxyConfig,
+    hooks: MiddlewareHooks,
+    dashboard: Option<(String, Router)>,
+    traffic_recorder: Option<Arc<TrafficRecorder>>,
+    traffic_slm_updater: Option<Arc<TrafficSlmUpdater>>,
+    trust_config: crate::channel_trust::TrustConfig,
+    trustmark_degraded: Arc<std::sync::atomic::AtomicBool>,
+    gateway_url: Option<String>,
+    relay_inbox: Arc<crate::cognitive_bridge::RelayInbox>,
+) -> Result<(), ProxyError> {
     let client = Client::builder()
         .timeout(std::time::Duration::from_secs(300)) // 5 min for long LLM responses
         .build()
@@ -254,6 +286,8 @@ pub async fn start_with_traffic_full_ex(
         trust_config: Arc::new(std::sync::RwLock::new(trust_config)),
         slm_semaphore: Arc::new(tokio::sync::Semaphore::new(4)),
         trustmark_degraded,
+        gateway_url,
+        relay_inbox,
     };
 
     let app = build_router(state, dashboard);
@@ -1691,6 +1725,8 @@ mod tests {
             )),
             slm_semaphore: Arc::new(tokio::sync::Semaphore::new(4)),
             trustmark_degraded: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            gateway_url: None,
+            relay_inbox: Arc::new(crate::cognitive_bridge::RelayInbox::new(100)),
         };
         let _router = build_router(state, None);
         // If it doesn't panic, it works
@@ -1711,6 +1747,8 @@ mod tests {
             )),
             slm_semaphore: Arc::new(tokio::sync::Semaphore::new(4)),
             trustmark_degraded: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            gateway_url: None,
+            relay_inbox: Arc::new(crate::cognitive_bridge::RelayInbox::new(100)),
         };
         assert_eq!(state.identity_fingerprint.as_deref(), Some("abc123def456"));
     }
@@ -1731,6 +1769,8 @@ mod tests {
             )),
             slm_semaphore: Arc::new(tokio::sync::Semaphore::new(4)),
             trustmark_degraded: degraded.clone(),
+            gateway_url: None,
+            relay_inbox: Arc::new(crate::cognitive_bridge::RelayInbox::new(100)),
         };
         assert!(
             state

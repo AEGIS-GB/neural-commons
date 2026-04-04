@@ -11,6 +11,7 @@ use tokio::sync::broadcast;
 use crate::gateway_wss::WssHandler;
 use crate::state::TrustmarkCache;
 use aegis_dashboard::DashboardAlert;
+use aegis_proxy::cognitive_bridge::{RelayInbox, RelayMessage};
 
 /// Adapter-side handler for Gateway WSS messages.
 ///
@@ -20,6 +21,8 @@ pub struct AdapterWssHandler {
     alert_tx: broadcast::Sender<DashboardAlert>,
     /// TRUSTMARK score cache (shared with AdapterState).
     trustmark_cache: Arc<std::sync::RwLock<Option<TrustmarkCache>>>,
+    /// Relay inbox for incoming mesh messages (shared with proxy AppState).
+    relay_inbox: Arc<RelayInbox>,
 }
 
 impl AdapterWssHandler {
@@ -27,10 +30,12 @@ impl AdapterWssHandler {
     pub fn new(
         alert_tx: broadcast::Sender<DashboardAlert>,
         trustmark_cache: Arc<std::sync::RwLock<Option<TrustmarkCache>>>,
+        relay_inbox: Arc<RelayInbox>,
     ) -> Self {
         Self {
             alert_tx,
             trustmark_cache,
+            relay_inbox,
         }
     }
 }
@@ -92,8 +97,15 @@ impl WssHandler for AdapterWssHandler {
     }
 
     fn on_mesh_relay(&self, from: &str, body: &str) {
-        // Phase 4 will add actual mesh message handling.
-        // For now, log and push to dashboard as an informational alert.
+        // Store in inbox for agent consumption via GET /aegis/relay/inbox
+        self.relay_inbox.push(RelayMessage {
+            from: from.to_string(),
+            body: body.to_string(),
+            ts_ms: now_ms(),
+            read: false,
+        });
+
+        // Also push to dashboard as an informational alert
         let alert = DashboardAlert {
             ts_ms: now_ms(),
             kind: "mesh_relay".to_string(),
@@ -105,7 +117,7 @@ impl WssHandler for AdapterWssHandler {
         tracing::debug!(
             from = %from,
             body_len = body.len(),
-            "mesh relay forwarded to dashboard"
+            "mesh relay stored in inbox + forwarded to dashboard"
         );
     }
 }
@@ -126,7 +138,8 @@ mod tests {
     fn make_handler() -> (AdapterWssHandler, broadcast::Receiver<DashboardAlert>) {
         let (tx, rx) = broadcast::channel(32);
         let cache = Arc::new(std::sync::RwLock::new(None));
-        let handler = AdapterWssHandler::new(tx, cache);
+        let inbox = Arc::new(RelayInbox::new(100));
+        let handler = AdapterWssHandler::new(tx, cache, inbox);
         (handler, rx)
     }
 
@@ -134,7 +147,8 @@ mod tests {
     fn trustmark_update_updates_cache() {
         let (tx, _rx) = broadcast::channel(32);
         let cache = Arc::new(std::sync::RwLock::new(None));
-        let handler = AdapterWssHandler::new(tx, cache.clone());
+        let inbox = Arc::new(RelayInbox::new(100));
+        let handler = AdapterWssHandler::new(tx, cache.clone(), inbox);
 
         // Before update, cache should be empty
         assert!(cache.read().unwrap().is_none());
@@ -175,7 +189,8 @@ mod tests {
     fn trustmark_update_overwrites_previous_cache() {
         let (tx, _rx) = broadcast::channel(32);
         let cache = Arc::new(std::sync::RwLock::new(None));
-        let handler = AdapterWssHandler::new(tx, cache.clone());
+        let inbox = Arc::new(RelayInbox::new(100));
+        let handler = AdapterWssHandler::new(tx, cache.clone(), inbox);
 
         handler.on_trustmark_update("bot1", 5000);
         handler.on_trustmark_update("bot1", 9000);

@@ -1,0 +1,11 @@
+{
+  "name": "aegis-mesh-trust",
+  "version": "1.0.0",
+  "description": "Mesh trust tools for OpenClaw agents -- check peer trust, browse Botawiki, read relay inbox",
+  "main": "index.ts",
+  "type": "module",
+  "license": "AGPL-3.0-or-later",
+  "openclaw": {
+    "extensions": ["./index.ts"]
+  }
+}
