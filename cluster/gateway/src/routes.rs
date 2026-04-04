@@ -2049,11 +2049,12 @@ mod tests {
         let resp = app.oneshot(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::ACCEPTED);
 
-        // Verify the message was forwarded via WSS
+        // Verify the message was forwarded via WSS (wrapped in WssMessage format)
         let received = rx.recv().await.unwrap();
-        let envelope: RelayEnvelope = serde_json::from_str(&received).unwrap();
-        assert_eq!(envelope.body, "hello via wss");
-        assert_eq!(envelope.from, pubkey);
+        let parsed: serde_json::Value = serde_json::from_str(&received).unwrap();
+        assert_eq!(parsed["type"], "mesh_relay");
+        assert_eq!(parsed["body"], "hello via wss");
+        assert_eq!(parsed["from"], pubkey);
     }
 
     // ── SLM screening tests ──
