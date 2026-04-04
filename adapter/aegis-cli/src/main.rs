@@ -40,6 +40,7 @@ use aegis_adapter::config::{AdapterConfig, AdapterMode};
 
 mod backup;
 mod botawiki_cmd;
+mod cluster_setup;
 mod mesh_cmd;
 mod trace;
 mod trustmark_cmd;
@@ -303,6 +304,15 @@ enum SetupTarget {
         /// Proxy URL to configure (default: http://127.0.0.1:3141)
         #[arg(long, default_value = "http://127.0.0.1:3141")]
         proxy_url: String,
+    },
+    /// Connect to an Aegis cluster
+    Cluster {
+        /// Gateway URL (e.g. http://gateway.aegis.network:8080)
+        gateway_url: String,
+
+        /// Test connection only, don't write config
+        #[arg(long)]
+        dry_run: bool,
     },
 }
 
@@ -759,6 +769,12 @@ fn main() {
                 proxy_url,
             } => {
                 setup_openclaw(dry_run, revert, &proxy_url);
+            }
+            SetupTarget::Cluster {
+                gateway_url,
+                dry_run,
+            } => {
+                cluster_setup::setup_cluster(&gateway_url, dry_run, &cli.config);
             }
         },
 
