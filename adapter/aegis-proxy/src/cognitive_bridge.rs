@@ -12,6 +12,9 @@
 //! the catch-all upstream forwarding. The LLM provider can invoke
 //! them as tool calls when registered via MCP or function calling.
 
+use std::collections::VecDeque;
+use std::sync::RwLock;
+
 use axum::{
     Json, Router,
     extract::State,
@@ -35,6 +38,11 @@ pub fn routes() -> Router<crate::proxy::AppState> {
         .route("/unregister-channel", post(protected_unregister_handler))
         .route("/channel-context", get(protected_context_handler))
         .route("/trust/set", post(protected_trust_set_handler))
+        .route("/peer/{bot_id}/trust", get(protected_peer_trust_handler))
+        .route("/mesh/peers", get(protected_mesh_peers_handler))
+        .route("/mesh/status", get(protected_mesh_status_handler))
+        .route("/botawiki/search", get(protected_botawiki_search_handler))
+        .route("/relay/inbox", get(protected_relay_inbox_handler))
 }
 
 /// Check if the request comes from a trusted source IP.
@@ -571,6 +579,217 @@ async fn unregister_channel_handler(
     }
 }
 
+// ---- Relay Inbox ----
+
+/// Incoming relay message for the agent to read.
+#[derive(Debug, Clone, Serialize)]
+pub struct RelayMessage {
+    pub from: String,
+    pub body: String,
+    pub ts_ms: u64,
+    pub read: bool,
+}
+
+/// Bounded inbox for incoming relay messages.
+pub struct RelayInbox {
+    messages: RwLock<VecDeque<RelayMessage>>,
+    capacity: usize,
+}
+
+impl RelayInbox {
+    pub fn new(capacity: usize) -> Self {
+        Self {
+            messages: RwLock::new(VecDeque::new()),
+            capacity,
+        }
+    }
+
+    pub fn push(&self, msg: RelayMessage) {
+        let mut msgs = self.messages.write().unwrap();
+        if msgs.len() >= self.capacity {
+            msgs.pop_front();
+        }
+        msgs.push_back(msg);
+    }
+
+    pub fn list(&self) -> Vec<RelayMessage> {
+        self.messages.read().unwrap().iter().cloned().collect()
+    }
+
+    pub fn count(&self) -> usize {
+        self.messages.read().unwrap().len()
+    }
+
+    pub fn mark_all_read(&self) {
+        let mut msgs = self.messages.write().unwrap();
+        for msg in msgs.iter_mut() {
+            msg.read = true;
+        }
+    }
+}
+
+// ---- Gateway proxy helper ----
+
+/// Fetch from the Gateway API. Returns None if gateway_url is not configured or request fails.
+async fn gateway_fetch(state: &crate::proxy::AppState, path: &str) -> Option<serde_json::Value> {
+    let gateway_url = state.gateway_url.as_ref()?;
+    let url = format!("{}{}", gateway_url, path);
+    reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(3))
+        .build()
+        .ok()?
+        .get(&url)
+        .send()
+        .await
+        .ok()?
+        .json()
+        .await
+        .ok()
+}
+
+// ---- Protected mesh/peer/botawiki/relay handlers ----
+
+async fn protected_peer_trust_handler(
+    State(state): State<crate::proxy::AppState>,
+    connect_info: axum::extract::ConnectInfo<std::net::SocketAddr>,
+    axum::extract::Path(bot_id): axum::extract::Path<String>,
+) -> axum::response::Response {
+    if !is_trusted_source(&connect_info, &state) {
+        return (
+            axum::http::StatusCode::FORBIDDEN,
+            "cognitive bridge requires trusted channel",
+        )
+            .into_response();
+    }
+    peer_trust_handler(State(state), axum::extract::Path(bot_id))
+        .await
+        .into_response()
+}
+
+async fn protected_mesh_peers_handler(
+    State(state): State<crate::proxy::AppState>,
+    connect_info: axum::extract::ConnectInfo<std::net::SocketAddr>,
+) -> axum::response::Response {
+    if !is_trusted_source(&connect_info, &state) {
+        return (
+            axum::http::StatusCode::FORBIDDEN,
+            "cognitive bridge requires trusted channel",
+        )
+            .into_response();
+    }
+    mesh_peers_handler(State(state)).await.into_response()
+}
+
+async fn protected_mesh_status_handler(
+    State(state): State<crate::proxy::AppState>,
+    connect_info: axum::extract::ConnectInfo<std::net::SocketAddr>,
+) -> axum::response::Response {
+    if !is_trusted_source(&connect_info, &state) {
+        return (
+            axum::http::StatusCode::FORBIDDEN,
+            "cognitive bridge requires trusted channel",
+        )
+            .into_response();
+    }
+    mesh_status_handler(State(state)).await.into_response()
+}
+
+#[derive(Debug, Deserialize)]
+struct BotawikiSearchQuery {
+    ns: Option<String>,
+}
+
+async fn protected_botawiki_search_handler(
+    State(state): State<crate::proxy::AppState>,
+    connect_info: axum::extract::ConnectInfo<std::net::SocketAddr>,
+    query: axum::extract::Query<BotawikiSearchQuery>,
+) -> axum::response::Response {
+    if !is_trusted_source(&connect_info, &state) {
+        return (
+            axum::http::StatusCode::FORBIDDEN,
+            "cognitive bridge requires trusted channel",
+        )
+            .into_response();
+    }
+    botawiki_search_handler(State(state), query)
+        .await
+        .into_response()
+}
+
+async fn protected_relay_inbox_handler(
+    State(state): State<crate::proxy::AppState>,
+    connect_info: axum::extract::ConnectInfo<std::net::SocketAddr>,
+) -> axum::response::Response {
+    if !is_trusted_source(&connect_info, &state) {
+        return (
+            axum::http::StatusCode::FORBIDDEN,
+            "cognitive bridge requires trusted channel",
+        )
+            .into_response();
+    }
+    relay_inbox_handler(State(state)).await.into_response()
+}
+
+// ---- Actual mesh/peer/botawiki/relay handlers ----
+
+/// GET /aegis/peer/{bot_id}/trust — proxies to Gateway /mesh/peers/{bot_id}
+async fn peer_trust_handler(
+    State(state): State<crate::proxy::AppState>,
+    axum::extract::Path(bot_id): axum::extract::Path<String>,
+) -> Json<serde_json::Value> {
+    match gateway_fetch(&state, &format!("/mesh/peers/{bot_id}")).await {
+        Some(data) => Json(data),
+        None => Json(serde_json::json!({"error": "peer not found or gateway unreachable"})),
+    }
+}
+
+/// GET /aegis/mesh/peers — proxies to Gateway /mesh/peers
+async fn mesh_peers_handler(
+    State(state): State<crate::proxy::AppState>,
+) -> Json<serde_json::Value> {
+    match gateway_fetch(&state, "/mesh/peers").await {
+        Some(data) => Json(data),
+        None => Json(serde_json::json!({"error": "gateway unreachable", "peers": []})),
+    }
+}
+
+/// GET /aegis/mesh/status — proxies to Gateway /mesh/status
+async fn mesh_status_handler(
+    State(state): State<crate::proxy::AppState>,
+) -> Json<serde_json::Value> {
+    match gateway_fetch(&state, "/mesh/status").await {
+        Some(data) => Json(data),
+        None => Json(serde_json::json!({"error": "gateway unreachable"})),
+    }
+}
+
+/// GET /aegis/botawiki/search?ns=... — proxies to Gateway /botawiki/query?namespace=...
+async fn botawiki_search_handler(
+    State(state): State<crate::proxy::AppState>,
+    axum::extract::Query(query): axum::extract::Query<BotawikiSearchQuery>,
+) -> Json<serde_json::Value> {
+    let ns = query.ns.unwrap_or_default();
+    let path = format!("/botawiki/query?namespace={}", ns);
+    match gateway_fetch(&state, &path).await {
+        Some(data) => Json(data),
+        None => Json(serde_json::json!({"error": "gateway unreachable", "results": []})),
+    }
+}
+
+/// GET /aegis/relay/inbox — return messages from the relay inbox.
+async fn relay_inbox_handler(
+    State(state): State<crate::proxy::AppState>,
+) -> Json<serde_json::Value> {
+    let messages = state.relay_inbox.list();
+    let count = messages.len();
+    // Mark as read after fetching
+    state.relay_inbox.mark_all_read();
+    Json(serde_json::json!({
+        "messages": messages,
+        "count": count,
+    }))
+}
+
 /// GET /aegis/channel-context — return current active channel + full registry.
 async fn channel_context_handler() -> Json<serde_json::Value> {
     let active = ACTIVE_CHANNEL.read().ok().and_then(|c| c.clone());
@@ -620,5 +839,96 @@ mod tests {
         };
         let json = serde_json::to_string(&resp).unwrap();
         assert!(json.contains("\"chain_head_seq\":42"));
+    }
+
+    #[test]
+    fn relay_inbox_push_and_list() {
+        let inbox = RelayInbox::new(10);
+        inbox.push(RelayMessage {
+            from: "peer-a".to_string(),
+            body: "hello".to_string(),
+            ts_ms: 1000,
+            read: false,
+        });
+        inbox.push(RelayMessage {
+            from: "peer-b".to_string(),
+            body: "world".to_string(),
+            ts_ms: 2000,
+            read: false,
+        });
+        inbox.push(RelayMessage {
+            from: "peer-c".to_string(),
+            body: "!".to_string(),
+            ts_ms: 3000,
+            read: false,
+        });
+        let msgs = inbox.list();
+        assert_eq!(msgs.len(), 3);
+        assert_eq!(msgs[0].from, "peer-a");
+        assert_eq!(msgs[1].from, "peer-b");
+        assert_eq!(msgs[2].from, "peer-c");
+    }
+
+    #[test]
+    fn relay_inbox_capacity() {
+        let inbox = RelayInbox::new(2);
+        inbox.push(RelayMessage {
+            from: "a".to_string(),
+            body: "1".to_string(),
+            ts_ms: 1,
+            read: false,
+        });
+        inbox.push(RelayMessage {
+            from: "b".to_string(),
+            body: "2".to_string(),
+            ts_ms: 2,
+            read: false,
+        });
+        inbox.push(RelayMessage {
+            from: "c".to_string(),
+            body: "3".to_string(),
+            ts_ms: 3,
+            read: false,
+        });
+        let msgs = inbox.list();
+        assert_eq!(msgs.len(), 2);
+        // Oldest ("a") should have been evicted
+        assert_eq!(msgs[0].from, "b");
+        assert_eq!(msgs[1].from, "c");
+    }
+
+    #[test]
+    fn relay_inbox_mark_read() {
+        let inbox = RelayInbox::new(10);
+        inbox.push(RelayMessage {
+            from: "x".to_string(),
+            body: "msg".to_string(),
+            ts_ms: 100,
+            read: false,
+        });
+        inbox.push(RelayMessage {
+            from: "y".to_string(),
+            body: "msg2".to_string(),
+            ts_ms: 200,
+            read: false,
+        });
+        assert!(inbox.list().iter().all(|m| !m.read));
+        inbox.mark_all_read();
+        assert!(inbox.list().iter().all(|m| m.read));
+    }
+
+    #[test]
+    fn relay_message_serializes() {
+        let msg = RelayMessage {
+            from: "peer-abc".to_string(),
+            body: "test payload".to_string(),
+            ts_ms: 1234567890,
+            read: false,
+        };
+        let json = serde_json::to_string(&msg).unwrap();
+        assert!(json.contains("\"from\":\"peer-abc\""));
+        assert!(json.contains("\"body\":\"test payload\""));
+        assert!(json.contains("\"ts_ms\":1234567890"));
+        assert!(json.contains("\"read\":false"));
     }
 }

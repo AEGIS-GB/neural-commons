@@ -615,15 +615,14 @@ pub async fn mesh_send<S: EvidenceStore>(
         msg_type: payload.msg_type.clone(),
         ts_ms: now_epoch_ms(),
     };
-    let envelope_json = match serde_json::to_string(&envelope) {
-        Ok(j) => j,
-        Err(e) => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({ "error": format!("serialization error: {e}") })),
-            );
-        }
-    };
+    // Wrap in WssMessage format so the adapter's tagged enum can parse it.
+    // Adapter expects {"type":"mesh_relay","from":"...","body":"..."}
+    let wss_message = serde_json::json!({
+        "type": "mesh_relay",
+        "from": envelope.from,
+        "body": envelope.body,
+    });
+    let envelope_json = wss_message.to_string();
 
     // Try to deliver via WSS if recipient is online
     if wss_registry.is_online(&payload.to).await {

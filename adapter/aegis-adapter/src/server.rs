@@ -947,7 +947,10 @@ pub async fn start(config: AdapterConfig, mode_override: Option<Mode>) -> Result
         info!("TRUSTMARK scoring started (snapshot every 1h)");
     }
 
-    // 10c. Optionally spawn gateway tasks (evidence push + WSS)
+    // 10c. Create relay inbox (shared between WSS handler and proxy)
+    let relay_inbox = Arc::new(aegis_proxy::cognitive_bridge::RelayInbox::new(100));
+
+    // 10d. Optionally spawn gateway tasks (evidence push + WSS)
     if let Some(ref gw_url) = config.gateway_url {
         // Re-derive signing key from identity file (same key used for evidence signing)
         let gw_signing_key = {
@@ -971,6 +974,7 @@ pub async fn start(config: AdapterConfig, mode_override: Option<Mode>) -> Result
         let wss_handler = Arc::new(crate::gateway_wss_handler::AdapterWssHandler::new(
             alert_tx.clone(),
             adapter_state.trustmark_cache.clone(),
+            relay_inbox.clone(),
         ));
         crate::gateway_wss::spawn_wss_task(gw_url, gw_signing_key, wss_handler);
 
@@ -1113,7 +1117,7 @@ pub async fn start(config: AdapterConfig, mode_override: Option<Mode>) -> Result
         }
     };
 
-    aegis_proxy::proxy::start_with_traffic_full_ex(
+    aegis_proxy::proxy::start_with_traffic_full_ex2(
         proxy_config,
         hooks,
         Some((dashboard_path, dashboard_router)),
@@ -1121,6 +1125,8 @@ pub async fn start(config: AdapterConfig, mode_override: Option<Mode>) -> Result
         Some(traffic_slm_updater),
         trust_config,
         trustmark_degraded_flag,
+        config.gateway_url.clone(),
+        relay_inbox,
     )
     .await
     .map_err(|e| StartupError::Proxy(format!("{e}")))?;
