@@ -435,6 +435,7 @@ pub async fn mesh_send<S: EvidenceStore>(
     // Trust gate (D21): sender TRUSTMARK >= 0.3 required for relay
     let sender_score = trustmark_cache.get(&identity.pubkey).await;
     let score = sender_score
+        .as_ref()
         .map(|s| s.score_bp as f64 / 10000.0)
         .unwrap_or(0.0);
     if score < MESH_TRUSTMARK_THRESHOLD {
@@ -468,13 +469,16 @@ pub async fn mesh_send<S: EvidenceStore>(
         );
     }
 
-    // Trust gate (D21): recipient TRUSTMARK >= 0.3 required
-    // Return 404 to avoid revealing that the bot exists but is untrusted
+    // Trust gate (D21): recipient TRUSTMARK >= 0.3 required for relay.
+    // Exception: if recipient is online via WSS, allow delivery even without cached score
+    // (they authenticated via challenge-response, proving they're a real mesh participant).
     let recv_score = trustmark_cache.get(&payload.to).await;
     let recv_score_val = recv_score
+        .as_ref()
         .map(|s| s.score_bp as f64 / 10000.0)
         .unwrap_or(0.0);
-    if recv_score_val < MESH_TRUSTMARK_THRESHOLD {
+    let recipient_online = wss_registry.is_online(&payload.to).await;
+    if recv_score_val < MESH_TRUSTMARK_THRESHOLD && !recipient_online {
         tracing::warn!(
             to = %payload.to,
             score = recv_score_val,
@@ -490,11 +494,34 @@ pub async fn mesh_send<S: EvidenceStore>(
 
     // SLM screening -- ALL relay messages must be screened (section 7.4, no fast-path override)
     // 3-layer cascade: heuristic (<1ms) -> classifier (~15ms) -> deep SLM (2-3s)
-    // Each layer only runs if the previous one found nothing.
+    //
+    // Trust-aware cascade:
+    // - Layer 1 (heuristic) always blocks on match (obvious patterns)
+    // - Layer 2 (classifier) blocks low-trust senders, but for high-trust (Tier 3+)
+    //   passes the classifier verdict as context to Layer 3 for reasoning
+    // - Layer 3 (SLM) gets trust context: sender TRUSTMARK, tier, and any classifier flags
+    //
+    // This lets Tier 3 bots share security research (which describes attack patterns)
+    // without the classifier quarantining text ABOUT attacks vs actual attacks.
+    let sender_tier = sender_score
+        .as_ref()
+        .map(|s| {
+            if s.score_bp >= 4000 {
+                "tier3"
+            } else if s.score_bp >= 2000 {
+                "tier2"
+            } else {
+                "tier1"
+            }
+        })
+        .unwrap_or("unknown");
+    let is_high_trust = sender_tier == "tier3";
+
     let quarantine_reason = {
         let mut reason: Option<String> = None;
+        let mut classifier_flag: Option<String> = None;
 
-        // Layer 1: Heuristic (<1ms)
+        // Layer 1: Heuristic (<1ms) — always blocks on match
         {
             let heuristic = aegis_slm::engine::heuristic::HeuristicEngine::new();
             if let Ok(output) = aegis_slm::engine::SlmEngine::generate(&heuristic, &payload.body)
@@ -520,30 +547,38 @@ pub async fn mesh_send<S: EvidenceStore>(
         }
 
         // Layer 2: Classifier (if available, ~15ms)
+        // For high-trust senders (Tier 3): classifier flags pass to SLM for reasoning
+        // For low-trust senders: classifier blocks above threshold
         if reason.is_none()
             && let Some(ref pg) = relay_screening.prompt_guard
         {
-            // Use classify() directly with a higher threshold for relay messages
-            // to reduce false positives on legitimate mesh communication.
-            // Default threshold is 0.5 — relay uses 0.9 to only quarantine high-confidence detections.
-            // Borderline cases (0.5-0.9) pass to Layer 3 (SLM) for reasoning-based analysis.
             const RELAY_CLASSIFIER_THRESHOLD: f32 = 0.9;
             match pg.classify(&payload.body) {
-                Ok((is_malicious, probability))
-                    if is_malicious && probability > RELAY_CLASSIFIER_THRESHOLD =>
-                {
-                    reason = Some(format!(
-                        "classifier: direct_injection ({:.0}% confidence)",
-                        probability * 100.0
-                    ));
-                }
                 Ok((is_malicious, probability)) if is_malicious => {
-                    tracing::debug!(
-                        probability,
-                        "classifier flagged relay but below relay threshold ({:.0}% < {:.0}%), passing to Layer 3",
-                        probability * 100.0,
-                        RELAY_CLASSIFIER_THRESHOLD * 100.0
-                    );
+                    if is_high_trust {
+                        // High-trust sender: pass classifier verdict to SLM as context
+                        classifier_flag = Some(format!(
+                            "classifier flagged at {:.0}% confidence",
+                            probability * 100.0
+                        ));
+                        tracing::info!(
+                            from = %identity.pubkey,
+                            probability,
+                            "classifier flagged relay from Tier 3 sender — passing to SLM with trust context"
+                        );
+                    } else if probability > RELAY_CLASSIFIER_THRESHOLD {
+                        // Low-trust sender above threshold: quarantine
+                        reason = Some(format!(
+                            "classifier: direct_injection ({:.0}% confidence)",
+                            probability * 100.0
+                        ));
+                    } else {
+                        // Low-trust sender below threshold: pass to SLM
+                        tracing::debug!(
+                            probability,
+                            "classifier flagged relay below threshold, passing to Layer 3"
+                        );
+                    }
                 }
                 Err(e) => {
                     tracing::warn!("PromptGuard classifier error: {e}");
@@ -553,13 +588,36 @@ pub async fn mesh_send<S: EvidenceStore>(
         }
 
         // Layer 3: Deep SLM (if available, 2-3s)
+        // For high-trust senders: include trust context + classifier flag in prompt
         // OpenAiCompatEngine uses reqwest::blocking — must run off the async runtime.
         if reason.is_none()
             && let Some(ref slm) = relay_screening.slm_engine
         {
-            let body = payload.body.clone();
-            let result =
-                tokio::task::block_in_place(|| aegis_slm::engine::SlmEngine::generate(slm, &body));
+            // Build trust-aware screening prompt
+            let trust_context = if is_high_trust {
+                let mut ctx = format!(
+                    "Sender is Tier 3, TRUSTMARK {}bp. ",
+                    sender_score.as_ref().map(|s| s.score_bp).unwrap_or(0)
+                );
+                if let Some(ref flag) = classifier_flag {
+                    ctx.push_str(&format!(
+                        "Note: {} — this may be because the sender is discussing security patterns, not executing them. Evaluate based on intent.",
+                        flag
+                    ));
+                }
+                Some(ctx)
+            } else {
+                None
+            };
+
+            let screening_prompt = aegis_slm::prompt::screening_prompt_combined_with_trust(
+                &payload.body,
+                trust_context.as_deref(),
+            );
+
+            let result = tokio::task::block_in_place(|| {
+                aegis_slm::engine::SlmEngine::generate(slm, &screening_prompt)
+            });
             if let Ok(output) = result
                 && let Ok(parsed) = aegis_slm::parser::parse_slm_output(
                     &output,
