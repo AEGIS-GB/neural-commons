@@ -497,84 +497,81 @@ pub async fn mesh_send<S: EvidenceStore>(
         // Layer 1: Heuristic (<1ms)
         {
             let heuristic = aegis_slm::engine::heuristic::HeuristicEngine::new();
-            if let Ok(output) = aegis_slm::engine::SlmEngine::generate(&heuristic, &payload.body) {
-                if let Ok(parsed) = aegis_slm::parser::parse_slm_output(
+            if let Ok(output) = aegis_slm::engine::SlmEngine::generate(&heuristic, &payload.body)
+                && let Ok(parsed) = aegis_slm::parser::parse_slm_output(
                     &output,
                     &aegis_slm::types::EngineProfile::Loopback,
-                ) {
-                    if !parsed.annotations.is_empty() {
-                        reason = Some(format!(
-                            "heuristic: {}",
-                            parsed
-                                .annotations
-                                .iter()
-                                .map(|a| serde_json::to_value(&a.pattern)
-                                    .ok()
-                                    .and_then(|v| v.as_str().map(String::from))
-                                    .unwrap_or_else(|| format!("{:?}", a.pattern)))
-                                .collect::<Vec<_>>()
-                                .join(", ")
-                        ));
-                    }
-                }
+                )
+                && !parsed.annotations.is_empty()
+            {
+                reason = Some(format!(
+                    "heuristic: {}",
+                    parsed
+                        .annotations
+                        .iter()
+                        .map(|a| serde_json::to_value(&a.pattern)
+                            .ok()
+                            .and_then(|v| v.as_str().map(String::from))
+                            .unwrap_or_else(|| format!("{:?}", a.pattern)))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ));
             }
         }
 
         // Layer 2: Classifier (if available, ~15ms)
-        if reason.is_none() {
-            if let Some(ref pg) = relay_screening.prompt_guard {
-                match pg.screen(&payload.body) {
-                    Ok(parsed) if !parsed.annotations.is_empty() => {
-                        reason = Some(format!(
-                            "classifier: {}",
-                            parsed
-                                .annotations
-                                .iter()
-                                .map(|a| serde_json::to_value(&a.pattern)
-                                    .ok()
-                                    .and_then(|v| v.as_str().map(String::from))
-                                    .unwrap_or_else(|| format!("{:?}", a.pattern)))
-                                .collect::<Vec<_>>()
-                                .join(", ")
-                        ));
-                    }
-                    Err(e) => {
-                        tracing::warn!("PromptGuard classifier error: {e}");
-                    }
-                    _ => {}
+        if reason.is_none()
+            && let Some(ref pg) = relay_screening.prompt_guard
+        {
+            match pg.screen(&payload.body) {
+                Ok(parsed) if !parsed.annotations.is_empty() => {
+                    reason = Some(format!(
+                        "classifier: {}",
+                        parsed
+                            .annotations
+                            .iter()
+                            .map(|a| serde_json::to_value(&a.pattern)
+                                .ok()
+                                .and_then(|v| v.as_str().map(String::from))
+                                .unwrap_or_else(|| format!("{:?}", a.pattern)))
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ));
                 }
+                Err(e) => {
+                    tracing::warn!("PromptGuard classifier error: {e}");
+                }
+                _ => {}
             }
         }
 
         // Layer 3: Deep SLM (if available, 2-3s)
         // OpenAiCompatEngine uses reqwest::blocking — must run off the async runtime.
-        if reason.is_none() {
-            if let Some(ref slm) = relay_screening.slm_engine {
-                let body = payload.body.clone();
-                let result = tokio::task::block_in_place(|| {
-                    aegis_slm::engine::SlmEngine::generate(slm, &body)
-                });
-                if let Ok(output) = result {
-                    if let Ok(parsed) = aegis_slm::parser::parse_slm_output(
-                        &output,
-                        &aegis_slm::types::EngineProfile::Loopback,
-                    ) {
-                        if !parsed.annotations.is_empty() {
-                            reason = Some(format!(
-                                "deep_slm: {}",
-                                parsed
-                                    .annotations
-                                    .iter()
-                                    .map(|a| serde_json::to_value(&a.pattern)
-                                        .ok()
-                                        .and_then(|v| v.as_str().map(String::from))
-                                        .unwrap_or_else(|| format!("{:?}", a.pattern)))
-                                    .collect::<Vec<_>>()
-                                    .join(", ")
-                            ));
-                        }
-                    }
-                }
+        if reason.is_none()
+            && let Some(ref slm) = relay_screening.slm_engine
+        {
+            let body = payload.body.clone();
+            let result =
+                tokio::task::block_in_place(|| aegis_slm::engine::SlmEngine::generate(slm, &body));
+            if let Ok(output) = result
+                && let Ok(parsed) = aegis_slm::parser::parse_slm_output(
+                    &output,
+                    &aegis_slm::types::EngineProfile::Loopback,
+                )
+                && !parsed.annotations.is_empty()
+            {
+                reason = Some(format!(
+                    "deep_slm: {}",
+                    parsed
+                        .annotations
+                        .iter()
+                        .map(|a| serde_json::to_value(&a.pattern)
+                            .ok()
+                            .and_then(|v| v.as_str().map(String::from))
+                            .unwrap_or_else(|| format!("{:?}", a.pattern)))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ));
             }
         }
 

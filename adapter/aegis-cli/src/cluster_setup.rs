@@ -18,7 +18,7 @@ pub fn setup_cluster(gateway_url: &str, dry_run: bool, config_path: &str) {
         .build()
         .unwrap();
 
-    let health = match client.get(&format!("{gateway_url}/health")).send() {
+    let health = match client.get(format!("{gateway_url}/health")).send() {
         Ok(r) if r.status().is_success() => {
             println!("  [ok] Gateway reachable at {gateway_url}");
             true
@@ -40,7 +40,7 @@ pub fn setup_cluster(gateway_url: &str, dry_run: bool, config_path: &str) {
 
     // 2. Check mesh endpoints
     println!("  Testing mesh API...");
-    match client.get(&format!("{gateway_url}/mesh/status")).send() {
+    match client.get(format!("{gateway_url}/mesh/status")).send() {
         Ok(r) if r.status().is_success() => {
             let status: serde_json::Value = r.json().unwrap_or_default();
             let peers = status
@@ -63,19 +63,19 @@ pub fn setup_cluster(gateway_url: &str, dry_run: bool, config_path: &str) {
         .join("identity.key");
 
     if identity_path.exists() {
-        if let Ok(key_bytes) = std::fs::read(&identity_path) {
-            if key_bytes.len() == 32 {
-                use ed25519_dalek::SigningKey;
-                let mut arr = [0u8; 32];
-                arr.copy_from_slice(&key_bytes);
-                let sk = SigningKey::from_bytes(&arr);
-                let pk = hex::encode(sk.verifying_key().as_bytes());
-                println!(
-                    "  [ok] Bot identity: {}...{}",
-                    &pk[..16],
-                    &pk[pk.len() - 8..]
-                );
-            }
+        if let Ok(key_bytes) = std::fs::read(&identity_path)
+            && key_bytes.len() == 32
+        {
+            use ed25519_dalek::SigningKey;
+            let mut arr = [0u8; 32];
+            arr.copy_from_slice(&key_bytes);
+            let sk = SigningKey::from_bytes(&arr);
+            let pk = hex::encode(sk.verifying_key().as_bytes());
+            println!(
+                "  [ok] Bot identity: {}...{}",
+                &pk[..16],
+                &pk[pk.len() - 8..]
+            );
         }
     } else {
         println!("  [warn] No identity key found (will be generated on first start)");
