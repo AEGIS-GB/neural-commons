@@ -523,20 +523,27 @@ pub async fn mesh_send<S: EvidenceStore>(
         if reason.is_none()
             && let Some(ref pg) = relay_screening.prompt_guard
         {
-            match pg.screen(&payload.body) {
-                Ok(parsed) if !parsed.annotations.is_empty() => {
+            // Use classify() directly with a higher threshold for relay messages
+            // to reduce false positives on legitimate mesh communication.
+            // Default threshold is 0.5 — relay uses 0.9 to only quarantine high-confidence detections.
+            // Borderline cases (0.5-0.9) pass to Layer 3 (SLM) for reasoning-based analysis.
+            const RELAY_CLASSIFIER_THRESHOLD: f32 = 0.9;
+            match pg.classify(&payload.body) {
+                Ok((is_malicious, probability))
+                    if is_malicious && probability > RELAY_CLASSIFIER_THRESHOLD =>
+                {
                     reason = Some(format!(
-                        "classifier: {}",
-                        parsed
-                            .annotations
-                            .iter()
-                            .map(|a| serde_json::to_value(&a.pattern)
-                                .ok()
-                                .and_then(|v| v.as_str().map(String::from))
-                                .unwrap_or_else(|| format!("{:?}", a.pattern)))
-                            .collect::<Vec<_>>()
-                            .join(", ")
+                        "classifier: direct_injection ({:.0}% confidence)",
+                        probability * 100.0
                     ));
+                }
+                Ok((is_malicious, probability)) if is_malicious => {
+                    tracing::debug!(
+                        probability,
+                        "classifier flagged relay but below relay threshold ({:.0}% < {:.0}%), passing to Layer 3",
+                        probability * 100.0,
+                        RELAY_CLASSIFIER_THRESHOLD * 100.0
+                    );
                 }
                 Err(e) => {
                     tracing::warn!("PromptGuard classifier error: {e}");
