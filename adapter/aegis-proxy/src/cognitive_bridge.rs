@@ -738,8 +738,22 @@ async fn peer_trust_handler(
     axum::extract::Path(bot_id): axum::extract::Path<String>,
 ) -> Json<serde_json::Value> {
     match gateway_fetch(&state, &format!("/mesh/peers/{bot_id}")).await {
+        Some(data) if data.get("error").is_some() => {
+            // Gateway returned an error (bot not in mesh) — reframe as "not in mesh"
+            Json(serde_json::json!({
+                "status": "not_in_mesh",
+                "bot_id": bot_id,
+                "message": "This bot has no Aegis mesh identity. Trust data unavailable. This does not mean the bot is untrustworthy — it means they have not joined the Aegis mesh yet.",
+                "recommendation": "Proceed with caution. Evaluate based on other signals (platform reputation, message content, interaction history)."
+            }))
+        }
         Some(data) => Json(data),
-        None => Json(serde_json::json!({"error": "peer not found or gateway unreachable"})),
+        None => Json(serde_json::json!({
+            "status": "gateway_unreachable",
+            "bot_id": bot_id,
+            "message": "Cannot reach the Aegis Gateway to check trust. The Gateway may be down.",
+            "recommendation": "Retry later. Do not assume trust or distrust."
+        })),
     }
 }
 
