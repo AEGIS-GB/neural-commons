@@ -264,6 +264,92 @@ impl NatsBridge {
         Ok(total_replayed)
     }
 
+    /// Subscribe to `mesh.relay.screened` and `mesh.relay.quarantined` for
+    /// delivery of screened relay messages from the Mesh Relay service.
+    ///
+    /// - `mesh.relay.screened`: message passed screening — deliver via WSS or dead-drop
+    /// - `mesh.relay.quarantined`: message failed screening — update stats/log
+    pub async fn subscribe_relay_delivery(
+        &self,
+        wss_registry: Arc<crate::ws::WssConnectionRegistry>,
+        dead_drop_store: Arc<DeadDropStore>,
+        relay_stats_counters: Arc<crate::mesh_routes::RelayStats>,
+        relay_log: Arc<RelayLog>,
+        nats_bridge: Option<Arc<NatsBridge>>,
+    ) -> Result<(), async_nats::SubscribeError> {
+        // Subscribe to screened messages — deliver to recipients
+        let mut screened_sub = self.client.subscribe("mesh.relay.screened").await?;
+        let wss = wss_registry.clone();
+        let dd = dead_drop_store.clone();
+        let stats = relay_stats_counters.clone();
+        let log = relay_log.clone();
+        let bridge = nats_bridge.clone();
+
+        tokio::spawn(async move {
+            tracing::info!("relay delivery subscriber started on mesh.relay.screened");
+            while let Some(msg) = screened_sub.next().await {
+                if let Ok(screened) = serde_json::from_slice::<serde_json::Value>(&msg.payload) {
+                    let from = screened["from"].as_str().unwrap_or_default();
+                    let to = screened["to"].as_str().unwrap_or_default();
+                    let body = screened["body"].as_str().unwrap_or_default();
+                    let msg_type = screened["msg_type"].as_str().unwrap_or("relay");
+
+                    let _ = crate::routes::deliver_relay_message(
+                        from, to, body, msg_type, &wss, &dd, &stats, &log, &bridge,
+                    )
+                    .await;
+                } else {
+                    tracing::warn!("malformed mesh.relay.screened message");
+                }
+            }
+            tracing::warn!("relay delivery subscriber ended unexpectedly");
+        });
+
+        // Subscribe to quarantined messages — update stats/log
+        let mut quarantined_sub = self.client.subscribe("mesh.relay.quarantined").await?;
+        let stats2 = relay_stats_counters;
+        let log2 = relay_log;
+
+        tokio::spawn(async move {
+            tracing::info!("relay quarantine subscriber started on mesh.relay.quarantined");
+            while let Some(msg) = quarantined_sub.next().await {
+                if let Ok(quarantined) = serde_json::from_slice::<serde_json::Value>(&msg.payload) {
+                    let from = quarantined["from"].as_str().unwrap_or_default().to_string();
+                    let to = quarantined["to"].as_str().unwrap_or_default().to_string();
+                    let reason = quarantined["reason"]
+                        .as_str()
+                        .unwrap_or_default()
+                        .to_string();
+                    let msg_type = quarantined["msg_type"]
+                        .as_str()
+                        .unwrap_or("relay")
+                        .to_string();
+                    let body = quarantined["body"].as_str().unwrap_or_default().to_string();
+
+                    stats2
+                        .quarantined
+                        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    let relay_event = RelayEvent {
+                        from,
+                        to,
+                        status: "quarantined".into(),
+                        msg_type,
+                        ts_ms: chrono::Utc::now().timestamp_millis(),
+                        reason,
+                        body_preview: body,
+                    };
+                    log2.push(relay_event);
+                    tracing::warn!("relay message quarantined by Mesh Relay service");
+                } else {
+                    tracing::warn!("malformed mesh.relay.quarantined message");
+                }
+            }
+            tracing::warn!("relay quarantine subscriber ended unexpectedly");
+        });
+
+        Ok(())
+    }
+
     /// Publish an evidence rollup to `evidence.rollup`.
     ///
     /// Rollups are Merkle-aggregated batches used by the ledger consumer.

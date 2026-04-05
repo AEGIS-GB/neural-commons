@@ -1,18 +1,33 @@
 [package]
 name = "aegis-mesh"
-description = "Mesh relay: rust-libp2p, content sanitization, trust-weighted routing, dead-drop"
+description = "Mesh Relay service: 3-layer content screening, trust-weighted routing, NATS-based relay"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+[features]
+default = ["prompt-guard"]
+prompt-guard = ["aegis-slm/prompt-guard"]
+
 [dependencies]
 aegis-crypto = { path = "../../aegis-crypto" }
 aegis-schemas = { path = "../../aegis-schemas" }
+aegis-slm = { path = "../../adapter/aegis-slm", default-features = false }
 aegis-common = { path = "../common" }
-libp2p.workspace = true
 async-nats.workspace = true
 tokio.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tracing.workspace = true
+tracing-subscriber.workspace = true
 thiserror.workspace = true
+clap.workspace = true
+chrono.workspace = true
+futures.workspace = true
+
+[[bin]]
+name = "aegis-mesh-relay"
+path = "src/main.rs"
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
