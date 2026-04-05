@@ -709,10 +709,27 @@ pub async fn botawiki_submit_claim(
     let top = trustmark_cache.top_scores(3, &identity.pubkey).await;
     let validators: Vec<String> = top.into_iter().map(|(id, _)| id).collect();
 
-    // 5. Store in quarantine
-    let claim_id = botawiki_store.submit(claim, validators.clone()).await;
+    let claim_id = claim.id;
 
-    // 6. Publish to NATS for persistence
+    // 5. If NATS is available, publish to botawiki.claim.submit for the
+    //    standalone Botawiki service; also store locally as cache.
+    //    Without NATS, fall back to local-only storage.
+    if let Some(bridge) = nats_bridge.as_ref() {
+        let submit_msg = serde_json::json!({
+            "claim": &claim,
+            "validators": &validators,
+        });
+        let json = serde_json::to_vec(&submit_msg).unwrap_or_default();
+        let _ = bridge
+            .publish_mesh_event("botawiki.claim.submit", &json)
+            .await;
+    }
+
+    // Always maintain local cache (populated by NATS subscription on
+    // `botawiki.claim.stored`, or directly here as fallback)
+    botawiki_store.submit(claim, validators.clone()).await;
+
+    // 6. Publish stored state for NATS persistence (JetStream)
     if let Some(bridge) = nats_bridge.as_ref()
         && let Some(stored) = botawiki_store.get(&claim_id).await
     {
@@ -742,18 +759,32 @@ pub struct VoteRequest {
 }
 
 /// POST /botawiki/vote -- vote on a quarantined claim.
+/// If NATS is available, also publishes to `botawiki.vote` for the standalone
+/// Botawiki service. Local store is always updated (serves as cache for queries).
 pub async fn botawiki_vote(
     Extension(identity): Extension<VerifiedIdentity>,
     Extension(botawiki_store): Extension<Arc<BotawikiStore>>,
     Extension(nats_bridge): Extension<Option<Arc<NatsBridge>>>,
     Json(req): Json<VoteRequest>,
 ) -> impl IntoResponse {
+    // Publish vote to NATS for the Botawiki service
+    if let Some(bridge) = nats_bridge.as_ref() {
+        let vote_msg = serde_json::json!({
+            "claim_id": req.claim_id,
+            "validator_id": &identity.pubkey,
+            "approve": req.approve,
+        });
+        let json = serde_json::to_vec(&vote_msg).unwrap_or_default();
+        let _ = bridge.publish_mesh_event("botawiki.vote", &json).await;
+    }
+
+    // Process locally (cache + fallback)
     match botawiki_store
         .vote(&req.claim_id, &identity.pubkey, req.approve)
         .await
     {
         Ok(status) => {
-            // Publish updated claim to NATS for persistence
+            // Publish updated claim to NATS for JetStream persistence
             if let Some(bridge) = nats_bridge.as_ref()
                 && let Some(stored) = botawiki_store.get(&req.claim_id).await
             {
