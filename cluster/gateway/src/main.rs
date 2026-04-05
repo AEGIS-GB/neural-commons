@@ -17,7 +17,6 @@ use tokio::signal;
 use tower_http::cors::{Any, CorsLayer};
 use tracing::info;
 
-use aegis_gateway::RelayScreening;
 use aegis_gateway::auth;
 use aegis_gateway::botawiki::BotawikiStore;
 use aegis_gateway::mesh_routes::{self, RelayLog, RelayStats};
@@ -37,18 +36,9 @@ struct GatewayConfig {
     /// NATS server URL (optional — Gateway runs without NATS for local/test)
     #[serde(default)]
     nats_url: Option<String>,
-
-    /// Path to ProtectAI prompt guard ONNX model directory (optional)
-    #[serde(default)]
-    prompt_guard_model_dir: Option<String>,
-
-    /// SLM server URL for deep analysis (optional, e.g. "http://localhost:1234")
-    #[serde(default)]
-    slm_server_url: Option<String>,
-
-    /// SLM model name (optional, e.g. "qwen/qwen3-30b-a3b")
-    #[serde(default)]
-    slm_model: Option<String>,
+    // Relay screening (prompt_guard, slm_server_url, slm_model) has been
+    // moved to the aegis-mesh-relay service. Gateway no longer screens relay
+    // messages inline — it publishes to NATS for the Mesh Relay to screen.
 }
 
 fn default_listen_addr() -> String {
@@ -60,9 +50,6 @@ impl Default for GatewayConfig {
         Self {
             listen_addr: default_listen_addr(),
             nats_url: None,
-            prompt_guard_model_dir: None,
-            slm_server_url: None,
-            slm_model: None,
         }
     }
 }
@@ -187,51 +174,6 @@ async fn main() {
         }
     };
 
-    // Initialize relay screening engines (optional Layer 2 + Layer 3)
-    let prompt_guard = match &config.prompt_guard_model_dir {
-        Some(dir) => {
-            let path = std::path::Path::new(dir);
-            match aegis_slm::engine::prompt_guard::PromptGuardEngine::load(path) {
-                Ok(engine) => {
-                    info!("PromptGuard ONNX classifier loaded from {dir}");
-                    Some(engine)
-                }
-                Err(e) => {
-                    tracing::warn!("failed to load PromptGuard from {dir}: {e}");
-                    None
-                }
-            }
-        }
-        None => {
-            info!("no prompt_guard_model_dir configured, Layer 2 (classifier) disabled");
-            None
-        }
-    };
-
-    let slm_engine = match (&config.slm_server_url, &config.slm_model) {
-        (Some(url), Some(model)) => {
-            info!("Deep SLM engine configured: {url} model={model}");
-            Some(aegis_slm::engine::openai_compat::OpenAiCompatEngine::new(
-                url, model,
-            ))
-        }
-        (Some(url), None) => {
-            tracing::warn!(
-                "slm_server_url set to {url} but slm_model not configured, Layer 3 (deep SLM) disabled"
-            );
-            None
-        }
-        _ => {
-            info!("no slm_server_url configured, Layer 3 (deep SLM) disabled");
-            None
-        }
-    };
-
-    let relay_screening = Arc::new(RelayScreening {
-        prompt_guard,
-        slm_engine,
-    });
-
     // Mesh shared state
     let wss_registry = Arc::new(WssConnectionRegistry::new());
     let dead_drop_store = Arc::new(DeadDropStore::new());
@@ -254,6 +196,21 @@ async fn main() {
             Ok(count) => tracing::info!(count, "mesh state restored from NATS"),
             Err(e) => tracing::warn!("mesh replay failed: {e}"),
         }
+    }
+
+    // Subscribe to Mesh Relay delivery/quarantine notifications
+    if let Some(bridge) = &nats_bridge
+        && let Err(e) = bridge
+            .subscribe_relay_delivery(
+                wss_registry.clone(),
+                dead_drop_store.clone(),
+                relay_stats.clone(),
+                relay_log.clone(),
+                Some(Arc::clone(bridge)),
+            )
+            .await
+    {
+        tracing::warn!("failed to subscribe to relay delivery: {e}");
     }
 
     // Replay protection (in-memory, inline cleanup)
@@ -287,8 +244,7 @@ async fn main() {
         .layer(Extension(dead_drop_store.clone()))
         .layer(Extension(botawiki_store.clone()))
         .layer(Extension(relay_stats.clone()))
-        .layer(Extension(relay_log.clone()))
-        .layer(Extension(relay_screening));
+        .layer(Extension(relay_log.clone()));
 
     // Public mesh status routes (no auth required)
     let mesh_routes = Router::new()

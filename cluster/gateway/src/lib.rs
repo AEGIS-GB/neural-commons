@@ -19,8 +19,8 @@ pub mod routes;
 pub mod store;
 pub mod ws;
 
-/// Screening engines for relay messages (3-layer cascade).
-pub struct RelayScreening {
-    pub prompt_guard: Option<aegis_slm::engine::prompt_guard::PromptGuardEngine>,
-    pub slm_engine: Option<aegis_slm::engine::openai_compat::OpenAiCompatEngine>,
-}
+// Relay screening has been extracted to the aegis-mesh-relay service.
+// The Gateway now publishes to NATS `mesh.relay.incoming` and the Mesh Relay
+// service handles 3-layer screening (heuristic + classifier + SLM).
+// For local/test deployments without NATS, the Gateway falls back to
+// inline heuristic-only screening.

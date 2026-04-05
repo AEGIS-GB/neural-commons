@@ -12,7 +12,7 @@ use axum::{Extension, Router, middleware};
 use ed25519_dalek::Signer;
 use tower::ServiceExt;
 
-use aegis_gateway::auth::{self, ReplayProtection, SigningInput, VerifiedIdentity};
+use aegis_gateway::auth::{self, ReplayProtection, SigningInput};
 use aegis_gateway::botawiki::BotawikiStore;
 use aegis_gateway::evaluator::EvaluatorService;
 use aegis_gateway::mesh_routes::{RelayLog, RelayStats};
@@ -97,10 +97,6 @@ fn security_test_app(
         .layer(Extension(Arc::new(EvaluatorService::new())))
         .layer(Extension(Arc::new(RelayStats::new())))
         .layer(Extension(Arc::new(RelayLog::new())))
-        .layer(Extension(Arc::new(aegis_gateway::RelayScreening {
-            prompt_guard: None,
-            slm_engine: None,
-        })))
         .layer(middleware::from_fn(auth::auth_middleware))
         .layer(Extension(replay))
         .layer(Extension(rate_limiter))
@@ -664,10 +660,6 @@ async fn dead_drop_quota_enforced() {
         .layer(Extension(Arc::new(EvaluatorService::new())))
         .layer(Extension(Arc::new(RelayStats::new())))
         .layer(Extension(Arc::new(RelayLog::new())))
-        .layer(Extension(Arc::new(aegis_gateway::RelayScreening {
-            prompt_guard: None,
-            slm_engine: None,
-        })))
         .layer(middleware::from_fn(auth::auth_middleware))
         .layer(Extension(Arc::new(ReplayProtection::new())))
         .layer(Extension(Arc::new(TierRateLimiter::new())))

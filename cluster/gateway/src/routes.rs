@@ -23,14 +23,13 @@ use axum::{Extension, Json};
 use serde::Deserialize;
 use tokio::sync::RwLock;
 
-use crate::RelayScreening;
 use crate::auth::VerifiedIdentity;
 use crate::botawiki::BotawikiStore;
 use crate::evaluator::EvaluatorService;
 use crate::mesh_routes::{RelayEvent, RelayLog, RelayStats};
 use crate::nats_bridge::{NatsBridge, TrustmarkCache};
 use crate::store::{EvidenceRecord, EvidenceStore};
-use crate::ws::{DeadDropStore, RelayEnvelope, WssConnectionRegistry};
+use crate::ws::{DeadDropStore, WssConnectionRegistry};
 
 /// Maximum receipts per batch
 pub const MAX_BATCH_SIZE: usize = 100;
@@ -403,8 +402,12 @@ pub const MESH_TRUSTMARK_THRESHOLD: f64 = 0.3;
 /// POST /mesh/send -- send a message to another bot via the Gateway.
 ///
 /// Auth required. Sender identified from NC-Ed25519 pubkey.
-/// Validates sender and recipient TRUSTMARK scores, screens message content,
-/// and delivers via WSS if recipient is online.
+/// Validates sender and recipient TRUSTMARK scores, then publishes
+/// to `mesh.relay.incoming` for the Mesh Relay service to screen.
+/// Returns 202 Accepted immediately — delivery is async via NATS.
+///
+/// If NATS is not available, falls back to inline heuristic screening
+/// and direct delivery (for local/test deployments without Mesh Relay).
 #[allow(clippy::too_many_arguments)]
 pub async fn mesh_send<S: EvidenceStore>(
     Extension(identity): Extension<VerifiedIdentity>,
@@ -415,7 +418,6 @@ pub async fn mesh_send<S: EvidenceStore>(
     Extension(nats_bridge): Extension<Option<Arc<NatsBridge>>>,
     Extension(relay_stats): Extension<Arc<RelayStats>>,
     Extension(relay_log): Extension<Arc<RelayLog>>,
-    Extension(relay_screening): Extension<Arc<RelayScreening>>,
     Json(payload): Json<MeshSendRequest>,
 ) -> impl IntoResponse {
     // Validate request
@@ -492,17 +494,7 @@ pub async fn mesh_send<S: EvidenceStore>(
         );
     }
 
-    // SLM screening -- ALL relay messages must be screened (section 7.4, no fast-path override)
-    // 3-layer cascade: heuristic (<1ms) -> classifier (~15ms) -> deep SLM (2-3s)
-    //
-    // Trust-aware cascade:
-    // - Layer 1 (heuristic) always blocks on match (obvious patterns)
-    // - Layer 2 (classifier) blocks low-trust senders, but for high-trust (Tier 3+)
-    //   passes the classifier verdict as context to Layer 3 for reasoning
-    // - Layer 3 (SLM) gets trust context: sender TRUSTMARK, tier, and any classifier flags
-    //
-    // This lets Tier 3 bots share security research (which describes attack patterns)
-    // without the classifier quarantining text ABOUT attacks vs actual attacks.
+    // Determine sender tier for screening context
     let sender_tier = sender_score
         .as_ref()
         .map(|s| {
@@ -515,132 +507,67 @@ pub async fn mesh_send<S: EvidenceStore>(
             }
         })
         .unwrap_or("unknown");
-    let is_high_trust = sender_tier == "tier3";
 
-    let quarantine_reason = {
-        let mut reason: Option<String> = None;
-        let mut classifier_flag: Option<String> = None;
+    let sender_trustmark_bp = sender_score.as_ref().map(|s| s.score_bp).unwrap_or(0);
 
-        // Layer 1: Heuristic (<1ms) — always blocks on match
+    // Publish to NATS for Mesh Relay screening (async path)
+    if let Some(bridge) = nats_bridge.as_ref() {
+        let relay_request = serde_json::json!({
+            "from": identity.pubkey,
+            "to": payload.to,
+            "body": payload.body,
+            "msg_type": payload.msg_type,
+            "sender_trustmark_bp": sender_trustmark_bp,
+            "sender_tier": sender_tier,
+        });
+        let payload_bytes = serde_json::to_vec(&relay_request).unwrap_or_default();
+        if let Err(e) = bridge
+            .publish_mesh_event("mesh.relay.incoming", &payload_bytes)
+            .await
         {
-            let heuristic = aegis_slm::engine::heuristic::HeuristicEngine::new();
-            if let Ok(output) = aegis_slm::engine::SlmEngine::generate(&heuristic, &payload.body)
-                && let Ok(parsed) = aegis_slm::parser::parse_slm_output(
-                    &output,
-                    &aegis_slm::types::EngineProfile::Loopback,
-                )
-                && !parsed.annotations.is_empty()
-            {
-                reason = Some(format!(
-                    "heuristic: {}",
-                    parsed
-                        .annotations
-                        .iter()
-                        .map(|a| serde_json::to_value(&a.pattern)
-                            .ok()
-                            .and_then(|v| v.as_str().map(String::from))
-                            .unwrap_or_else(|| format!("{:?}", a.pattern)))
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                ));
-            }
-        }
-
-        // Layer 2: Classifier (if available, ~15ms)
-        // For high-trust senders (Tier 3): classifier flags pass to SLM for reasoning
-        // For low-trust senders: classifier blocks above threshold
-        if reason.is_none()
-            && let Some(ref pg) = relay_screening.prompt_guard
-        {
-            const RELAY_CLASSIFIER_THRESHOLD: f32 = 0.9;
-            match pg.classify(&payload.body) {
-                Ok((is_malicious, probability)) if is_malicious => {
-                    if is_high_trust {
-                        // High-trust sender: pass classifier verdict to SLM as context
-                        classifier_flag = Some(format!(
-                            "classifier flagged at {:.0}% confidence",
-                            probability * 100.0
-                        ));
-                        tracing::info!(
-                            from = %identity.pubkey,
-                            probability,
-                            "classifier flagged relay from Tier 3 sender — passing to SLM with trust context"
-                        );
-                    } else if probability > RELAY_CLASSIFIER_THRESHOLD {
-                        // Low-trust sender above threshold: quarantine
-                        reason = Some(format!(
-                            "classifier: direct_injection ({:.0}% confidence)",
-                            probability * 100.0
-                        ));
-                    } else {
-                        // Low-trust sender below threshold: pass to SLM
-                        tracing::debug!(
-                            probability,
-                            "classifier flagged relay below threshold, passing to Layer 3"
-                        );
-                    }
-                }
-                Err(e) => {
-                    tracing::warn!("PromptGuard classifier error: {e}");
-                }
-                _ => {}
-            }
-        }
-
-        // Layer 3: Deep SLM (if available, 2-3s)
-        // For high-trust senders: include trust context + classifier flag in prompt
-        // OpenAiCompatEngine uses reqwest::blocking — must run off the async runtime.
-        if reason.is_none()
-            && let Some(ref slm) = relay_screening.slm_engine
-        {
-            // Build trust-aware screening prompt
-            let trust_context = if is_high_trust {
-                let mut ctx = format!(
-                    "Sender is Tier 3, TRUSTMARK {}bp. ",
-                    sender_score.as_ref().map(|s| s.score_bp).unwrap_or(0)
-                );
-                if let Some(ref flag) = classifier_flag {
-                    ctx.push_str(&format!(
-                        "Note: {} — this may be because the sender is discussing security patterns, not executing them. Evaluate based on intent.",
-                        flag
-                    ));
-                }
-                Some(ctx)
-            } else {
-                None
-            };
-
-            let screening_prompt = aegis_slm::prompt::screening_prompt_combined_with_trust(
-                &payload.body,
-                trust_context.as_deref(),
+            tracing::error!(error = %e, "failed to publish relay to NATS");
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(serde_json::json!({ "error": "relay service unavailable" })),
             );
-
-            let result = tokio::task::block_in_place(|| {
-                aegis_slm::engine::SlmEngine::generate(slm, &screening_prompt)
-            });
-            if let Ok(output) = result
-                && let Ok(parsed) = aegis_slm::parser::parse_slm_output(
-                    &output,
-                    &aegis_slm::types::EngineProfile::Loopback,
-                )
-                && !parsed.annotations.is_empty()
-            {
-                reason = Some(format!(
-                    "deep_slm: {}",
-                    parsed
-                        .annotations
-                        .iter()
-                        .map(|a| serde_json::to_value(&a.pattern)
-                            .ok()
-                            .and_then(|v| v.as_str().map(String::from))
-                            .unwrap_or_else(|| format!("{:?}", a.pattern)))
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                ));
-            }
         }
 
-        reason
+        tracing::info!(
+            from = %identity.pubkey,
+            to = %payload.to,
+            msg_type = %payload.msg_type,
+            "relay message published to NATS for screening"
+        );
+
+        return (
+            StatusCode::ACCEPTED,
+            Json(serde_json::json!({ "status": "accepted" })),
+        );
+    }
+
+    // Fallback: no NATS — inline heuristic screening + direct delivery
+    // This allows local/test deployments without Mesh Relay service.
+    let heuristic = aegis_slm::engine::heuristic::HeuristicEngine::new();
+    let quarantine_reason = if let Ok(output) =
+        aegis_slm::engine::SlmEngine::generate(&heuristic, &payload.body)
+        && let Ok(parsed) =
+            aegis_slm::parser::parse_slm_output(&output, &aegis_slm::types::EngineProfile::Loopback)
+        && !parsed.annotations.is_empty()
+    {
+        Some(format!(
+            "heuristic: {}",
+            parsed
+                .annotations
+                .iter()
+                .map(|a| serde_json::to_value(&a.pattern)
+                    .ok()
+                    .and_then(|v| v.as_str().map(String::from))
+                    .unwrap_or_else(|| format!("{:?}", a.pattern)))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ))
+    } else {
+        None
     };
 
     if let Some(ref reason) = quarantine_reason {
@@ -648,7 +575,7 @@ pub async fn mesh_send<S: EvidenceStore>(
             from = %identity.pubkey,
             to = %payload.to,
             reason = %reason,
-            "mesh relay quarantined: injection detected in relay message"
+            "mesh relay quarantined (inline fallback)"
         );
         relay_stats.quarantined.fetch_add(1, Ordering::Relaxed);
         let relay_event = RelayEvent {
@@ -660,11 +587,7 @@ pub async fn mesh_send<S: EvidenceStore>(
             reason: reason.clone(),
             body_preview: payload.body.clone(),
         };
-        relay_log.push(relay_event.clone());
-        if let Some(bridge) = nats_bridge.as_ref() {
-            let event_json = serde_json::to_vec(&relay_event).unwrap_or_default();
-            let _ = bridge.publish_mesh_event("mesh.relay", &event_json).await;
-        }
+        relay_log.push(relay_event);
         return (
             StatusCode::FORBIDDEN,
             Json(serde_json::json!({
@@ -673,75 +596,79 @@ pub async fn mesh_send<S: EvidenceStore>(
         );
     }
 
-    // Build relay envelope
-    let envelope = RelayEnvelope {
-        from: identity.pubkey.clone(),
-        body: payload.body.clone(),
-        msg_type: payload.msg_type.clone(),
-        ts_ms: now_epoch_ms(),
-    };
-    // Wrap in WssMessage format so the adapter's tagged enum can parse it.
-    // Adapter expects {"type":"mesh_relay","from":"...","body":"..."}
+    // Direct delivery (no NATS fallback path)
+    deliver_relay_message(
+        &identity.pubkey,
+        &payload.to,
+        &payload.body,
+        &payload.msg_type,
+        &wss_registry,
+        &dead_drop_store,
+        &relay_stats,
+        &relay_log,
+        &None,
+    )
+    .await
+}
+
+/// Deliver a screened relay message via WSS or dead-drop.
+/// Called by the NATS subscriber (for screened messages) and by the inline fallback.
+#[allow(clippy::too_many_arguments)]
+pub async fn deliver_relay_message(
+    from: &str,
+    to: &str,
+    body: &str,
+    msg_type: &str,
+    wss_registry: &Arc<WssConnectionRegistry>,
+    dead_drop_store: &Arc<DeadDropStore>,
+    relay_stats: &Arc<RelayStats>,
+    relay_log: &Arc<RelayLog>,
+    nats_bridge: &Option<Arc<NatsBridge>>,
+) -> (StatusCode, Json<serde_json::Value>) {
+    // Build relay envelope — wrap in WssMessage format for adapter parsing
     let wss_message = serde_json::json!({
         "type": "mesh_relay",
-        "from": envelope.from,
-        "body": envelope.body,
+        "from": from,
+        "body": body,
     });
     let envelope_json = wss_message.to_string();
 
-    // Try to deliver via WSS if recipient is online
-    if wss_registry.is_online(&payload.to).await {
-        let delivered = wss_registry.send_to(&payload.to, &envelope_json).await;
+    // Try WSS delivery if recipient is online
+    if wss_registry.is_online(to).await {
+        let delivered = wss_registry.send_to(to, &envelope_json).await;
         if delivered {
             relay_stats.sent.fetch_add(1, Ordering::Relaxed);
             let relay_event = RelayEvent {
-                from: identity.pubkey.clone(),
-                to: payload.to.clone(),
+                from: from.to_string(),
+                to: to.to_string(),
                 status: "delivered".into(),
-                msg_type: payload.msg_type.clone(),
+                msg_type: msg_type.to_string(),
                 ts_ms: now_epoch_ms(),
                 reason: String::new(),
-                body_preview: payload.body.clone(),
+                body_preview: body.to_string(),
             };
             relay_log.push(relay_event.clone());
             if let Some(bridge) = nats_bridge.as_ref() {
                 let event_json = serde_json::to_vec(&relay_event).unwrap_or_default();
                 let _ = bridge.publish_mesh_event("mesh.relay", &event_json).await;
             }
-            tracing::info!(
-                from = %identity.pubkey,
-                to = %payload.to,
-                msg_type = %payload.msg_type,
-                "mesh relay delivered via WSS"
-            );
+            tracing::info!(from, to, msg_type, "mesh relay delivered via WSS");
         } else {
-            tracing::warn!(
-                from = %identity.pubkey,
-                to = %payload.to,
-                "mesh relay: WSS send failed (connection dropped)"
-            );
+            tracing::warn!(from, to, "mesh relay: WSS send failed (connection dropped)");
         }
     } else {
         // Recipient offline — store as dead-drop
-        match dead_drop_store
-            .store(
-                &payload.to,
-                &identity.pubkey,
-                &payload.body,
-                &payload.msg_type,
-            )
-            .await
-        {
+        match dead_drop_store.store(to, from, body, msg_type).await {
             Ok(()) => {
                 relay_stats.dead_dropped.fetch_add(1, Ordering::Relaxed);
                 let relay_event = RelayEvent {
-                    from: identity.pubkey.clone(),
-                    to: payload.to.clone(),
+                    from: from.to_string(),
+                    to: to.to_string(),
                     status: "dead_dropped".into(),
-                    msg_type: payload.msg_type.clone(),
+                    msg_type: msg_type.to_string(),
                     ts_ms: now_epoch_ms(),
                     reason: "recipient offline".into(),
-                    body_preview: payload.body.clone(),
+                    body_preview: body.to_string(),
                 };
                 relay_log.push(relay_event.clone());
                 if let Some(bridge) = nats_bridge.as_ref() {
@@ -749,18 +676,13 @@ pub async fn mesh_send<S: EvidenceStore>(
                     let _ = bridge.publish_mesh_event("mesh.relay", &event_json).await;
                 }
                 tracing::info!(
-                    from = %identity.pubkey,
-                    to = %payload.to,
+                    from,
+                    to,
                     "mesh relay: recipient offline, stored as dead-drop"
                 );
             }
             Err(e) => {
-                tracing::warn!(
-                    from = %identity.pubkey,
-                    to = %payload.to,
-                    error = %e,
-                    "mesh relay: dead-drop storage failed"
-                );
+                tracing::warn!(from, to, error = %e, "mesh relay: dead-drop storage failed");
                 return (
                     StatusCode::SERVICE_UNAVAILABLE,
                     Json(serde_json::json!({ "error": e })),
@@ -1332,10 +1254,6 @@ mod tests {
             .layer(Extension(evaluator_svc))
             .layer(Extension(Arc::new(RelayStats::new())))
             .layer(Extension(Arc::new(RelayLog::new())))
-            .layer(Extension(Arc::new(RelayScreening {
-                prompt_guard: None,
-                slm_engine: None,
-            })))
             .layer(middleware::from_fn(auth::auth_middleware));
 
         Router::new().merge(authed)
