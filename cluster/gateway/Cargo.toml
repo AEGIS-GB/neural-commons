@@ -9,6 +9,7 @@ license.workspace = true
 aegis-crypto = { path = "../../aegis-crypto" }
 aegis-schemas = { path = "../../aegis-schemas" }
 aegis-slm = { path = "../../adapter/aegis-slm" }
+aegis-trustmark = { path = "../trustmark" }
 aegis-common = { path = "../common" }
 axum.workspace = true
 tower.workspace = true

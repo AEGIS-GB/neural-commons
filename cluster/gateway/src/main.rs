@@ -145,11 +145,9 @@ async fn main() {
                 let bridge = Arc::new(bridge);
                 info!("NATS bridge connected");
 
-                // Start evidence subscriber (recomputes TRUSTMARK on each new receipt)
-                let store_for_sub = evidence_store.clone();
-                if let Err(e) = bridge.subscribe_evidence(Arc::new(store_for_sub)).await {
-                    tracing::warn!("failed to subscribe to evidence.new: {e}");
-                }
+                // TRUSTMARK recomputation from evidence.new has been extracted to
+                // the aegis-trustmark-engine service (Phase 2). The Gateway no
+                // longer subscribes to evidence.new for inline recomputation.
 
                 // Start trustmark cache subscriber (updates local cache on score changes)
                 if let Err(e) = bridge.subscribe_trustmark(trustmark_cache.clone()).await {

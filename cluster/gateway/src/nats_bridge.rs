@@ -18,7 +18,6 @@ use tokio::sync::RwLock;
 
 use crate::botawiki::BotawikiStore;
 use crate::mesh_routes::{RelayEvent, RelayLog};
-use crate::routes::compute_trustmark_from_evidence;
 use crate::store::EvidenceStore;
 use crate::ws::DeadDropStore;
 
@@ -377,85 +376,9 @@ impl NatsBridge {
             .await
     }
 
-    /// Subscribe to `evidence.new` and recompute TRUSTMARK for each incoming receipt.
-    ///
-    /// For each evidence message, the subscriber:
-    /// 1. Parses the receipt JSON to extract `bot_fingerprint`
-    /// 2. Fetches all evidence for that bot from the store
-    /// 3. Recomputes the TRUSTMARK score
-    /// 4. Publishes the updated score to `trustmark.updated`
-    ///
-    /// This runs in a background task and never returns under normal operation.
-    pub async fn subscribe_evidence<S: EvidenceStore>(
-        &self,
-        store: Arc<S>,
-    ) -> Result<(), async_nats::SubscribeError> {
-        let mut subscriber = self.client.subscribe("evidence.new").await?;
-        let client = self.client.clone();
-
-        tokio::spawn(async move {
-            tracing::info!("evidence subscriber started on evidence.new");
-            while let Some(msg) = subscriber.next().await {
-                // Parse receipt to extract bot_fingerprint
-                let bot_fingerprint =
-                    match serde_json::from_slice::<serde_json::Value>(&msg.payload) {
-                        Ok(val) => match val.get("bot_fingerprint").and_then(|v| v.as_str()) {
-                            Some(fp) => fp.to_string(),
-                            None => {
-                                tracing::warn!("evidence message missing bot_fingerprint field");
-                                continue;
-                            }
-                        },
-                        Err(e) => {
-                            tracing::warn!(error = %e, "failed to parse evidence message as JSON");
-                            continue;
-                        }
-                    };
-
-                // Fetch all evidence for this bot and recompute TRUSTMARK
-                match store.get_for_bot(&bot_fingerprint).await {
-                    Ok(records) => {
-                        let score = compute_trustmark_from_evidence(&records);
-                        let update = TrustmarkUpdate {
-                            bot_id: bot_fingerprint.clone(),
-                            score,
-                        };
-                        match serde_json::to_vec(&update) {
-                            Ok(json) => {
-                                if let Err(e) = client
-                                    .publish("trustmark.updated", Bytes::copy_from_slice(&json))
-                                    .await
-                                {
-                                    tracing::warn!(
-                                        bot_id = %bot_fingerprint,
-                                        error = %e,
-                                        "failed to publish trustmark update"
-                                    );
-                                }
-                            }
-                            Err(e) => {
-                                tracing::warn!(
-                                    bot_id = %bot_fingerprint,
-                                    error = %e,
-                                    "failed to serialize trustmark update"
-                                );
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        tracing::warn!(
-                            bot_id = %bot_fingerprint,
-                            error = %e,
-                            "failed to fetch evidence for trustmark recomputation"
-                        );
-                    }
-                }
-            }
-            tracing::warn!("evidence subscriber ended unexpectedly");
-        });
-
-        Ok(())
-    }
+    // TRUSTMARK recomputation from evidence.new has been extracted to the
+    // aegis-trustmark-engine service (Phase 2). The Gateway no longer subscribes
+    // to evidence.new for inline recomputation — the TRUSTMARK Engine handles it.
 
     /// Subscribe to `trustmark.updated` and update the local cache.
     ///
@@ -575,6 +498,7 @@ impl TrustmarkCache {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::routes::compute_trustmark_from_evidence;
     use crate::store::{EvidenceRecord, MemoryStore};
 
     #[test]
