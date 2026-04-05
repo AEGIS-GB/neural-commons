@@ -11,7 +11,19 @@ serde_json.workspace = true
 aegis-evidence = { path = "../../adapter/aegis-evidence" }
 aegis-schemas = { path = "../../aegis-schemas" }
 aegis-barrier = { path = "../../adapter/aegis-barrier" }
+async-nats.workspace = true
+tokio.workspace = true
+clap.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+futures.workspace = true
+chrono.workspace = true
+bytes = "1"
 
 [dev-dependencies]
 tempfile.workspace = true
 aegis-crypto = { path = "../../aegis-crypto" }
+
+[[bin]]
+name = "aegis-trustmark-engine"
+path = "src/main.rs"

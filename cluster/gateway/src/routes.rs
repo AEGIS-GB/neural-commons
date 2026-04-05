@@ -232,94 +232,25 @@ pub async fn post_evidence_batch<S: EvidenceStore>(
 
 /// Compute a basic TRUSTMARK score from cluster-stored evidence.
 ///
-/// This is a simplified cluster-side scoring that works from receipt metadata
-/// only (no adapter-side signals like persona integrity or vault hygiene).
-/// Dimensions backed by adapter-only data are set to conservative defaults.
+/// Delegates to `aegis_trustmark::cluster_scoring::compute_trustmark_from_evidence`.
+/// Converts between the Gateway's `EvidenceRecord` and the trustmark crate's type.
 pub fn compute_trustmark_from_evidence(
     records: &[EvidenceRecord],
 ) -> aegis_schemas::TrustmarkScore {
-    let bp = |v: f64| aegis_schemas::BasisPoints::clamped((v * 10_000.0).round() as u32);
-
-    let now_ms = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis() as i64;
-
-    // Chain integrity: check sequence is monotonic with no gaps
-    let chain_integrity = if records.is_empty() {
-        0.3 // no evidence yet
-    } else {
-        let mut sorted = records.to_vec();
-        sorted.sort_by_key(|r| r.seq);
-        let has_gaps = sorted.windows(2).any(|w| w[1].seq != w[0].seq + 1);
-        if has_gaps {
-            0.5 // gaps in sequence
-        } else {
-            1.0 // monotonic, no gaps
-        }
-    };
-
-    // Contribution volume: receipts in last 24h vs baseline of 100
-    let baseline = 100.0_f64;
-    let day_ago = now_ms - 86_400_000;
-    let recent_count = records.iter().filter(|r| r.ts_ms > day_ago).count() as f64;
-    let contribution_volume = (recent_count / baseline).min(1.0);
-
-    // Temporal consistency: coefficient of variation of inter-receipt intervals
-    let temporal_consistency = if records.len() < 3 {
-        0.5
-    } else {
-        let mut timestamps: Vec<i64> = records.iter().map(|r| r.ts_ms).collect();
-        timestamps.sort();
-        let intervals: Vec<f64> = timestamps
-            .windows(2)
-            .map(|w| (w[1] - w[0]) as f64)
-            .collect();
-        let mean = intervals.iter().sum::<f64>() / intervals.len() as f64;
-        if mean == 0.0 {
-            0.5
-        } else {
-            let variance =
-                intervals.iter().map(|x| (x - mean).powi(2)).sum::<f64>() / intervals.len() as f64;
-            let cv = variance.sqrt() / mean;
-            (1.0 - (cv - 0.5).max(0.0) / 1.5).clamp(0.2, 1.0)
-        }
-    };
-
-    // Dimensions only observable from adapter side -- conservative defaults
-    let persona_integrity = 0.5; // unknown from cluster
-    let vault_hygiene = 0.5; // unknown from cluster
-    let relay_reliability = 0.5; // mesh not active
-
-    // Weighted sum (same weights as D13)
-    let total = persona_integrity * 0.25
-        + chain_integrity * 0.20
-        + vault_hygiene * 0.15
-        + temporal_consistency * 0.15
-        + relay_reliability * 0.15
-        + contribution_volume * 0.10;
-
-    let tier = if total >= 0.40 {
-        aegis_schemas::trustmark::Tier::Tier3
-    } else if total >= 0.20 {
-        aegis_schemas::trustmark::Tier::Tier2
-    } else {
-        aegis_schemas::trustmark::Tier::Tier1
-    };
-
-    aegis_schemas::TrustmarkScore {
-        score_bp: bp(total),
-        dimensions: aegis_schemas::trustmark::TrustmarkDimensions {
-            relay_reliability: bp(relay_reliability),
-            persona_integrity: bp(persona_integrity),
-            chain_integrity: bp(chain_integrity),
-            contribution_volume: bp(contribution_volume),
-            temporal_consistency: bp(temporal_consistency),
-            vault_hygiene: bp(vault_hygiene),
-        },
-        tier,
-        computed_at_ms: now_ms,
-    }
+    let converted: Vec<aegis_trustmark::cluster_scoring::EvidenceRecord> = records
+        .iter()
+        .map(|r| aegis_trustmark::cluster_scoring::EvidenceRecord {
+            id: r.id.clone(),
+            bot_fingerprint: r.bot_fingerprint.clone(),
+            seq: r.seq,
+            receipt_type: r.receipt_type.clone(),
+            ts_ms: r.ts_ms,
+            core_json: r.core_json.clone(),
+            receipt_hash: r.receipt_hash.clone(),
+            request_id: r.request_id.clone(),
+        })
+        .collect();
+    aegis_trustmark::cluster_scoring::compute_trustmark_from_evidence(&converted)
 }
 
 /// GET /trustmark/:bot_id -- query TRUSTMARK score for a bot.
