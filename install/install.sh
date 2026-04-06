@@ -394,6 +394,103 @@ MFEOF
     info "aegis-screen:4b installed successfully!"
 }
 
+# --- NATS server install helper (for cluster mode) ---
+
+install_nats() {
+    if command -v nats-server >/dev/null 2>&1; then
+        local nats_version
+        nats_version=$(nats-server --version 2>/dev/null | head -1)
+        info "NATS already installed: ${nats_version}"
+        return 0
+    fi
+
+    local nats_ver="2.10.24"
+    local os arch
+
+    case "$(uname -s)" in
+        Linux*)  os="linux" ;;
+        Darwin*) os="darwin" ;;
+        *)
+            warn "NATS auto-install not supported on $(uname -s). Install manually: https://nats.io/download"
+            return 0
+            ;;
+    esac
+
+    case "$(uname -m)" in
+        x86_64|amd64)   arch="amd64" ;;
+        aarch64|arm64)  arch="arm64" ;;
+        *)
+            warn "NATS auto-install not supported on $(uname -m)."
+            return 0
+            ;;
+    esac
+
+    local nats_url="https://github.com/nats-io/nats-server/releases/download/v${nats_ver}/nats-server-v${nats_ver}-${os}-${arch}.tar.gz"
+    local tmp_dir
+    tmp_dir=$(mktemp -d)
+
+    info "Downloading NATS server v${nats_ver}..."
+    if command -v curl >/dev/null 2>&1; then
+        curl -fsSL "$nats_url" | tar xz -C "$tmp_dir" || {
+            warn "NATS download failed. Install manually: https://nats.io/download"
+            rm -rf "$tmp_dir"
+            return 0
+        }
+    elif command -v wget >/dev/null 2>&1; then
+        wget -qO- "$nats_url" | tar xz -C "$tmp_dir" || {
+            warn "NATS download failed."
+            rm -rf "$tmp_dir"
+            return 0
+        }
+    fi
+
+    local nats_bin
+    nats_bin=$(find "$tmp_dir" -name nats-server -type f | head -1)
+    if [ -n "$nats_bin" ]; then
+        cp "$nats_bin" "${INSTALL_DIR}/nats-server"
+        chmod +x "${INSTALL_DIR}/nats-server"
+        info "NATS installed: ${INSTALL_DIR}/nats-server"
+    else
+        warn "Could not find nats-server binary in download."
+    fi
+    rm -rf "$tmp_dir"
+}
+
+# --- ProtectAI classifier download (Layer 2 screening) ---
+
+download_protectai_classifier() {
+    local models_dir="${DATA_DIR}/models/protectai-v2"
+    local hf_base="https://huggingface.co/protectai/deberta-v3-base-prompt-injection-v2/resolve/main/onnx"
+
+    if [ -f "${models_dir}/model.onnx" ] || [ -f "${models_dir}/model.quant.onnx" ]; then
+        info "ProtectAI classifier already installed."
+        return 0
+    fi
+
+    info "Downloading ProtectAI prompt injection classifier (~700 MB)..."
+    info "DeBERTa-v3 binary classifier for fast injection detection (Layer 2, ~15ms)."
+    echo ""
+
+    mkdir -p "$models_dir"
+    local failed=0
+
+    for file in model.onnx tokenizer.json config.json; do
+        info "  Fetching ${file}..."
+        if command -v curl >/dev/null 2>&1; then
+            curl -fSL --progress-bar "${hf_base}/${file}" -o "${models_dir}/${file}" || { warn "Failed to download ${file}"; failed=1; }
+        elif command -v wget >/dev/null 2>&1; then
+            wget --show-progress -q "${hf_base}/${file}" -O "${models_dir}/${file}" || { warn "Failed to download ${file}"; failed=1; }
+        fi
+    done
+
+    if [ "$failed" -eq 0 ] && [ -f "${models_dir}/model.onnx" ]; then
+        info "ProtectAI classifier installed at ${models_dir}"
+    else
+        warn "ProtectAI download incomplete. Layer 2 classifier will be disabled."
+        warn "Retry later or download manually from: https://huggingface.co/protectai/deberta-v3-base-prompt-injection-v2"
+    fi
+}
+
 # --- Framework setup prompt ---
 
 prompt_framework_setup() {
@@ -472,7 +569,7 @@ generate_gateway_config() {
     fi
 
     mkdir -p "$config_dir"
-    cat > "$gateway_config" << 'GWEOF'
+    cat > "$gateway_config" << GWEOF
 # Aegis Gateway Configuration
 # Start with: aegis-gateway -c ~/.aegis/config/gateway.toml --embedded
 
@@ -482,12 +579,12 @@ nats_url = "nats://127.0.0.1:4222"
 # Embedded mode: run Mesh Relay + TRUSTMARK Engine + Botawiki in one process
 embedded = true
 
-# Optional: SLM screening for Mesh Relay (Layer 3)
-# slm_server_url = "http://localhost:11434"
-# slm_model = "aegis-screen:4b"
+# SLM screening for Mesh Relay (Layer 3) — uses same Ollama as the adapter
+slm_server_url = "http://localhost:11434"
+slm_model = "aegis-screen:4b"
 
-# Optional: PromptGuard classifier for Mesh Relay (Layer 2)
-# prompt_guard_model_dir = "/path/to/protectai-v2"
+# ProtectAI classifier for Mesh Relay (Layer 2, ~15ms)
+prompt_guard_model_dir = "${DATA_DIR}/models/protectai-v2"
 GWEOF
     info "Gateway config: ${gateway_config}"
 }
@@ -506,6 +603,7 @@ main() {
 
     download_binary "$platform"
     download_gateway_binary "$platform"
+    install_nats
     generate_identity
     add_to_path
 
@@ -534,8 +632,9 @@ CONFIGEOF
         info "Default config: ${config_dir}/config.toml"
     fi
 
-    # Download NER PII model
+    # Download ML models
     download_ner_model
+    download_protectai_classifier
 
     # Run first vulnerability scan if binary is available
     export PATH="${INSTALL_DIR}:${PATH}"
@@ -552,36 +651,46 @@ CONFIGEOF
     fi
 
     echo ""
-    echo "================================================================"
-    echo "            Aegis Shield — Installed                            "
-    echo "================================================================"
     echo ""
-    echo "  What's active:"
-    echo "     5-layer injection screening (heuristic + classifier + SLM + NER PII + metaprompt)"
-    echo "     NER PII detection (names, phone numbers, SSNs, credit cards, addresses)"
-    echo "     Evidence chain, write barrier, credential vault, memory monitor"
+    echo -e "${CYAN}================================================================${NC}"
+    echo -e "${CYAN}              Aegis Shield — Installed${NC}"
+    echo -e "${CYAN}================================================================${NC}"
     echo ""
-    echo "  Next steps:"
+    echo "  Binaries:"
+    echo "     aegis              adapter CLI + proxy"
+    echo "     aegis-gateway      cluster gateway (embedded mode)"
+    [ -f "${INSTALL_DIR}/nats-server" ] && \
+    echo "     nats-server        NATS JetStream message bus"
     echo ""
-    echo "  1. Connect to OpenClaw:"
-    echo "     aegis setup openclaw"
+    echo "  Models:"
+    [ -f "${DATA_DIR}/models/distilbert-ner/model.onnx" ] || [ -f "${DATA_DIR}/models/pii-ner/model.onnx" ] && \
+    echo "     NER PII            DistilBERT-NER (~250 MB)"
+    [ -f "${DATA_DIR}/models/protectai-v2/model.onnx" ] && \
+    echo "     ProtectAI          DeBERTa-v3 classifier (~700 MB)"
+    command -v ollama >/dev/null 2>&1 && ollama list 2>/dev/null | grep -q "aegis-screen" && \
+    echo "     aegis-screen:4b    Gemma3-4B fine-tuned SLM (~3.9 GB)"
     echo ""
-    echo "  2. Start protection:"
-    echo "     aegis"
+    echo "  Screening layers:"
+    echo "     Layer 1  heuristic       regex patterns (<1ms)"
+    [ -f "${DATA_DIR}/models/protectai-v2/model.onnx" ] && \
+    echo "     Layer 2  ProtectAI       DeBERTa classifier (~15ms)" || \
+    echo "     Layer 2  ProtectAI       not installed (optional)"
+    echo "     Layer 3  aegis-screen    deep SLM analysis (2-3s)"
+    [ -f "${DATA_DIR}/models/distilbert-ner/model.onnx" ] || [ -f "${DATA_DIR}/models/pii-ner/model.onnx" ] && \
+    echo "     Layer 4  NER PII         name/SSN/phone detection (~2ms)" || \
+    echo "     Layer 4  NER PII         not installed (optional)"
+    echo "     Layer 5  metaprompt      system prompt hardening (0ms)"
     echo ""
-    echo "  3. View dashboard:"
-    echo "     http://localhost:3141/dashboard"
+    echo "  Quick start:"
+    echo ""
+    echo "     aegis setup openclaw     connect to your agent"
+    echo "     aegis                    start protection"
+    echo "     open http://localhost:3141/dashboard"
     echo ""
     echo "  Cluster mode (single command):"
-    echo "     aegis-gateway -c ~/.aegis/config/gateway.toml --embedded"
     echo ""
-    echo "  Other commands:"
-    echo "     aegis scan           — vulnerability scan"
-    echo "     aegis status         — adapter status"
-    echo "     aegis --enforce      — enable blocking mode"
-    echo "     aegis --help         — all options"
-    echo ""
-
+    echo "     nats-server -js &"
+    echo "     aegis-gateway --embedded -c ~/.aegis/config/gateway.toml"
     echo ""
 }
 
