@@ -49,7 +49,7 @@ pub struct LoopbackConfig {
     pub engine: String,
     /// Server URL (Ollama: "http://localhost:11434", LM Studio: "http://localhost:1234")
     pub server_url: String,
-    /// Model name (e.g., "llama3.2:1b", "qwen2.5:1.5b")
+    /// Model name (e.g., "aegis-screen:4b", "gemma3:4b")
     pub model: String,
     /// Fall back to heuristic patterns if primary engine is unavailable
     pub fallback_to_heuristics: bool,

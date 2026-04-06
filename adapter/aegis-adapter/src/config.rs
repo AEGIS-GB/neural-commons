@@ -202,7 +202,7 @@ pub struct SlmSection {
     /// SLM server URL (accepts legacy "ollama_url" for backward compatibility)
     #[serde(default = "default_server_url", alias = "ollama_url")]
     pub server_url: String,
-    /// Model name (default: "llama3.2:1b")
+    /// Model name (default: "aegis-screen:4b")
     #[serde(default = "default_slm_model")]
     pub model: String,
     /// Fall back to heuristic patterns if model unavailable
@@ -333,7 +333,7 @@ fn default_server_url() -> String {
     "http://localhost:11434".to_string()
 }
 fn default_slm_model() -> String {
-    "llama3.2:1b".to_string()
+    "aegis-screen:4b".to_string()
 }
 fn default_prompt_guard_dir() -> Option<String> {
     // Auto-detect classifier model from standard paths
