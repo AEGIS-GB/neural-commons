@@ -7,10 +7,9 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use clap::Parser;
-use futures::StreamExt;
-use tracing::{error, info, warn};
+use tracing::info;
 
-use aegis_mesh::relay::{self, RelayRequest, SUBJECT_INCOMING, process_relay};
+use aegis_mesh::relay::run_relay_processor;
 use aegis_mesh::screening::ScreeningEngines;
 
 #[derive(Parser)]
@@ -46,7 +45,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Initialize screening engines
     let engines = Arc::new(ScreeningEngines::new(
-        #[cfg(feature = "prompt-guard")]
         args.prompt_guard_model_dir.as_deref(),
         args.slm_url.as_deref(),
         args.slm_model.as_deref(),
@@ -56,65 +54,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let client = async_nats::connect(&args.nats_url).await?;
     info!("Connected to NATS");
 
-    // Subscribe to incoming relay messages
-    let mut subscriber = client.subscribe(SUBJECT_INCOMING).await?;
-    info!("Subscribed to {SUBJECT_INCOMING}, ready to screen relay messages");
-
-    while let Some(msg) = subscriber.next().await {
-        let request: RelayRequest = match serde_json::from_slice(&msg.payload) {
-            Ok(r) => r,
-            Err(e) => {
-                warn!("Malformed relay request: {e}");
-                continue;
-            }
-        };
-
-        info!(
-            from = %request.from,
-            to = %request.to,
-            msg_type = %request.msg_type,
-            sender_bp = request.sender_trustmark_bp,
-            "Screening relay message"
-        );
-
-        let engines = engines.clone();
-        let client = client.clone();
-        tokio::spawn(async move {
-            match process_relay(&engines, &request) {
-                Ok(screened) => {
-                    let payload = serde_json::to_vec(&screened).unwrap_or_default();
-                    if let Err(e) = client
-                        .publish(relay::SUBJECT_SCREENED, payload.into())
-                        .await
-                    {
-                        error!("Failed to publish screened result: {e}");
-                    } else {
-                        info!(
-                            from = %screened.from,
-                            to = %screened.to,
-                            "Relay message admitted"
-                        );
-                    }
-                }
-                Err(quarantined) => {
-                    let payload = serde_json::to_vec(&quarantined).unwrap_or_default();
-                    if let Err(e) = client
-                        .publish(relay::SUBJECT_QUARANTINED, payload.into())
-                        .await
-                    {
-                        error!("Failed to publish quarantine result: {e}");
-                    } else {
-                        warn!(
-                            from = %quarantined.from,
-                            to = %quarantined.to,
-                            reason = %quarantined.reason,
-                            "Relay message quarantined"
-                        );
-                    }
-                }
-            }
-        });
-    }
+    run_relay_processor(client, engines).await;
 
     Ok(())
 }

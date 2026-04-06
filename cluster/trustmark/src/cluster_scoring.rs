@@ -4,7 +4,12 @@
 //! (no adapter-side signals like persona integrity or vault hygiene).
 //! Moved from `aegis-gateway::routes::compute_trustmark_from_evidence`.
 
+use std::collections::HashMap;
+use std::sync::Arc;
+
+use futures::StreamExt;
 use serde::{Deserialize, Serialize};
+use tokio::sync::RwLock;
 
 /// A receipt record as used by the cluster evidence pipeline.
 ///
@@ -131,6 +136,86 @@ pub fn compute_trustmark_from_evidence(
         tier,
         computed_at_ms: now_ms,
     }
+}
+
+/// In-memory evidence store keyed by bot_id (used by the engine loop).
+#[derive(Debug, Clone, Default)]
+struct EvidenceStore {
+    records: Arc<RwLock<HashMap<String, Vec<EvidenceRecord>>>>,
+}
+
+impl EvidenceStore {
+    fn new() -> Self {
+        Self::default()
+    }
+
+    /// Store a record and return all records for the same bot.
+    async fn store_and_get_all(&self, record: EvidenceRecord) -> Vec<EvidenceRecord> {
+        let bot_id = record.bot_fingerprint.clone();
+        let mut store = self.records.write().await;
+        let entries = store.entry(bot_id).or_default();
+        entries.push(record);
+        entries.clone()
+    }
+}
+
+/// Run the TRUSTMARK engine as an async loop.
+///
+/// Subscribes to `evidence.new`, maintains an in-memory evidence store,
+/// recomputes TRUSTMARK scores, and publishes to `trustmark.updated`.
+/// This function runs forever and can be called from both the standalone
+/// binary and the Gateway's embedded mode.
+pub async fn run_trustmark_engine(client: async_nats::Client) {
+    let mut subscriber = match client.subscribe("evidence.new").await {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::error!("Failed to subscribe to evidence.new: {e}");
+            return;
+        }
+    };
+    tracing::info!("subscribed to evidence.new");
+
+    let store = EvidenceStore::new();
+
+    while let Some(msg) = subscriber.next().await {
+        let record: EvidenceRecord = match serde_json::from_slice(&msg.payload) {
+            Ok(r) => r,
+            Err(e) => {
+                tracing::warn!(error = %e, "failed to parse evidence message");
+                continue;
+            }
+        };
+
+        let bot_id = record.bot_fingerprint.clone();
+        let all_records = store.store_and_get_all(record).await;
+        let score = compute_trustmark_from_evidence(&all_records);
+        let update = TrustmarkUpdate {
+            bot_id: bot_id.clone(),
+            score,
+        };
+
+        match serde_json::to_vec(&update) {
+            Ok(json) => {
+                if let Err(e) = client
+                    .publish("trustmark.updated", bytes::Bytes::copy_from_slice(&json))
+                    .await
+                {
+                    tracing::warn!(bot_id = %bot_id, error = %e, "failed to publish trustmark update");
+                } else {
+                    tracing::debug!(
+                        bot_id = %bot_id,
+                        score_bp = update.score.score_bp.value(),
+                        "published trustmark update"
+                    );
+                }
+            }
+            Err(e) => {
+                tracing::warn!(bot_id = %bot_id, error = %e, "failed to serialize trustmark update");
+            }
+        }
+    }
+
+    tracing::warn!("evidence.new subscriber ended unexpectedly");
 }
 
 #[cfg(test)]

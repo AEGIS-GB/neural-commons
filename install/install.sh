@@ -360,6 +360,74 @@ prompt_framework_setup() {
     esac
 }
 
+# --- Gateway binary (for cluster operators) ---
+
+download_gateway_binary() {
+    local platform="$1"
+    local ext=""
+    [[ "$platform" == windows-* ]] && ext=".exe"
+
+    local binary_name="aegis-gateway-${platform}${ext}"
+    local url
+
+    if [ "$VERSION" = "latest" ]; then
+        url="https://github.com/${REPO}/releases/latest/download/${binary_name}"
+    else
+        url="https://github.com/${REPO}/releases/download/${VERSION}/${binary_name}"
+    fi
+
+    info "Downloading aegis-gateway for ${platform}..."
+    local target="${INSTALL_DIR}/aegis-gateway${ext}"
+
+    if command -v curl >/dev/null 2>&1; then
+        curl -fSL "$url" -o "$target" 2>/dev/null || {
+            warn "Gateway binary not available — skip if you don't need cluster mode."
+            return 0
+        }
+    elif command -v wget >/dev/null 2>&1; then
+        wget -q "$url" -O "$target" 2>/dev/null || {
+            warn "Gateway binary not available — skip if you don't need cluster mode."
+            return 0
+        }
+    fi
+
+    chmod +x "$target"
+    info "Installed gateway: ${target}"
+
+    # Generate default gateway config
+    generate_gateway_config
+}
+
+generate_gateway_config() {
+    local config_dir="$HOME/.aegis/config"
+    local gateway_config="${config_dir}/gateway.toml"
+
+    if [ -f "$gateway_config" ]; then
+        info "Gateway config already exists at ${gateway_config}"
+        return
+    fi
+
+    mkdir -p "$config_dir"
+    cat > "$gateway_config" << 'GWEOF'
+# Aegis Gateway Configuration
+# Start with: aegis-gateway -c ~/.aegis/config/gateway.toml --embedded
+
+listen_addr = "127.0.0.1:9090"
+nats_url = "nats://127.0.0.1:4222"
+
+# Embedded mode: run Mesh Relay + TRUSTMARK Engine + Botawiki in one process
+embedded = true
+
+# Optional: SLM screening for Mesh Relay (Layer 3)
+# slm_server_url = "http://localhost:1234"
+# slm_model = "qwen/qwen3-30b-a3b"
+
+# Optional: PromptGuard classifier for Mesh Relay (Layer 2)
+# prompt_guard_model_dir = "/path/to/protectai-v2"
+GWEOF
+    info "Gateway config: ${gateway_config}"
+}
+
 # --- Main ---
 
 main() {
@@ -373,6 +441,7 @@ main() {
     info "Detected platform: ${platform}"
 
     download_binary "$platform"
+    download_gateway_binary "$platform"
     generate_identity
     add_to_path
 
@@ -438,6 +507,9 @@ CONFIGEOF
     echo ""
     echo "  3. View dashboard:"
     echo "     http://localhost:3141/dashboard"
+    echo ""
+    echo "  Cluster mode (single command):"
+    echo "     aegis-gateway -c ~/.aegis/config/gateway.toml --embedded"
     echo ""
     echo "  Other commands:"
     echo "     aegis scan           — vulnerability scan"

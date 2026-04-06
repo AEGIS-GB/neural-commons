@@ -2,6 +2,9 @@
 //!
 //! Accepts evidence receipts, serves TRUSTMARK queries, bridges to NATS.
 //! All adapter communication goes through this gateway.
+//!
+//! In `--embedded` mode, runs the Mesh Relay screener, TRUSTMARK Engine,
+//! and Botawiki Service as background tokio tasks — all in one process.
 
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -36,9 +39,22 @@ struct GatewayConfig {
     /// NATS server URL (optional — Gateway runs without NATS for local/test)
     #[serde(default)]
     nats_url: Option<String>,
-    // Relay screening (prompt_guard, slm_server_url, slm_model) has been
-    // moved to the aegis-mesh-relay service. Gateway no longer screens relay
-    // messages inline — it publishes to NATS for the Mesh Relay to screen.
+
+    /// Embedded mode: run Mesh Relay, TRUSTMARK Engine, and Botawiki in-process
+    #[serde(default)]
+    embedded: bool,
+
+    /// Path to PromptGuard ONNX model directory (used in embedded mode for Mesh Relay Layer 2)
+    #[serde(default)]
+    prompt_guard_model_dir: Option<String>,
+
+    /// OpenAI-compatible SLM server URL (used in embedded mode for Mesh Relay Layer 3)
+    #[serde(default)]
+    slm_server_url: Option<String>,
+
+    /// SLM model name (used in embedded mode for Mesh Relay Layer 3)
+    #[serde(default)]
+    slm_model: Option<String>,
 }
 
 fn default_listen_addr() -> String {
@@ -50,6 +66,10 @@ impl Default for GatewayConfig {
         Self {
             listen_addr: default_listen_addr(),
             nats_url: None,
+            embedded: false,
+            prompt_guard_model_dir: None,
+            slm_server_url: None,
+            slm_model: None,
         }
     }
 }
@@ -65,6 +85,10 @@ struct Cli {
     /// Path to gateway configuration TOML file
     #[arg(short, long, default_value = "gateway_config.toml")]
     config: PathBuf,
+
+    /// Run all cluster services in one process (Mesh Relay + TRUSTMARK Engine + Botawiki)
+    #[arg(long)]
+    embedded: bool,
 }
 
 /// GET /health — lightweight health check, no auth required.
@@ -120,6 +144,72 @@ async fn shutdown_signal() {
     }
 }
 
+/// Start embedded cluster services as background tokio tasks.
+///
+/// Spawns Mesh Relay, TRUSTMARK Engine, and Botawiki Service — all sharing
+/// the same NATS connection. Returns a summary of what was started.
+fn start_embedded_services(
+    client: &async_nats::Client,
+    config: &GatewayConfig,
+) -> Vec<&'static str> {
+    let mut started = Vec::new();
+
+    // Mesh Relay screening task
+    let engines = Arc::new(aegis_mesh::screening::ScreeningEngines::new(
+        config
+            .prompt_guard_model_dir
+            .as_deref()
+            .map(std::path::Path::new),
+        config.slm_server_url.as_deref(),
+        config.slm_model.as_deref(),
+    ));
+    let relay_client = client.clone();
+    tokio::spawn(async move {
+        aegis_mesh::relay::run_relay_processor(relay_client, engines).await;
+    });
+    started.push("Mesh Relay");
+
+    // TRUSTMARK Engine task
+    let trustmark_client = client.clone();
+    tokio::spawn(async move {
+        aegis_trustmark::cluster_scoring::run_trustmark_engine(trustmark_client).await;
+    });
+    started.push("TRUSTMARK Engine");
+
+    // Botawiki Service task
+    let botawiki_client = client.clone();
+    tokio::spawn(async move {
+        aegis_botawiki::run_botawiki_service(botawiki_client).await;
+    });
+    started.push("Botawiki Service");
+
+    started
+}
+
+/// Print the embedded cluster startup banner.
+fn print_embedded_banner(addr: &SocketAddr, nats_url: &str, config: &GatewayConfig) {
+    let version = env!("CARGO_PKG_VERSION");
+
+    let mut screening_layers = vec!["heuristic"];
+    if config.prompt_guard_model_dir.is_some() {
+        screening_layers.push("classifier");
+    }
+    if config.slm_server_url.is_some() {
+        screening_layers.push("SLM");
+    }
+    let layers = screening_layers.join(" + ");
+
+    eprintln!();
+    eprintln!("Aegis Gateway v{version} — embedded cluster mode");
+    eprintln!("  Gateway:          {addr} ✓");
+    eprintln!("  NATS:             {nats_url} ✓");
+    eprintln!("  Mesh Relay:       embedded ✓ ({layers})");
+    eprintln!("  TRUSTMARK Engine: embedded ✓");
+    eprintln!("  Botawiki Service: embedded ✓");
+    eprintln!("Ready. Adapters connect to https://{addr}");
+    eprintln!();
+}
+
 #[tokio::main]
 async fn main() {
     tracing_subscriber::fmt()
@@ -130,7 +220,12 @@ async fn main() {
         .init();
 
     let cli = Cli::parse();
-    let config = load_config(&cli.config);
+    let mut config = load_config(&cli.config);
+
+    // CLI flag overrides config file
+    if cli.embedded {
+        config.embedded = true;
+    }
 
     // Evidence store (in-memory for now; swap with PostgresStore in production)
     let evidence_store = MemoryStore::new();
@@ -159,14 +254,32 @@ async fn main() {
                     tracing::warn!("JetStream setup failed: {e}, streams may not be durable");
                 }
 
+                // Embedded mode: start all cluster services in-process
+                if config.embedded {
+                    let started = start_embedded_services(bridge.client(), &config);
+                    for svc in &started {
+                        info!("embedded service started: {svc}");
+                    }
+                }
+
                 Some(bridge)
             }
             Err(e) => {
+                if config.embedded {
+                    eprintln!(
+                        "error: embedded mode requires NATS — failed to connect to {url}: {e}"
+                    );
+                    std::process::exit(1);
+                }
                 tracing::warn!("failed to connect to NATS at {url}: {e}, running without NATS");
                 None
             }
         },
         None => {
+            if config.embedded {
+                eprintln!("error: embedded mode requires nats_url in config");
+                std::process::exit(1);
+            }
             info!("no nats_url configured, running without NATS");
             None
         }
@@ -300,11 +413,15 @@ async fn main() {
         "0.0.0.0:8080".parse().unwrap()
     });
 
-    info!(
-        "Aegis Gateway v{} starting on {}",
-        env!("CARGO_PKG_VERSION"),
-        addr
-    );
+    if config.embedded {
+        print_embedded_banner(&addr, config.nats_url.as_deref().unwrap_or("n/a"), &config);
+    } else {
+        info!(
+            "Aegis Gateway v{} starting on {}",
+            env!("CARGO_PKG_VERSION"),
+            addr
+        );
+    }
 
     let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
     axum::serve(listener, app)
@@ -342,6 +459,7 @@ mod tests {
         let config = GatewayConfig::default();
         assert_eq!(config.listen_addr, "0.0.0.0:8080");
         assert!(config.nats_url.is_none());
+        assert!(!config.embedded);
     }
 
     #[test]
@@ -350,6 +468,7 @@ mod tests {
         let config: GatewayConfig = toml::from_str(toml_str).unwrap();
         assert_eq!(config.listen_addr, "127.0.0.1:9090");
         assert!(config.nats_url.is_none());
+        assert!(!config.embedded);
     }
 
     #[test]
@@ -376,5 +495,30 @@ nats_url = "nats://localhost:4222"
         let config = load_config(&path);
         assert_eq!(config.listen_addr, "0.0.0.0:8080");
         assert!(config.nats_url.is_none());
+    }
+
+    #[test]
+    fn parse_embedded_config() {
+        let toml_str = r#"
+listen_addr = "127.0.0.1:9090"
+nats_url = "nats://localhost:4222"
+embedded = true
+slm_server_url = "http://localhost:1234"
+slm_model = "qwen/qwen3-30b-a3b"
+"#;
+        let config: GatewayConfig = toml::from_str(toml_str).unwrap();
+        assert!(config.embedded);
+        assert_eq!(
+            config.slm_server_url.as_deref(),
+            Some("http://localhost:1234")
+        );
+        assert_eq!(config.slm_model.as_deref(), Some("qwen/qwen3-30b-a3b"));
+    }
+
+    #[test]
+    fn embedded_defaults_to_false() {
+        let toml_str = r#"listen_addr = "0.0.0.0:8080""#;
+        let config: GatewayConfig = toml::from_str(toml_str).unwrap();
+        assert!(!config.embedded);
     }
 }

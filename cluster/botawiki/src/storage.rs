@@ -7,6 +7,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use futures::StreamExt;
 use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
 use uuid::Uuid;
@@ -257,4 +258,179 @@ fn now_ms() -> i64 {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis() as i64
+}
+
+// ─── NATS service types ─────────────────────────────────────────
+
+/// NATS message for claim submission.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ClaimSubmitMsg {
+    pub claim: Claim,
+    pub validators: Vec<String>,
+}
+
+/// NATS message for a vote on a claim.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct VoteMsg {
+    pub claim_id: Uuid,
+    pub validator_id: String,
+    pub approve: bool,
+}
+
+/// NATS message for claim state change notification.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ClaimStoredMsg {
+    pub claim_id: Uuid,
+    pub status: ClaimStatus,
+    pub stored: StoredClaim,
+}
+
+// ─── Botawiki service loop ──────────────────────────────────────
+
+/// Run the Botawiki service as an async loop.
+///
+/// Subscribes to `botawiki.claim.submit` and `botawiki.vote`, processes
+/// claims through quarantine/voting/adaptive quorum, and publishes state
+/// changes to `botawiki.claim.stored`. This function runs forever and can
+/// be called from both the standalone binary and the Gateway's embedded mode.
+pub async fn run_botawiki_service(client: async_nats::Client) {
+    let store = Arc::new(BotawikiStore::new());
+
+    let mut claim_sub = match client.subscribe("botawiki.claim.submit").await {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::error!("Failed to subscribe to botawiki.claim.submit: {e}");
+            return;
+        }
+    };
+    tracing::info!("subscribed to botawiki.claim.submit");
+
+    let mut vote_sub = match client.subscribe("botawiki.vote").await {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::error!("Failed to subscribe to botawiki.vote: {e}");
+            return;
+        }
+    };
+    tracing::info!("subscribed to botawiki.vote");
+
+    let client_claim = client.clone();
+    let store_claim = Arc::clone(&store);
+
+    let claim_task = tokio::spawn(async move {
+        while let Some(msg) = claim_sub.next().await {
+            let submit: ClaimSubmitMsg = match serde_json::from_slice(&msg.payload) {
+                Ok(s) => s,
+                Err(e) => {
+                    tracing::warn!(error = %e, "failed to parse claim submit message");
+                    continue;
+                }
+            };
+
+            let claim_id = submit.claim.id;
+            let id = store_claim.submit(submit.claim, submit.validators).await;
+            tracing::info!(claim_id = %id, "claim submitted to quarantine");
+
+            if let Some(stored) = store_claim.get(&claim_id).await {
+                let notification = ClaimStoredMsg {
+                    claim_id,
+                    status: stored.status.clone(),
+                    stored,
+                };
+                match serde_json::to_vec(&notification) {
+                    Ok(json) => {
+                        if let Err(e) = client_claim
+                            .publish(
+                                "botawiki.claim.stored",
+                                bytes::Bytes::copy_from_slice(&json),
+                            )
+                            .await
+                        {
+                            tracing::warn!(claim_id = %claim_id, error = %e, "failed to publish claim.stored");
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!(claim_id = %claim_id, error = %e, "failed to serialize claim.stored");
+                    }
+                }
+            }
+        }
+        tracing::warn!("botawiki.claim.submit subscriber ended");
+    });
+
+    let client_vote = client.clone();
+    let store_vote = Arc::clone(&store);
+
+    let vote_task = tokio::spawn(async move {
+        while let Some(msg) = vote_sub.next().await {
+            let vote: VoteMsg = match serde_json::from_slice(&msg.payload) {
+                Ok(v) => v,
+                Err(e) => {
+                    tracing::warn!(error = %e, "failed to parse vote message");
+                    continue;
+                }
+            };
+
+            match store_vote
+                .vote(&vote.claim_id, &vote.validator_id, vote.approve)
+                .await
+            {
+                Ok(status) => {
+                    tracing::info!(
+                        claim_id = %vote.claim_id,
+                        validator = %vote.validator_id,
+                        approve = vote.approve,
+                        ?status,
+                        "vote recorded"
+                    );
+
+                    if let Some(stored) = store_vote.get(&vote.claim_id).await {
+                        let notification = ClaimStoredMsg {
+                            claim_id: vote.claim_id,
+                            status: stored.status.clone(),
+                            stored,
+                        };
+                        match serde_json::to_vec(&notification) {
+                            Ok(json) => {
+                                if let Err(e) = client_vote
+                                    .publish(
+                                        "botawiki.claim.stored",
+                                        bytes::Bytes::copy_from_slice(&json),
+                                    )
+                                    .await
+                                {
+                                    tracing::warn!(
+                                        claim_id = %vote.claim_id,
+                                        error = %e,
+                                        "failed to publish claim.stored after vote"
+                                    );
+                                }
+                            }
+                            Err(e) => {
+                                tracing::warn!(
+                                    claim_id = %vote.claim_id,
+                                    error = %e,
+                                    "failed to serialize claim.stored after vote"
+                                );
+                            }
+                        }
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        claim_id = %vote.claim_id,
+                        validator = %vote.validator_id,
+                        error = %e,
+                        "vote rejected"
+                    );
+                }
+            }
+        }
+        tracing::warn!("botawiki.vote subscriber ended");
+    });
+
+    tokio::select! {
+        _ = claim_task => tracing::error!("claim handler exited unexpectedly"),
+        _ = vote_task => tracing::error!("vote handler exited unexpectedly"),
+    }
 }

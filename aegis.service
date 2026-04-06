@@ -1,12 +1,11 @@
 [Unit]
-Description=Aegis Adapter — neural commons proxy
-After=network.target
+Description=Aegis Gateway — embedded cluster mode (Gateway + Mesh Relay + TRUSTMARK Engine + Botawiki)
+After=network.target nats.service
 
 [Service]
 Type=simple
 User=aegis
-WorkingDirectory=/home/aegis/aegis/neural-commons
-ExecStart=/home/aegis/aegis/neural-commons/target/release/aegis --no-slm
+ExecStart=/usr/local/bin/aegis-gateway -c /etc/aegis/gateway.toml --embedded
 Restart=on-failure
 RestartSec=3
 Environment=RUST_LOG=info

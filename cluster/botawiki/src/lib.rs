@@ -15,5 +15,6 @@ pub mod write;
 
 // Re-export core types for ergonomic imports
 pub use storage::{
-    BotawikiStore, ClaimStatus, ClaimSummary, PendingVote, StoredClaim, StoredClaimView, Vote,
+    BotawikiStore, ClaimStatus, ClaimStoredMsg, ClaimSubmitMsg, ClaimSummary, PendingVote,
+    StoredClaim, StoredClaimView, Vote, VoteMsg, run_botawiki_service,
 };

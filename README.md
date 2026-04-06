@@ -121,6 +121,8 @@ Your identity is deterministic, portable, and mathematically yours.
 
 ## Quick Start
 
+### Adapter (per-bot protection)
+
 ```bash
 # Install (Linux, macOS, Windows)
 curl -fsSL https://github.com/AEGIS-GB/neural-commons/releases/latest/download/install.sh | bash
@@ -135,6 +137,32 @@ aegis --no-slm           # skip SLM layer (fast startup, still 4 other layers)
 ```
 
 Dashboard: **http://localhost:3141/dashboard**
+
+### Cluster (bot-to-bot trust)
+
+One command starts the entire cluster — Gateway, Mesh Relay, TRUSTMARK Engine, and Botawiki all run in a single process:
+
+```bash
+# 1. Start NATS (standard infrastructure)
+nats-server -js
+
+# 2. Start the cluster
+aegis-gateway -c gateway.toml --embedded
+```
+
+Example `gateway.toml`:
+
+```toml
+listen_addr = "127.0.0.1:9090"
+nats_url = "nats://127.0.0.1:4222"
+embedded = true
+# slm_server_url = "http://localhost:1234"
+# slm_model = "qwen/qwen3-30b-a3b"
+```
+
+Adapters connect to `https://127.0.0.1:9090`. That's it — no separate processes to manage.
+
+For production distributed deployments, each service can still run as a standalone binary (`aegis-mesh-relay`, `aegis-trustmark-engine`, `aegis-botawiki-service`).
 
 See the [Quickstart Guide](docs/QUICKSTART.md) for full setup details including SLM configuration.
 
