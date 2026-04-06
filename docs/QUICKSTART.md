@@ -78,37 +78,54 @@ Every request your OpenClaw agent sends now generates a signed evidence receipt.
 
 ## Optional: Add SLM Injection Screening
 
-Everything above works without a language model. If you want stronger injection detection, Aegis supports three SLM engines:
+Everything above works without a language model. If you want stronger injection detection, Aegis supports local SLM screening with a purpose-built model.
 
-### Option A: Ollama (local, default)
+### Recommended: aegis-screen:4b (Ollama)
+
+**aegis-screen:4b** is a Gemma3-4B model fine-tuned specifically for Aegis injection detection. It achieves 99%+ recall across 440 test cases including prompt injection, jailbreaks, system probing, social engineering, and exfiltration attempts. The installer downloads it automatically.
 
 ```bash
-# Install Ollama
+# Install Ollama (if not already installed)
 curl -fsSL https://ollama.com/install.sh | sh
 
-# Pull a screening model
-ollama pull llama3.2:1b          # 1.3GB, basic detection
-# or for better accuracy:
-ollama pull qwen3:30b-a3b        # 18GB, optimal detection (MoE, 3B active)
+# Download and install aegis-screen:4b (~3.9GB from HuggingFace)
+# The Aegis installer does this automatically, or manually:
+curl -fSL https://huggingface.co/Loksh/aegis-screen-4b-gguf/resolve/main/aegis-screen-4b-q8_0.gguf \
+  -o ~/.aegis/models/aegis-screen-4b-q8_0.gguf
 
-# Configure and restart
-aegis slm engine ollama
-aegis slm use llama3.2:1b        # or qwen3:30b-a3b
-aegis slm server http://localhost:11434
+cat > /tmp/Modelfile << EOF
+FROM ~/.aegis/models/aegis-screen-4b-q8_0.gguf
+PARAMETER temperature 0.1
+PARAMETER num_ctx 4096
+EOF
+ollama create aegis-screen:4b -f /tmp/Modelfile
+
+# Configure and start
+aegis slm use aegis-screen:4b
 aegis
 ```
 
-### Option B: OpenAI-compatible (LM Studio, vLLM, llama.cpp)
+### Alternative: Generic models
+
+If you prefer a generic (non-fine-tuned) model or have limited disk space:
 
 ```bash
-# Start your server (e.g., LM Studio on port 1234)
+ollama pull gemma3:4b             # 3.3GB — good with KB context
+ollama pull llama3.2:1b           # 1.3GB — fast but lower accuracy
+aegis slm use gemma3:4b           # or llama3.2:1b
+aegis
+```
+
+### Alternative: OpenAI-compatible server (LM Studio, vLLM)
+
+```bash
 aegis slm engine openai
-aegis slm use qwen/qwen3-30b-a3b
+aegis slm use aegis-screen:4b     # or any model loaded in your server
 aegis slm server http://localhost:1234
 aegis
 ```
 
-### Option C: Anthropic API (cloud, no GPU needed)
+### Alternative: Anthropic API (cloud, no GPU needed)
 
 ```bash
 export ANTHROPIC_API_KEY=sk-ant-...
@@ -118,15 +135,15 @@ aegis slm server https://api.anthropic.com
 aegis
 ```
 
-### SLM Model Tiers
+### SLM Model Comparison
 
-| Tier | VRAM | Model | Detection | Latency |
-|------|------|-------|-----------|---------|
-| optimal | 12GB+ | qwen3:30b-a3b (MoE 3B active) | ~100% | 3-8s |
-| good | 6-12GB | qwen3:8b | ~70% | 4-10s |
-| basic | 3-6GB | llama3.2:1b | ~45% | 1-3s |
-| cpu-only | none | heuristic + classifier only | ~65% | <10ms |
-| api | cloud | claude-haiku-4-5-20251001 | ~95% | 0.5-2s |
+| Model | Size | Recall | F1 | Latency | Notes |
+|-------|------|--------|-----|---------|-------|
+| **aegis-screen:4b** | **3.9GB** | **99%+** | **98.4** | **~500ms** | **Recommended.** Fine-tuned for Aegis. |
+| gemma3:4b | 3.3GB | 93% | 94.9 | ~800ms | Generic. Good with KB context. |
+| llama3.2:1b | 1.3GB | ~45% | ~50 | ~200ms | Fast but misses most subtle attacks. |
+| claude-haiku-4-5 | cloud | ~95% | — | 0.5-2s | Cloud API. Requires API key. |
+| heuristic only | 0 | ~65% | — | <10ms | No model needed. `aegis --no-slm` |
 
 Without any SLM engine, use `aegis --no-slm`. You still get heuristic regex patterns + ProtectAI classifier for injection detection, plus all other protections (evidence, vault, barrier, memory). The SLM adds deeper semantic analysis but is not required.
 
@@ -137,14 +154,14 @@ aegis --no-slm               # start adapter (no SLM engine needed)
 aegis                        # start with SLM screening
 aegis --enforce              # start with blocking enabled
 aegis --pass-through         # dumb forwarder, zero inspection
-aegis --slm-model qwen3:30b-a3b  # override SLM model from CLI
+aegis --slm-model aegis-screen:4b  # override SLM model from CLI
 
 aegis setup openclaw         # configure OpenClaw integration
 aegis setup openclaw --revert  # undo configuration
 
 aegis slm status             # show SLM configuration
 aegis slm engine ollama      # switch engine (ollama/openai/anthropic)
-aegis slm use qwen3:30b-a3b  # switch screening model
+aegis slm use aegis-screen:4b  # switch screening model
 aegis slm server <url>       # set SLM server URL
 aegis slm recommend          # detect hardware, recommend model tier
 
@@ -178,7 +195,7 @@ upstream_url = "https://api.anthropic.com"  # change for OpenAI, Ollama, or othe
 enabled = true
 engine = "ollama"              # "ollama", "openai", or "anthropic"
 server_url = "http://localhost:11434"  # SLM engine server URL
-model = "llama3.2:1b"         # screening model name
+model = "aegis-screen:4b"     # screening model (fine-tuned for injection detection)
 fallback_to_heuristics = true  # regex fallback if engine unavailable
 metaprompt_hardening = true    # inject security rules into system messages
 ```
@@ -186,15 +203,15 @@ metaprompt_hardening = true    # inject security rules into system messages
 **Engine examples:**
 
 ```toml
-# Ollama (default)
+# Ollama (default, recommended)
 engine = "ollama"
 server_url = "http://localhost:11434"
-model = "qwen3:30b-a3b"
+model = "aegis-screen:4b"
 
 # LM Studio / vLLM / llama.cpp (OpenAI-compatible)
 engine = "openai"
 server_url = "http://localhost:1234"
-model = "qwen/qwen3-30b-a3b"
+model = "aegis-screen:4b"
 
 # Anthropic API (cloud, requires ANTHROPIC_API_KEY env var)
 engine = "anthropic"
@@ -297,7 +314,7 @@ Check `~/.openclaw/openclaw.json` has `"baseUrl": "http://127.0.0.1:3141"`. Run 
 Send a request through your bot first. The dashboard displays evidence receipts — it needs at least one request to have something to show.
 
 **SLM says "Ollama unavailable"**
-Install Ollama (`curl -fsSL https://ollama.com/install.sh | sh`), pull the model (`ollama pull llama3.2:1b`), make sure Ollama is running (`ollama serve`), then restart Aegis. Or switch to a different engine: `aegis slm engine anthropic`.
+Install Ollama (`curl -fsSL https://ollama.com/install.sh | sh`), install the model (the Aegis installer does this automatically, or run `aegis slm install`), make sure Ollama is running (`ollama serve`), then restart Aegis. Or switch to a different engine: `aegis slm engine anthropic`.
 
 **SLM says "ANTHROPIC_API_KEY not set"**
 Set the environment variable: `export ANTHROPIC_API_KEY=sk-ant-...` and restart Aegis.
