@@ -357,7 +357,8 @@ aegis trust pubkey                 # show signing pubkey
 
 # SLM management
 aegis slm status                   # current SLM config
-aegis slm use qwen/qwen3-30b-a3b  # switch model
+aegis slm use aegis-screen:4b     # recommended (fine-tuned for screening)
+aegis slm use gemma3:4b           # generic alternative
 aegis slm engine openai            # switch engine
 aegis slm server http://localhost:1234  # set server URL
 

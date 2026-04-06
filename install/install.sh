@@ -289,7 +289,8 @@ prompt_slm_model() {
         info "Ollama is not installed. To set up SLM with Ollama:"
         echo ""
         echo "  1. Install Ollama:  curl -fsSL https://ollama.com/install.sh | sh"
-        echo "  2. Pull a model:    ollama pull llama3.2:1b"
+        echo "  2. Pull model:      ollama pull aegis-screen:4b  (recommended)"
+        echo "     Or generic:      ollama pull gemma3:4b"
         echo "  3. Start Aegis:     aegis"
         echo ""
         info "Run these after the installer finishes."
@@ -297,26 +298,28 @@ prompt_slm_model() {
     fi
 
     echo ""
-    echo "  Which model? (smaller = faster, larger = more accurate)"
+    echo "  Which screening model?"
     echo ""
-    echo "  1) llama3.2:1b    (~1.3GB — fast, good enough for most screening)"
-    echo "  2) llama3.2:3b    (~2.0GB — better accuracy)"
-    echo "  3) qwen2.5:1.5b   (~1.5GB — strong multilingual support)"
-    echo "  4) Custom model name"
+    echo "  1) aegis-screen:4b  (~3.9GB — RECOMMENDED: fine-tuned for injection detection, 99%+ accuracy)"
+    echo "  2) gemma3:4b        (~3.3GB — generic Gemma3, good with KB context)"
+    echo "  3) llama3.2:1b      (~1.3GB — fast but lower accuracy)"
+    echo "  4) qwen2.5:1.5b     (~1.5GB — multilingual support)"
+    echo "  5) Custom model name"
     echo ""
 
-    read -r -p "Select [1-4]: " model_choice
+    read -r -p "Select [1-5]: " model_choice
     local model
     case "$model_choice" in
-        2) model="llama3.2:3b" ;;
-        3) model="qwen2.5:1.5b" ;;
-        4)
+        2) model="gemma3:4b" ;;
+        3) model="llama3.2:1b" ;;
+        4) model="qwen2.5:1.5b" ;;
+        5)
             read -r -p "Model name: " model
             if [ -z "$model" ]; then
-                model="llama3.2:1b"
+                model="aegis-screen:4b"
             fi
             ;;
-        *) model="llama3.2:1b" ;;
+        *) model="aegis-screen:4b" ;;
     esac
 
     info "Pulling ${model}..."
@@ -392,10 +395,10 @@ upstream_url = "https://api.anthropic.com"
 enabled = true
 engine = "ollama"
 ollama_url = "http://localhost:11434"
-model = "llama3.2:1b"
+model = "aegis-screen:4b"
 fallback_to_heuristics = true
 # Switch engine: aegis slm engine openai
-# Switch model:  aegis slm use qwen2.5:1.5b
+# Switch model:  aegis slm use gemma3:4b  (generic alternative)
 # Set server:    aegis slm server http://localhost:1234
 CONFIGEOF
         info "Default config: ${config_dir}/config.toml"
