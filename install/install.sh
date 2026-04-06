@@ -289,8 +289,7 @@ prompt_slm_model() {
         info "Ollama is not installed. To set up SLM with Ollama:"
         echo ""
         echo "  1. Install Ollama:  curl -fsSL https://ollama.com/install.sh | sh"
-        echo "  2. Pull model:      ollama pull aegis-screen:4b  (recommended)"
-        echo "     Or generic:      ollama pull gemma3:4b"
+        echo "  2. Install model:   aegis slm install"
         echo "  3. Start Aegis:     aegis"
         echo ""
         info "Run these after the installer finishes."
@@ -300,7 +299,7 @@ prompt_slm_model() {
     echo ""
     echo "  Which screening model?"
     echo ""
-    echo "  1) aegis-screen:4b  (~3.9GB — RECOMMENDED: fine-tuned for injection detection, 99%+ accuracy)"
+    echo "  1) aegis-screen:4b  (~3.9GB — RECOMMENDED: fine-tuned for injection detection, 99%+ recall)"
     echo "  2) gemma3:4b        (~3.3GB — generic Gemma3, good with KB context)"
     echo "  3) llama3.2:1b      (~1.3GB — fast but lower accuracy)"
     echo "  4) qwen2.5:1.5b     (~1.5GB — multilingual support)"
@@ -322,15 +321,80 @@ prompt_slm_model() {
         *) model="aegis-screen:4b" ;;
     esac
 
-    info "Pulling ${model}..."
-    ollama pull "$model" || {
-        warn "Model pull failed. Try later: ollama pull ${model}"
-        return
-    }
+    if [ "$model" = "aegis-screen:4b" ]; then
+        download_aegis_screen_model
+    else
+        info "Pulling ${model}..."
+        ollama pull "$model" || {
+            warn "Model pull failed. Try later: ollama pull ${model}"
+            return
+        }
+    fi
 
     "${INSTALL_DIR}/aegis" slm use "$model" 2>/dev/null || true
     info "SLM configured: engine=ollama model=${model}"
     info "Start with: aegis  (not --no-slm)"
+}
+
+# --- Download aegis-screen:4b from HuggingFace and import into Ollama ---
+
+download_aegis_screen_model() {
+    local hf_url="https://huggingface.co/Loksh/aegis-screen-4b-gguf/resolve/main/aegis-screen-4b-q8_0.gguf"
+    local models_dir="${DATA_DIR}/models"
+    local gguf_path="${models_dir}/aegis-screen-4b-q8_0.gguf"
+    local modelfile_path="${models_dir}/Modelfile.aegis-screen"
+
+    # Check if already imported
+    if ollama list 2>/dev/null | grep -q "aegis-screen:4b"; then
+        info "aegis-screen:4b already installed in Ollama."
+        return 0
+    fi
+
+    # Check if GGUF already downloaded
+    if [ ! -f "$gguf_path" ]; then
+        mkdir -p "$models_dir"
+        info "Downloading aegis-screen:4b from HuggingFace (~3.9GB)..."
+        info "This is a Gemma3-4B model fine-tuned for prompt injection detection."
+        echo ""
+
+        if command -v curl >/dev/null 2>&1; then
+            curl -fSL --progress-bar "$hf_url" -o "$gguf_path" || {
+                warn "Download failed. Try manually:"
+                echo "  curl -fSL $hf_url -o $gguf_path"
+                return 1
+            }
+        elif command -v wget >/dev/null 2>&1; then
+            wget --show-progress -q "$hf_url" -O "$gguf_path" || {
+                warn "Download failed. Try manually:"
+                echo "  wget $hf_url -O $gguf_path"
+                return 1
+            }
+        else
+            warn "Neither curl nor wget available. Download manually:"
+            echo "  $hf_url"
+            return 1
+        fi
+
+        info "Downloaded: ${gguf_path} ($(du -h "$gguf_path" | cut -f1))"
+    else
+        info "GGUF already downloaded: ${gguf_path}"
+    fi
+
+    # Create Modelfile and import into Ollama
+    cat > "$modelfile_path" << MFEOF
+FROM ${gguf_path}
+PARAMETER temperature 0.1
+PARAMETER num_ctx 4096
+MFEOF
+
+    info "Importing into Ollama as aegis-screen:4b..."
+    ollama create aegis-screen:4b -f "$modelfile_path" || {
+        warn "Ollama import failed. Try manually:"
+        echo "  ollama create aegis-screen:4b -f $modelfile_path"
+        return 1
+    }
+
+    info "aegis-screen:4b installed successfully!"
 }
 
 # --- Framework setup prompt ---
@@ -422,8 +486,8 @@ nats_url = "nats://127.0.0.1:4222"
 embedded = true
 
 # Optional: SLM screening for Mesh Relay (Layer 3)
-# slm_server_url = "http://localhost:1234"
-# slm_model = "qwen/qwen3-30b-a3b"
+# slm_server_url = "http://localhost:11434"
+# slm_model = "aegis-screen:4b"
 
 # Optional: PromptGuard classifier for Mesh Relay (Layer 2)
 # prompt_guard_model_dir = "/path/to/protectai-v2"

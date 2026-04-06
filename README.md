@@ -156,8 +156,8 @@ Example `gateway.toml`:
 listen_addr = "127.0.0.1:9090"
 nats_url = "nats://127.0.0.1:4222"
 embedded = true
-# slm_server_url = "http://localhost:1234"
-# slm_model = "qwen/qwen3-30b-a3b"
+# slm_server_url = "http://localhost:11434"
+# slm_model = "aegis-screen:4b"
 ```
 
 Adapters connect to `https://127.0.0.1:9090`. That's it — no separate processes to manage.
