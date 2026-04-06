@@ -5,7 +5,11 @@
 //! - `RelayScreened`: published by Mesh Relay to `mesh.relay.screened`
 //! - `RelayQuarantined`: published by Mesh Relay to `mesh.relay.quarantined`
 
+use std::sync::Arc;
+
+use futures::StreamExt;
 use serde::{Deserialize, Serialize};
+use tracing::{error, info, warn};
 
 use crate::screening::{ScreeningEngines, ScreeningVerdict};
 
@@ -53,7 +57,79 @@ pub struct RelayQuarantined {
     pub screening: ScreeningVerdict,
 }
 
-// ─── Relay processor ──────────────────��──────────────────────────
+// ─── Relay service loop ─────────────────────────────────────────
+
+/// Run the relay screening processor as an async loop.
+///
+/// Subscribes to `mesh.relay.incoming`, screens each message with the
+/// provided engines, and publishes results to `mesh.relay.screened` or
+/// `mesh.relay.quarantined`. This function runs forever (until the
+/// subscription ends) and can be called from both the standalone binary
+/// and the Gateway's embedded mode.
+pub async fn run_relay_processor(client: async_nats::Client, engines: Arc<ScreeningEngines>) {
+    let mut subscriber = match client.subscribe(SUBJECT_INCOMING).await {
+        Ok(s) => s,
+        Err(e) => {
+            error!("Failed to subscribe to {SUBJECT_INCOMING}: {e}");
+            return;
+        }
+    };
+    info!("Subscribed to {SUBJECT_INCOMING}, ready to screen relay messages");
+
+    while let Some(msg) = subscriber.next().await {
+        let request: RelayRequest = match serde_json::from_slice(&msg.payload) {
+            Ok(r) => r,
+            Err(e) => {
+                warn!("Malformed relay request: {e}");
+                continue;
+            }
+        };
+
+        info!(
+            from = %request.from,
+            to = %request.to,
+            msg_type = %request.msg_type,
+            sender_bp = request.sender_trustmark_bp,
+            "Screening relay message"
+        );
+
+        let engines = engines.clone();
+        let client = client.clone();
+        tokio::spawn(async move {
+            match process_relay(&engines, &request) {
+                Ok(screened) => {
+                    let payload = serde_json::to_vec(&screened).unwrap_or_default();
+                    if let Err(e) = client.publish(SUBJECT_SCREENED, payload.into()).await {
+                        error!("Failed to publish screened result: {e}");
+                    } else {
+                        info!(
+                            from = %screened.from,
+                            to = %screened.to,
+                            "Relay message admitted"
+                        );
+                    }
+                }
+                Err(quarantined) => {
+                    let payload = serde_json::to_vec(&quarantined).unwrap_or_default();
+                    if let Err(e) = client.publish(SUBJECT_QUARANTINED, payload.into()).await {
+                        error!("Failed to publish quarantine result: {e}");
+                    } else {
+                        warn!(
+                            from = %quarantined.from,
+                            to = %quarantined.to,
+                            reason = %quarantined.reason,
+                            "Relay message quarantined"
+                        );
+                    }
+                }
+            }
+        });
+    }
+
+    warn!("{SUBJECT_INCOMING} subscriber ended unexpectedly");
+}
+
+// ─── Relay processor ────────────────────────────────────────────
 
 /// Process a single relay request: screen and produce either
 /// a `RelayScreened` or `RelayQuarantined` result.

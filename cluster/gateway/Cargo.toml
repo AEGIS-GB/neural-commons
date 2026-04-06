@@ -12,6 +12,7 @@ aegis-slm = { path = "../../adapter/aegis-slm" }
 aegis-trustmark = { path = "../trustmark" }
 aegis-common = { path = "../common" }
 aegis-botawiki = { path = "../botawiki" }
+aegis-mesh = { path = "../mesh", default-features = false }
 axum.workspace = true
 tower.workspace = true
 tower-http.workspace = true
@@ -31,6 +32,7 @@ toml.workspace = true
 tracing-subscriber.workspace = true
 clap.workspace = true
 futures.workspace = true
+bytes = "1"
 
 [[bin]]
 name = "aegis-gateway"

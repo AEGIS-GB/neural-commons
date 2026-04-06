@@ -69,8 +69,11 @@ pub struct ScreeningEngines {
 
 impl ScreeningEngines {
     /// Create screening engines with optional classifier and SLM.
+    ///
+    /// The `classifier_model_dir` parameter is always accepted for a stable API,
+    /// but the classifier is only loaded when the `prompt-guard` feature is enabled.
     pub fn new(
-        #[cfg(feature = "prompt-guard")] classifier_model_dir: Option<&Path>,
+        classifier_model_dir: Option<&Path>,
         slm_server_url: Option<&str>,
         slm_model: Option<&str>,
     ) -> Self {
@@ -89,6 +92,9 @@ impl ScreeningEngines {
                 }
             }
         });
+
+        #[cfg(not(feature = "prompt-guard"))]
+        let _ = classifier_model_dir; // suppress unused warning
 
         let slm = match (slm_server_url, slm_model) {
             (Some(url), Some(model)) => {

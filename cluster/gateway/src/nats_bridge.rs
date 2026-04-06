@@ -43,6 +43,13 @@ impl NatsBridge {
         Ok(Self { client })
     }
 
+    /// Get a reference to the underlying NATS client.
+    ///
+    /// Used by embedded mode to pass the connection to in-process services.
+    pub fn client(&self) -> &Client {
+        &self.client
+    }
+
     /// Publish a single evidence receipt to `evidence.new`.
     ///
     /// Downstream consumers (trustmark-scorer) pick this up to recompute scores.
