@@ -62,6 +62,12 @@ pub struct AdapterConfig {
     #[serde(default)]
     pub gateway_url: Option<String>,
 
+    /// Bot profile for context-aware screening.
+    /// Describes the bot's purpose so the screening model knows what requests
+    /// are within scope (SAFE) vs outside scope (suspicious).
+    #[serde(default)]
+    pub bot: BotProfileConfig,
+
     /// Autonomous mesh task configuration.
     #[serde(default)]
     pub autonomous: crate::autonomous::AutonomousConfig,
@@ -226,6 +232,27 @@ pub struct SlmSection {
     /// Should match the SLM model's context window minus prompt overhead.
     #[serde(default = "default_slm_max_chars")]
     pub slm_max_content_chars: usize,
+}
+
+/// Bot profile for context-aware screening.
+///
+/// When set, the screening model knows the bot's purpose and can distinguish
+/// "I want you to act as a code reviewer" (within scope → SAFE for a coding bot)
+/// from "I want you to act as DAN" (outside scope → DANGEROUS).
+///
+/// ```toml
+/// [bot]
+/// purpose = "coding assistant for software developers"
+/// scope = "code review, debugging, architecture, testing"
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct BotProfileConfig {
+    /// One-line description of what this bot does.
+    #[serde(default)]
+    pub purpose: Option<String>,
+    /// Comma-separated list of expected request types.
+    #[serde(default)]
+    pub scope: Option<String>,
 }
 
 fn default_slm_timeout() -> u64 {
@@ -408,6 +435,7 @@ impl Default for AdapterConfig {
             webhook_url: None,
             trustmark: TrustmarkHealthConfig::default(),
             gateway_url: None,
+            bot: BotProfileConfig::default(),
             autonomous: crate::autonomous::AutonomousConfig::default(),
         }
     }

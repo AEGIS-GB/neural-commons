@@ -1134,6 +1134,15 @@ pub async fn start(config: AdapterConfig, mode_override: Option<Mode>) -> Result
         }
     };
 
+    // Build bot profile from config for context-aware screening
+    let bot_profile = match (&config.bot.purpose, &config.bot.scope) {
+        (Some(purpose), Some(scope)) => {
+            Some(format!("Purpose: {purpose}. Normal requests: {scope}."))
+        }
+        (Some(purpose), None) => Some(format!("Purpose: {purpose}.")),
+        _ => None,
+    };
+
     aegis_proxy::proxy::start_with_traffic_full_ex2(
         proxy_config,
         hooks,
@@ -1144,6 +1153,7 @@ pub async fn start(config: AdapterConfig, mode_override: Option<Mode>) -> Result
         trustmark_degraded_flag,
         config.gateway_url.clone(),
         relay_inbox,
+        bot_profile,
     )
     .await
     .map_err(|e| StartupError::Proxy(format!("{e}")))?;
