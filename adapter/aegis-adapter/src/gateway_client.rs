@@ -158,6 +158,61 @@ impl GatewayClient {
         self.last_pushed_seq
             .store(seq, std::sync::atomic::Ordering::Relaxed);
     }
+
+    /// Signed GET request to the Gateway, returning parsed JSON.
+    pub async fn get_json(&self, path: &str) -> Result<serde_json::Value, String> {
+        let (auth, ts) = self.sign_request("GET", path, b"");
+        let url = format!("{}{}", self.gateway_url, path);
+        let resp = self
+            .http_client
+            .get(&url)
+            .header("Authorization", auth)
+            .header("X-Aegis-Timestamp", ts)
+            .send()
+            .await
+            .map_err(|e| format!("gateway GET {path} failed: {e}"))?;
+
+        if resp.status().is_success() {
+            resp.json()
+                .await
+                .map_err(|e| format!("gateway GET {path} json parse failed: {e}"))
+        } else {
+            let status = resp.status();
+            let text = resp.text().await.unwrap_or_default();
+            Err(format!("gateway GET {path} returned {status}: {text}"))
+        }
+    }
+
+    /// Signed POST request to the Gateway with a JSON body, returning parsed JSON.
+    pub async fn post_json(
+        &self,
+        path: &str,
+        payload: &serde_json::Value,
+    ) -> Result<serde_json::Value, String> {
+        let body = serde_json::to_vec(payload).map_err(|e| format!("failed to serialize: {e}"))?;
+        let (auth, ts) = self.sign_request("POST", path, &body);
+        let url = format!("{}{}", self.gateway_url, path);
+        let resp = self
+            .http_client
+            .post(&url)
+            .header("Authorization", auth)
+            .header("X-Aegis-Timestamp", ts)
+            .header("Content-Type", "application/json")
+            .body(body)
+            .send()
+            .await
+            .map_err(|e| format!("gateway POST {path} failed: {e}"))?;
+
+        if resp.status().is_success() {
+            resp.json()
+                .await
+                .map_err(|e| format!("gateway POST {path} json parse failed: {e}"))
+        } else {
+            let status = resp.status();
+            let text = resp.text().await.unwrap_or_default();
+            Err(format!("gateway POST {path} returned {status}: {text}"))
+        }
+    }
 }
 
 /// Maximum receipts per batch push (matches gateway limit).
