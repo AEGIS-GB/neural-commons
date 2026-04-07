@@ -5,9 +5,10 @@
 //! Mesh Relay screens → publishes to mesh.relay.screened or mesh.relay.quarantined.
 //!
 //! Skipped in CI (no NATS server). Run locally with:
-//!   cargo test -p aegis-mesh --test relay_integration_tests -- --test-threads=1
+//!   cargo test -p aegis-mesh --test relay_integration_tests
 //!
-//! Must run single-threaded (--test-threads=1) because tests share NATS subjects.
+//! Tests are annotated with `#[serial]` (serial_test crate) so they don't
+//! interfere with each other on shared NATS subjects.
 
 use aegis_mesh::relay::{
     RelayQuarantined, RelayRequest, RelayScreened, SUBJECT_INCOMING, SUBJECT_QUARANTINED,
@@ -15,6 +16,7 @@ use aegis_mesh::relay::{
 };
 use aegis_mesh::screening::ScreeningEngines;
 use futures::StreamExt;
+use serial_test::serial;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -78,6 +80,7 @@ async fn spawn_relay_processor(client: async_nats::Client) {
 }
 
 #[tokio::test]
+#[serial]
 async fn clean_message_flows_to_screened() {
     let Some(client) = require_nats().await else {
         return;
@@ -104,6 +107,7 @@ async fn clean_message_flows_to_screened() {
 }
 
 #[tokio::test]
+#[serial]
 async fn injection_flows_to_quarantined() {
     let Some(client) = require_nats().await else {
         return;
@@ -130,6 +134,7 @@ async fn injection_flows_to_quarantined() {
 }
 
 #[tokio::test]
+#[serial]
 async fn multiple_messages_all_processed() {
     let Some(client) = require_nats().await else {
         return;
@@ -161,6 +166,7 @@ async fn multiple_messages_all_processed() {
 }
 
 #[tokio::test]
+#[serial]
 async fn malformed_message_does_not_crash() {
     let Some(client) = require_nats().await else {
         return;
@@ -193,6 +199,7 @@ async fn malformed_message_does_not_crash() {
 }
 
 #[tokio::test]
+#[serial]
 async fn concurrent_clean_and_injection() {
     let Some(client) = require_nats().await else {
         return;

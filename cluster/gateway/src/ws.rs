@@ -24,6 +24,7 @@ use tokio::sync::{RwLock, mpsc};
 use tracing::{info, warn};
 
 use crate::auth::{WssChallenge, WssChallengeResponse};
+use crate::nats_bridge::{CachedScore, TrustmarkCache};
 
 /// Ping/pong interval in seconds
 pub const PING_INTERVAL_SECS: u64 = 30;
@@ -40,6 +41,7 @@ pub struct GatewayWsState {
     pub wss_registry: Arc<WssConnectionRegistry>,
     pub dead_drop_store: Arc<DeadDropStore>,
     pub relay_stats: Arc<crate::mesh_routes::RelayStats>,
+    pub trustmark_cache: Arc<TrustmarkCache>,
 }
 
 /// Registry of active WSS connections, keyed by bot_id (pubkey hex).
@@ -205,6 +207,31 @@ async fn handle_ws(socket: WebSocket, state: Arc<GatewayWsState>) {
     state.wss_registry.register(&bot_id, msg_tx.clone()).await;
 
     info!(bot_id = %bot_id, "WSS authenticated and registered");
+
+    // 4a. Seed provisional TRUSTMARK if none cached (Bug #2: empty cache after restart).
+    // WSS challenge-response auth proves the bot holds a valid Ed25519 key and is a mesh
+    // participant, so we grant a provisional Tier 2 score (3500 bp, just above the 0.30
+    // relay threshold). The real score will replace it once evidence arrives.
+    if state.trustmark_cache.get(&bot_id).await.is_none() {
+        let provisional = CachedScore {
+            score_bp: 3500,
+            dimensions: serde_json::json!({
+                "chain_integrity": 0,
+                "relay_reliability": 0,
+                "persona_integrity": 0,
+                "contribution_volume": 0,
+                "temporal_consistency": 0,
+                "vault_hygiene": 0
+            }),
+            tier: "tier2".to_string(),
+            computed_at_ms: now_epoch_ms(),
+        };
+        state
+            .trustmark_cache
+            .insert(bot_id.clone(), provisional)
+            .await;
+        info!(bot_id = %bot_id, score_bp = 3500, "seeded provisional TRUSTMARK (WSS auth)");
+    }
 
     // 4b. Deliver pending dead-drops (D25: deliver on reconnect)
     let pending = state.dead_drop_store.drain(&bot_id).await;
