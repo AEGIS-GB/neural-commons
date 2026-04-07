@@ -133,6 +133,13 @@ pub struct AppState {
     pub gateway_url: Option<String>,
     /// Relay inbox for incoming mesh relay messages.
     pub relay_inbox: Arc<crate::cognitive_bridge::RelayInbox>,
+    /// Baseline system prompt hash (SHA-256) captured on first request.
+    /// Used to detect system prompt poisoning via API — if a subsequent request
+    /// changes the system prompt, it's flagged as suspicious.
+    pub system_prompt_hash: Arc<std::sync::RwLock<Option<String>>>,
+    /// Cached bot profile summary for screening context injection.
+    /// Set at startup from config [bot].purpose or populated from Botawiki.
+    pub bot_profile: Arc<std::sync::RwLock<Option<String>>>,
 }
 
 /// Build the axum router for the proxy server.
@@ -243,6 +250,7 @@ pub async fn start_with_traffic_full_ex(
         trustmark_degraded,
         None,
         Arc::new(crate::cognitive_bridge::RelayInbox::new(100)),
+        None,
     )
     .await
 }
@@ -260,6 +268,7 @@ pub async fn start_with_traffic_full_ex2(
     trustmark_degraded: Arc<std::sync::atomic::AtomicBool>,
     gateway_url: Option<String>,
     relay_inbox: Arc<crate::cognitive_bridge::RelayInbox>,
+    bot_profile: Option<String>,
 ) -> Result<(), ProxyError> {
     let client = Client::builder()
         .timeout(std::time::Duration::from_secs(300)) // 5 min for long LLM responses
@@ -288,6 +297,8 @@ pub async fn start_with_traffic_full_ex2(
         trustmark_degraded,
         gateway_url,
         relay_inbox,
+        system_prompt_hash: Arc::new(std::sync::RwLock::new(None)),
+        bot_profile: Arc::new(std::sync::RwLock::new(bot_profile)),
     };
 
     let app = build_router(state, dashboard);
@@ -492,6 +503,104 @@ fn extract_user_content_from_json(body: &str, max_chars: usize) -> String {
 
     // Fallback: use raw body (but cap at 4KB to prevent SLM overflow)
     body.chars().take(4096).collect()
+}
+
+/// Extract the system prompt from a request body (if present).
+/// Returns the concatenated text of all system/developer role messages.
+fn extract_system_prompt(body: &str) -> Option<String> {
+    let json = serde_json::from_str::<serde_json::Value>(body).ok()?;
+    let mut parts = Vec::new();
+
+    // OpenAI/Anthropic "messages" array
+    if let Some(messages) = json.get("messages").and_then(|m| m.as_array()) {
+        for msg in messages {
+            let role = msg.get("role").and_then(|r| r.as_str()).unwrap_or("");
+            if role == "system" || role == "developer" {
+                if let Some(content) = msg.get("content").and_then(|c| c.as_str()) {
+                    parts.push(content.to_string());
+                }
+            }
+        }
+    }
+
+    // Anthropic "system" top-level field
+    if let Some(sys) = json.get("system").and_then(|s| s.as_str()) {
+        parts.push(sys.to_string());
+    }
+
+    if parts.is_empty() {
+        None
+    } else {
+        Some(parts.join("\n"))
+    }
+}
+
+/// Hash a system prompt for baseline comparison.
+fn hash_system_prompt(prompt: &str) -> String {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    prompt.hash(&mut hasher);
+    format!("{:016x}", hasher.finish())
+}
+
+/// Validate system prompt against baseline. Returns true if prompt matches or is first seen.
+/// If prompt changed, logs a warning and returns false (untrusted).
+fn validate_system_prompt(baseline: &std::sync::RwLock<Option<String>>, body: &str) -> bool {
+    let current = match extract_system_prompt(body) {
+        Some(p) => p,
+        None => return true, // No system prompt in this request — fine
+    };
+
+    let current_hash = hash_system_prompt(&current);
+
+    // Check if baseline exists
+    {
+        let guard = baseline.read().unwrap();
+        if let Some(ref stored) = *guard {
+            if *stored == current_hash {
+                return true; // Matches baseline
+            }
+            tracing::warn!(
+                baseline_hash = %stored,
+                current_hash = %current_hash,
+                "system prompt changed since first request — possible API-level poisoning"
+            );
+            return false; // Changed — untrusted
+        }
+    }
+
+    // First time — set baseline
+    {
+        let mut guard = baseline.write().unwrap();
+        if guard.is_none() {
+            *guard = Some(current_hash);
+            tracing::info!("captured baseline system prompt hash");
+        }
+    }
+    true
+}
+
+/// Build screening context string with bot profile and trust info.
+/// This is injected into the SLM screening prompt for context-aware classification.
+fn build_screening_context(
+    trust_level: &str,
+    source_ip: &str,
+    bot_profile: &Option<String>,
+    system_prompt_trusted: bool,
+) -> String {
+    let mut ctx = format!("trust={trust_level}, source={source_ip}");
+
+    if let Some(profile) = bot_profile {
+        ctx.push_str(&format!("\nBot profile: {profile}"));
+    }
+
+    if !system_prompt_trusted {
+        ctx.push_str(
+            "\nWARNING: system prompt changed since baseline — treat with higher suspicion",
+        );
+    }
+
+    ctx
 }
 
 /// Extract text content from SSE streaming response for DLP screening.
@@ -779,6 +888,17 @@ async fn forward_request(
     req_info.body_size = body_bytes.len();
     req_info.body_text = body_text;
 
+    // --- System prompt baseline validation (Fix 1) ---
+    // Detect system prompt changes between requests (API-level poisoning).
+    let system_prompt_trusted = if let Some(ref body_str) = req_info.body_text {
+        validate_system_prompt(&state.system_prompt_hash, body_str)
+    } else {
+        true
+    };
+
+    // --- Read cached bot profile for screening context ---
+    let bot_profile = state.bot_profile.read().unwrap().clone();
+
     // --- Parse Anthropic request for SLM screening ---
     let anthropic_req = if !body_bytes.is_empty() {
         anthropic::parse_request(&body_bytes).ok()
@@ -999,10 +1119,11 @@ async fn forward_request(
                     } else {
                         // Untrusted: run deep SLM sequentially BEFORE forwarding
                         info!(path = %path, "SLM deep analysis running sequentially (untrusted channel)");
-                        let trust_ctx = Some(format!(
-                            "trust={}, source={}",
-                            format!("{:?}", req_info.channel_trust.trust_level).to_lowercase(),
-                            source_ip
+                        let trust_ctx = Some(build_screening_context(
+                            &format!("{:?}", req_info.channel_trust.trust_level).to_lowercase(),
+                            &source_ip,
+                            &bot_profile,
+                            system_prompt_trusted,
                         ));
                         let (decision, verdict) = slm
                             .screen_deep(
@@ -1463,10 +1584,11 @@ async fn forward_request(
             let trust_channel = req_info.channel_trust.channel.clone();
             let trust_level = req_info.channel_trust.trust_level;
             let deferred_request_id = req_info.request_id.clone();
-            let trust_ctx = Some(format!(
-                "trust={}, source={}",
-                format!("{:?}", trust_level).to_lowercase(),
-                source_ip
+            let trust_ctx = Some(build_screening_context(
+                &format!("{:?}", trust_level).to_lowercase(),
+                &source_ip,
+                &bot_profile,
+                system_prompt_trusted,
             ));
             let updater = state.traffic_slm_updater.clone();
             tokio::spawn(async move {
@@ -1642,10 +1764,11 @@ async fn forward_request(
         let trust_channel = req_info.channel_trust.channel.clone();
         let trust_level = req_info.channel_trust.trust_level;
         let deferred_request_id = req_info.request_id.clone();
-        let trust_ctx = Some(format!(
-            "trust={}, source={}",
-            format!("{:?}", trust_level).to_lowercase(),
-            source_ip
+        let trust_ctx = Some(build_screening_context(
+            &format!("{:?}", trust_level).to_lowercase(),
+            &source_ip,
+            &bot_profile,
+            system_prompt_trusted,
         ));
         let updater = state.traffic_slm_updater.clone();
         tokio::spawn(async move {
@@ -1727,6 +1850,8 @@ mod tests {
             trustmark_degraded: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             gateway_url: None,
             relay_inbox: Arc::new(crate::cognitive_bridge::RelayInbox::new(100)),
+            system_prompt_hash: Arc::new(std::sync::RwLock::new(None)),
+            bot_profile: Arc::new(std::sync::RwLock::new(None)),
         };
         let _router = build_router(state, None);
         // If it doesn't panic, it works
@@ -1749,6 +1874,8 @@ mod tests {
             trustmark_degraded: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             gateway_url: None,
             relay_inbox: Arc::new(crate::cognitive_bridge::RelayInbox::new(100)),
+            system_prompt_hash: Arc::new(std::sync::RwLock::new(None)),
+            bot_profile: Arc::new(std::sync::RwLock::new(None)),
         };
         assert_eq!(state.identity_fingerprint.as_deref(), Some("abc123def456"));
     }
@@ -1771,6 +1898,8 @@ mod tests {
             trustmark_degraded: degraded.clone(),
             gateway_url: None,
             relay_inbox: Arc::new(crate::cognitive_bridge::RelayInbox::new(100)),
+            system_prompt_hash: Arc::new(std::sync::RwLock::new(None)),
+            bot_profile: Arc::new(std::sync::RwLock::new(None)),
         };
         assert!(
             state

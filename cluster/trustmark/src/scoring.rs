@@ -110,8 +110,20 @@ impl TrustmarkScore {
             Self::score_contribution_volume(signals),
         ];
 
-        let total: f64 = dims.iter().map(|d| d.contribution).sum();
-        let total = total.clamp(0.0, 1.0);
+        // Zero out estimated dimensions — they should not inflate the score.
+        // Only dimensions backed by real signal sources contribute.
+        let real_weight: f64 = dims.iter().filter(|d| !d.estimated).map(|d| d.weight).sum();
+        let real_contribution: f64 = dims
+            .iter()
+            .filter(|d| !d.estimated)
+            .map(|d| d.contribution)
+            .sum();
+        // Rescale to [0,1] based on real dimensions only
+        let total = if real_weight > 0.0 {
+            (real_contribution / real_weight).clamp(0.0, 1.0)
+        } else {
+            0.0 // No real signals at all
+        };
 
         let computed_at_ms = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
