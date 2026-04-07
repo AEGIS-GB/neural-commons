@@ -349,6 +349,7 @@ pub async fn mesh_send<S: EvidenceStore>(
     Extension(nats_bridge): Extension<Option<Arc<NatsBridge>>>,
     Extension(relay_stats): Extension<Arc<RelayStats>>,
     Extension(relay_log): Extension<Arc<RelayLog>>,
+    Extension(botawiki_store): Extension<Arc<aegis_botawiki::BotawikiStore>>,
     Json(payload): Json<MeshSendRequest>,
 ) -> impl IntoResponse {
     // Validate request
@@ -441,6 +442,31 @@ pub async fn mesh_send<S: EvidenceStore>(
 
     let sender_trustmark_bp = sender_score.as_ref().map(|s| s.score_bp).unwrap_or(0);
 
+    // Query Botawiki for sender and recipient profiles (peer-validated context)
+    let sender_profile = botawiki_store
+        .bot_profile_summary(&identity.pubkey)
+        .await
+        .unwrap_or_default();
+    let recipient_profile = botawiki_store
+        .bot_profile_summary(&payload.to)
+        .await
+        .unwrap_or_default();
+
+    // Build screening context for relay messages
+    let relay_screening_context = format!(
+        "sender_tier={sender_tier}, sender_trustmark={sender_trustmark_bp}bp{}{}",
+        if sender_profile.is_empty() {
+            String::new()
+        } else {
+            format!(", sender_profile=[{sender_profile}]")
+        },
+        if recipient_profile.is_empty() {
+            String::new()
+        } else {
+            format!(", recipient_profile=[{recipient_profile}]")
+        },
+    );
+
     // Publish to NATS for Mesh Relay screening (async path)
     if let Some(bridge) = nats_bridge.as_ref() {
         let relay_request = serde_json::json!({
@@ -450,6 +476,7 @@ pub async fn mesh_send<S: EvidenceStore>(
             "msg_type": payload.msg_type,
             "sender_trustmark_bp": sender_trustmark_bp,
             "sender_tier": sender_tier,
+            "screening_context": relay_screening_context,
         });
         let payload_bytes = serde_json::to_vec(&relay_request).unwrap_or_default();
         if let Err(e) = bridge
