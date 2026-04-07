@@ -372,7 +372,7 @@ async fn main() {
         )
         .route("/botawiki/claims/all", get(mesh_routes::botawiki_list_all))
         .layer(Extension(wss_registry.clone()))
-        .layer(Extension(trustmark_cache))
+        .layer(Extension(trustmark_cache.clone()))
         .layer(Extension(relay_stats.clone()))
         .layer(Extension(relay_log))
         .layer(Extension(botawiki_store))
@@ -392,6 +392,7 @@ async fn main() {
         wss_registry,
         dead_drop_store,
         relay_stats: relay_stats_for_ws,
+        trustmark_cache,
     });
     let ws_routes = Router::new()
         .route("/ws", get(ws::ws_upgrade))
