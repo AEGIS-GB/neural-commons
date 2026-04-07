@@ -16,6 +16,7 @@
 //!   enforce: full inspection + receipts + blocking
 //!   pass-through: zero inspection, metadata-only receipt logging
 
+pub mod autonomous;
 pub mod config;
 pub mod gateway_client;
 pub mod gateway_wss;

@@ -61,6 +61,10 @@ pub struct AdapterConfig {
     /// When set, the adapter pushes evidence to the Gateway periodically.
     #[serde(default)]
     pub gateway_url: Option<String>,
+
+    /// Autonomous mesh task configuration.
+    #[serde(default)]
+    pub autonomous: crate::autonomous::AutonomousConfig,
 }
 
 /// Trust configuration — channel-based access control + context observability.
@@ -404,6 +408,7 @@ impl Default for AdapterConfig {
             webhook_url: None,
             trustmark: TrustmarkHealthConfig::default(),
             gateway_url: None,
+            autonomous: crate::autonomous::AutonomousConfig::default(),
         }
     }
 }

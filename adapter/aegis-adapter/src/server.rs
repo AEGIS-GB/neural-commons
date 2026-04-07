@@ -968,7 +968,7 @@ pub async fn start(config: AdapterConfig, mode_override: Option<Mode>) -> Result
             gw_url,
             gw_signing_key.clone(),
         ));
-        crate::gateway_client::spawn_evidence_push_task(gw_client, recorder.clone());
+        crate::gateway_client::spawn_evidence_push_task(gw_client.clone(), recorder.clone());
 
         // WSS connection task with message handler
         let wss_handler = Arc::new(crate::gateway_wss_handler::AdapterWssHandler::new(
@@ -979,6 +979,23 @@ pub async fn start(config: AdapterConfig, mode_override: Option<Mode>) -> Result
         crate::gateway_wss::spawn_wss_task(gw_url, gw_signing_key, wss_handler);
 
         info!(gateway_url = %gw_url, "gateway client configured (evidence push + WSS)");
+
+        // Spawn autonomous mesh tasks
+        if config.autonomous.enabled {
+            let auto_state = Arc::new(crate::autonomous::AutonomousState::new(
+                &adapter_state.data_dir,
+            ));
+            let runner = crate::autonomous::AutonomousRunner {
+                adapter_state: adapter_state.clone(),
+                relay_inbox: relay_inbox.clone(),
+                gateway_client: gw_client,
+                auto_state,
+                alert_tx: alert_tx.clone(),
+                config: config.autonomous.clone(),
+            };
+            runner.spawn();
+            info!("autonomous mesh tasks started");
+        }
     }
 
     // 11. Start proxy server (blocks until shutdown)
