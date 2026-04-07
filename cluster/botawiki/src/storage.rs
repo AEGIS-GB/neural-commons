@@ -251,6 +251,47 @@ impl BotawikiStore {
             .map(|sc| sc.claim.clone())
             .collect()
     }
+    /// Query canonical claims for a specific bot (by attester_id).
+    /// Returns a summary string suitable for injection into screening prompts.
+    pub async fn bot_profile_summary(&self, bot_id: &str) -> Option<String> {
+        let claims = self.claims.read().await;
+        let bot_claims: Vec<&Claim> = claims
+            .values()
+            .filter(|sc| sc.status == ClaimStatus::Canonical)
+            .filter(|sc| sc.claim.attester_id == bot_id)
+            .map(|sc| &sc.claim)
+            .collect();
+
+        if bot_claims.is_empty() {
+            return None;
+        }
+
+        let mut parts = Vec::new();
+        for claim in &bot_claims {
+            let type_str = serde_json::to_value(&claim.claim_type)
+                .ok()
+                .and_then(|v| v.as_str().map(String::from))
+                .unwrap_or_else(|| format!("{:?}", claim.claim_type));
+
+            // Extract human-readable content from payload
+            let content = claim
+                .payload
+                .get("text")
+                .or(claim.payload.get("description"))
+                .or(claim.payload.get("summary"))
+                .and_then(|v| v.as_str())
+                .unwrap_or_else(|| claim.payload.as_str().unwrap_or("(structured data)"));
+
+            parts.push(format!(
+                "{}: {} (confidence: {}bp)",
+                type_str,
+                &content[..content.len().min(200)],
+                claim.confidence_bp
+            ));
+        }
+
+        Some(parts.join("; "))
+    }
 }
 
 fn now_ms() -> i64 {
