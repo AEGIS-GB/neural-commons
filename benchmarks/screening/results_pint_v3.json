@@ -1,0 +1,78 @@
+{
+  "with_context": {
+    "xtram": {
+      "pint": 78.07,
+      "recall": 99.7,
+      "safe_acc": 56.5,
+      "tp": 648,
+      "tn": 796,
+      "fp": 614,
+      "fn": 2
+    },
+    "deepset": {
+      "pint": 93.21,
+      "recall": 90.0,
+      "safe_acc": 96.4,
+      "tp": 54,
+      "tn": 54,
+      "fp": 2,
+      "fn": 6
+    },
+    "lakera": {
+      "pint": 48.21,
+      "recall": 96.4,
+      "safe_acc": 0,
+      "tp": 108,
+      "tn": 0,
+      "fp": 0,
+      "fn": 4
+    },
+    "aegis": {
+      "pint": 90.81,
+      "recall": 87.5,
+      "safe_acc": 94.1,
+      "tp": 35,
+      "tn": 32,
+      "fp": 2,
+      "fn": 5
+    }
+  },
+  "no_context": {
+    "xtram": {
+      "pint": 74.85,
+      "recall": 98.8,
+      "safe_acc": 50.9,
+      "tp": 642,
+      "tn": 718,
+      "fp": 692,
+      "fn": 8
+    },
+    "deepset": {
+      "pint": 96.55,
+      "recall": 96.7,
+      "safe_acc": 96.4,
+      "tp": 58,
+      "tn": 54,
+      "fp": 2,
+      "fn": 2
+    },
+    "lakera": {
+      "pint": 49.11,
+      "recall": 98.2,
+      "safe_acc": 0,
+      "tp": 110,
+      "tn": 0,
+      "fp": 0,
+      "fn": 2
+    },
+    "aegis": {
+      "pint": 94.56,
+      "recall": 95.0,
+      "safe_acc": 94.1,
+      "tp": 38,
+      "tn": 32,
+      "fp": 2,
+      "fn": 2
+    }
+  }
+}
