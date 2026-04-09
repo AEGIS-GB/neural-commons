@@ -429,80 +429,106 @@ async fn recording_middleware(
     response
 }
 
-/// Extract user-authored content from any JSON request format for SLM screening.
-/// Handles: OpenAI messages format, Responses API input format, plain strings.
-/// Only includes user messages and tool results — skips assistant responses.
+/// Extract the last user message and trailing tool results for SLM screening.
+///
+/// Screens only the **last user message** (the actual human input) plus any
+/// tool results that follow it (indirect injection surface). Skips everything else:
+/// - `system` / `developer` — validated separately via system prompt baseline
+/// - `assistant` — self-generated, not an attack vector
+/// - Earlier `user` messages — conversation history (already screened when sent)
+/// - Framework orchestration injected as `user` role (startup sequences, etc.)
+///
+/// This is generic: regardless of framework, the last user message is always the
+/// actual human input. Framework boilerplate and history precede it.
+///
 /// `max_chars` is configurable via config.toml [slm] slm_max_content_chars.
 fn extract_user_content_from_json(body: &str, max_chars: usize) -> String {
     if let Ok(json) = serde_json::from_str::<serde_json::Value>(body) {
-        let mut parts = Vec::new();
-
-        // Try "messages" array (OpenAI/Anthropic chat format)
-        // Screen ALL roles except assistant (self-generated, not an attack vector).
-        // System, tool, developer messages are attack surfaces — an attacker who
-        // controls any of them controls what the LLM processes.
+        // --- "messages" array (OpenAI/Anthropic chat format) ---
         if let Some(messages) = json.get("messages").and_then(|m| m.as_array()) {
-            for msg in messages {
-                let role = msg.get("role").and_then(|r| r.as_str()).unwrap_or("");
-                if role == "assistant" {
-                    continue;
-                }
-                // Content can be a plain string or array of content blocks
-                if let Some(content) = msg.get("content").and_then(|c| c.as_str()) {
-                    parts.push(format!("[{role}] {content}"));
-                } else if let Some(blocks) = msg.get("content").and_then(|c| c.as_array()) {
-                    for block in blocks {
-                        if let Some(text) = block.get("text").and_then(|t| t.as_str()) {
-                            parts.push(format!("[{role}] {text}"));
-                        }
+            let last_user_idx = messages.iter().rposition(|msg| {
+                msg.get("role").and_then(|r| r.as_str()) == Some("user")
+            });
+
+            if let Some(idx) = last_user_idx {
+                let mut parts = Vec::new();
+
+                // The last user message
+                extract_message_content(&messages[idx], "user", &mut parts);
+
+                // Tool results after the last user message (indirect injection surface)
+                for msg in messages.iter().skip(idx + 1) {
+                    let role = msg.get("role").and_then(|r| r.as_str()).unwrap_or("");
+                    if role == "tool" || role == "function" {
+                        extract_message_content(msg, role, &mut parts);
                     }
+                }
+
+                if !parts.is_empty() {
+                    return truncate_screening_content(parts, max_chars);
                 }
             }
         }
 
-        // Try "input" field (Responses API format — can be string or array)
+        // --- "input" field (Responses API format) ---
         if let Some(input) = json.get("input") {
             if let Some(s) = input.as_str() {
-                parts.push(format!("[user] {s}"));
+                let capped: String = s.chars().take(max_chars).collect();
+                return format!("[user] {capped}");
             } else if let Some(arr) = input.as_array() {
-                for item in arr {
-                    let role = item.get("role").and_then(|r| r.as_str()).unwrap_or("user");
-                    if role == "assistant" {
-                        continue;
-                    }
-                    // Content can be string or array of content blocks
-                    if let Some(content) = item.get("content").and_then(|c| c.as_str()) {
-                        parts.push(format!("[{role}] {content}"));
-                    } else if let Some(blocks) = item.get("content").and_then(|c| c.as_array()) {
-                        for block in blocks {
-                            if let Some(text) = block.get("text").and_then(|t| t.as_str()) {
-                                parts.push(format!("[{role}] {text}"));
-                            }
+                let last_user_idx = arr.iter().rposition(|item| {
+                    item.get("role").and_then(|r| r.as_str()).unwrap_or("user") == "user"
+                });
+
+                if let Some(idx) = last_user_idx {
+                    let mut parts = Vec::new();
+                    extract_message_content(&arr[idx], "user", &mut parts);
+
+                    for item in arr.iter().skip(idx + 1) {
+                        let role = item.get("role").and_then(|r| r.as_str()).unwrap_or("user");
+                        if role == "tool" || role == "function" {
+                            extract_message_content(item, role, &mut parts);
                         }
+                    }
+
+                    if !parts.is_empty() {
+                        return truncate_screening_content(parts, max_chars);
                     }
                 }
             }
-        }
-
-        if !parts.is_empty() {
-            let joined = parts.join("\n");
-            // Truncate to fit SLM context window. Keep the tail (most recent
-            // messages) since that's where injection attacks appear.
-            if joined.len() > max_chars {
-                // Find a safe split point (newline boundary) near the truncation point
-                let skip = joined.len() - max_chars;
-                let split_at = joined[skip..]
-                    .find('\n')
-                    .map(|i| skip + i + 1)
-                    .unwrap_or(skip);
-                return format!("[...truncated...]\n{}", &joined[split_at..]);
-            }
-            return joined;
         }
     }
 
     // Fallback: use raw body (but cap at 4KB to prevent SLM overflow)
     body.chars().take(4096).collect()
+}
+
+/// Extract text content from a message (handles both string and content block arrays).
+fn extract_message_content(msg: &serde_json::Value, role: &str, parts: &mut Vec<String>) {
+    if let Some(content) = msg.get("content").and_then(|c| c.as_str()) {
+        parts.push(format!("[{role}] {content}"));
+    } else if let Some(blocks) = msg.get("content").and_then(|c| c.as_array()) {
+        for block in blocks {
+            if let Some(text) = block.get("text").and_then(|t| t.as_str()) {
+                parts.push(format!("[{role}] {text}"));
+            }
+        }
+    }
+}
+
+/// Join and truncate screening content, keeping the tail (most recent content).
+fn truncate_screening_content(parts: Vec<String>, max_chars: usize) -> String {
+    let joined = parts.join("\n");
+    if joined.len() > max_chars {
+        let skip = joined.len() - max_chars;
+        let split_at = joined[skip..]
+            .find('\n')
+            .map(|i| skip + i + 1)
+            .unwrap_or(skip);
+        format!("[...truncated...]\n{}", &joined[split_at..])
+    } else {
+        joined
+    }
 }
 
 /// Extract the system prompt from a request body (if present).
