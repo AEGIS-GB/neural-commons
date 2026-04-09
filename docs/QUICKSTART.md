@@ -69,20 +69,20 @@ aegis setup openclaw
 ## Start
 
 ```bash
-aegis --no-slm
+aegis
 ```
 
 That's it. Aegis starts in observe-only mode on port 3141. Open http://localhost:3141/dashboard to see your security posture.
 
-Every request your OpenClaw agent sends now generates a signed evidence receipt. The write barrier is watching your identity files. The credential scanner is checking responses. The `--no-slm` flag skips the language model screening (which requires Ollama) — you still get heuristic pattern detection, evidence, vault, and barrier protection.
+If the installer set up an SLM engine (Ollama, LM Studio, etc.), screening is active. If not, Aegis still protects you with heuristic + ProtectAI classifier screening — add an SLM engine anytime.
 
-## Optional: Add SLM Injection Screening
+## SLM Injection Screening
 
-Everything above works without a language model. If you want stronger injection detection, Aegis supports local SLM screening with a purpose-built model.
+The installer auto-detects engines on your machine (Ollama, LM Studio, vLLM, llama.cpp, Anthropic API key) and guides you through setup. If you skipped it during install, configure manually:
 
-### Recommended: aegis-screen:4b (Ollama)
+### Option 1: Ollama + aegis-screen:4b (Recommended)
 
-**aegis-screen:4b** is a Gemma3-4B model fine-tuned specifically for Aegis injection detection. It achieves 99%+ recall across 440 test cases including prompt injection, jailbreaks, system probing, social engineering, and exfiltration attempts. The installer downloads it automatically.
+**aegis-screen:4b** is a Gemma3-4B model fine-tuned specifically for Aegis injection detection. It achieves 99%+ recall across 440 test cases. The installer downloads it automatically from HuggingFace.
 
 ```bash
 # Install Ollama (if not already installed)
@@ -91,61 +91,63 @@ curl -fsSL https://ollama.com/install.sh | sh
 # Download and install aegis-screen:4b (~3.9GB from HuggingFace)
 # The Aegis installer does this automatically, or manually:
 curl -fSL https://huggingface.co/Loksh/aegis-screen-4b-gguf/resolve/main/aegis-screen-4b-q8_0.gguf \
-  -o ~/.aegis/models/aegis-screen-4b-q8_0.gguf
+  -o ~/.aegis/data/models/aegis-screen-4b-q8_0.gguf
 
 cat > /tmp/Modelfile << EOF
-FROM ~/.aegis/models/aegis-screen-4b-q8_0.gguf
+FROM ~/.aegis/data/models/aegis-screen-4b-q8_0.gguf
 PARAMETER temperature 0.1
 PARAMETER num_ctx 4096
 EOF
 ollama create aegis-screen:4b -f /tmp/Modelfile
 
 # Configure and start
+aegis slm engine ollama
 aegis slm use aegis-screen:4b
 aegis
 ```
 
-### Alternative: Generic models
+### Option 2: LM Studio / vLLM / llama.cpp (OpenAI-compatible)
 
-If you prefer a generic (non-fine-tuned) model or have limited disk space:
-
-```bash
-ollama pull gemma3:4b             # 3.3GB — good with KB context
-ollama pull llama3.2:1b           # 1.3GB — fast but lower accuracy
-aegis slm use gemma3:4b           # or llama3.2:1b
-aegis
-```
-
-### Alternative: OpenAI-compatible server (LM Studio, vLLM)
+If you already run a local model server, point Aegis at it:
 
 ```bash
 aegis slm engine openai
-aegis slm use aegis-screen:4b     # or any model loaded in your server
-aegis slm server http://localhost:1234
+aegis slm server http://localhost:1234    # LM Studio default
+# aegis slm server http://localhost:8000  # vLLM default
+# aegis slm server http://localhost:8080  # llama.cpp default
+aegis slm use aegis-screen:4b
 aegis
 ```
 
-### Alternative: Anthropic API (cloud, no GPU needed)
+For best results, load `aegis-screen-4b-q8_0.gguf` in your server. Download from [HuggingFace](https://huggingface.co/Loksh/aegis-screen-4b-gguf). Any GGUF-compatible model works, but aegis-screen:4b is fine-tuned for injection detection.
+
+### Option 3: Anthropic API (cloud, no GPU needed)
+
+No GPU? Use Claude Haiku for screening via the Anthropic API:
 
 ```bash
 export ANTHROPIC_API_KEY=sk-ant-...
 aegis slm engine anthropic
 aegis slm use claude-haiku-4-5-20251001
-aegis slm server https://api.anthropic.com
 aegis
 ```
 
-### SLM Model Comparison
+### Option 4: No SLM (heuristic + classifier only)
+
+```bash
+aegis --no-slm
+```
+
+You still get heuristic regex patterns + ProtectAI DeBERTa classifier for injection detection, plus all other protections (evidence, vault, barrier, memory). The SLM adds deeper semantic analysis but is not required.
+
+### Model Comparison
 
 | Model | Size | Recall | F1 | Latency | Notes |
 |-------|------|--------|-----|---------|-------|
 | **aegis-screen:4b** | **3.9GB** | **99%+** | **98.4** | **~500ms** | **Recommended.** Fine-tuned for Aegis. |
 | gemma3:4b | 3.3GB | 93% | 94.9 | ~800ms | Generic. Good with KB context. |
-| llama3.2:1b | 1.3GB | ~45% | ~50 | ~200ms | Fast but misses most subtle attacks. |
 | claude-haiku-4-5 | cloud | ~95% | — | 0.5-2s | Cloud API. Requires API key. |
 | heuristic only | 0 | ~65% | — | <10ms | No model needed. `aegis --no-slm` |
-
-Without any SLM engine, use `aegis --no-slm`. You still get heuristic regex patterns + ProtectAI classifier for injection detection, plus all other protections (evidence, vault, barrier, memory). The SLM adds deeper semantic analysis but is not required.
 
 ## Common Commands
 
