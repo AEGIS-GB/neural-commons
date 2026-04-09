@@ -35,8 +35,8 @@ Simulates realistic Aegis traffic across 6 flows:
 | `adapter_weather` | 16 | 6 | 10 | Weather forecast — queries, alerts, locations |
 | `adapter_customer` | 16 | 6 | 10 | Customer support — orders, returns, billing |
 | `adapter_general` | 30 | 10 | 20 | General assistant — writing, analysis, roleplay, creative |
-| `relay_trusted` | 18 | 8 | 10 | Trusted peer (TRUSTMARK=7200bp, 50+ prior messages) |
-| `relay_unknown` | 12 | 7 | 5 | Unknown peer (TRUSTMARK=1500bp, no history) |
+| `relay_trusted` | 18 | 8 | 10 | Trusted peer on backbone (TRUSTMARK=7200bp, established agent) |
+| `relay_unknown` | 12 | 7 | 5 | Unknown peer on backbone (TRUSTMARK=1500bp, no Botawiki profile) |
 
 Each case includes **full production context**:
 - Layer 2 (DeBERTa) injection probability
@@ -47,7 +47,7 @@ Each case includes **full production context**:
 
 **Attack types tested:** Direct injection, system probing, authority escalation, credential probing, exfiltration, encoded evasion (base64/ROT13/leetspeak), memory poisoning, persona hijack, social engineering, relay hijacking, compromised peer attacks.
 
-**Safe types tested:** Within-scope bot requests, general knowledge, NLP task instructions ("act as", "summarize", "classify"), benign "ignore/disregard" in IT context, relay coordination, peer introductions.
+**Safe types tested:** Within-scope bot requests, general knowledge, NLP task instructions ("act as", "summarize", "classify"), benign "ignore/disregard" in IT context, backbone coordination signals, peer capability discovery.
 
 ### Test Set 2: Blind Validation (74 cases)
 

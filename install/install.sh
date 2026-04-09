@@ -222,115 +222,326 @@ download_ner_model() {
     fi
 }
 
+# --- Engine detection helpers ---
+
+# Check if a server is responding on a given URL
+check_server() {
+    local url="$1"
+    if command -v curl >/dev/null 2>&1; then
+        curl -sf --max-time 2 "$url" >/dev/null 2>&1
+    elif command -v wget >/dev/null 2>&1; then
+        wget -q --timeout=2 -O /dev/null "$url" 2>/dev/null
+    else
+        return 1
+    fi
+}
+
+# Detect all available SLM engines on this machine.
+# Sets: HAS_OLLAMA, HAS_OLLAMA_RUNNING, HAS_LMSTUDIO, HAS_VLLM, HAS_LLAMACPP, HAS_ANTHROPIC_KEY
+# Also: OLLAMA_MODELS (list of installed models), EXISTING_AEGIS_SCREEN
+detect_engines() {
+    HAS_OLLAMA=0
+    HAS_OLLAMA_RUNNING=0
+    HAS_LMSTUDIO=0
+    HAS_VLLM=0
+    HAS_LLAMACPP=0
+    HAS_ANTHROPIC_KEY=0
+    OLLAMA_MODELS=""
+    EXISTING_AEGIS_SCREEN=0
+
+    # Ollama binary installed?
+    if command -v ollama >/dev/null 2>&1; then
+        HAS_OLLAMA=1
+        # Ollama running?
+        if check_server "http://localhost:11434/api/tags"; then
+            HAS_OLLAMA_RUNNING=1
+            OLLAMA_MODELS=$(ollama list 2>/dev/null | tail -n +2 | awk '{print $1}' | tr '\n' ',' | sed 's/,$//')
+            if ollama list 2>/dev/null | grep -q "aegis-screen:4b"; then
+                EXISTING_AEGIS_SCREEN=1
+            fi
+        fi
+    fi
+
+    # LM Studio (default port 1234)
+    check_server "http://localhost:1234/v1/models" && HAS_LMSTUDIO=1 || true
+
+    # vLLM (default port 8000)
+    check_server "http://localhost:8000/v1/models" && HAS_VLLM=1 || true
+
+    # llama.cpp server (default port 8080)
+    check_server "http://localhost:8080/health" && HAS_LLAMACPP=1 || true
+
+    # Anthropic API key set?
+    [ -n "${ANTHROPIC_API_KEY:-}" ] && HAS_ANTHROPIC_KEY=1 || true
+}
+
 # --- SLM model prompt ---
 
 prompt_slm_model() {
     echo ""
-    info "SLM Injection Screening Setup"
+    info "━━━ SLM Injection Screening Setup ━━━"
     info "Aegis uses a local AI model to detect prompt injection attacks."
+    info "Scanning for available engines..."
     echo ""
 
-    # ── Step 1: Check if Ollama is installed ──
-    if ! command -v ollama >/dev/null 2>&1; then
-        info "Ollama is not installed."
-        echo ""
-        echo "  To enable AI screening (recommended):"
-        echo "    1. Install Ollama:  curl -fsSL https://ollama.com/install.sh | sh"
-        echo "    2. Re-run:          aegis slm install"
-        echo ""
-        echo "  Or use a different backend:"
-        echo "    aegis slm engine openai"
-        echo "    aegis slm server http://localhost:1234"
-        echo "    aegis slm use <model-name>"
-        echo ""
-        info "Aegis will still protect you with heuristic + classifier screening."
-        return
-    fi
+    detect_engines
 
-    # ── Step 2: Check if aegis-screen:4b is already installed ──
-    if ollama list 2>/dev/null | grep -q "aegis-screen:4b"; then
-        info "aegis-screen:4b is already installed in Ollama."
+    # ── Fast path: aegis-screen:4b already in Ollama ──
+    if [ "$EXISTING_AEGIS_SCREEN" -eq 1 ]; then
+        info "✓ Found aegis-screen:4b in Ollama — already installed!"
         "${INSTALL_DIR}/aegis" slm engine ollama 2>/dev/null || true
         "${INSTALL_DIR}/aegis" slm use aegis-screen:4b 2>/dev/null || true
         info "SLM configured: aegis-screen:4b (fine-tuned, 99%+ recall)"
         return
     fi
 
-    # ── Step 3: Check if any other screening model is already in Ollama ──
-    local existing_model=""
-    for candidate in gemma3:4b qwen3:30b-a3b qwen3:8b llama3.2:1b qwen2.5:1.5b; do
-        if ollama list 2>/dev/null | grep -q "$candidate"; then
-            existing_model="$candidate"
-            break
-        fi
-    done
+    # ── Show what we found ──
+    local found_something=0
+    local options=()
+    local option_num=0
 
-    if [ -n "$existing_model" ]; then
-        echo "  Found existing model: ${existing_model}"
-        echo ""
-        echo "  1) Install aegis-screen:4b  (~3.9GB — RECOMMENDED: fine-tuned, 99%+ recall)"
-        echo "  2) Use ${existing_model} (already downloaded)"
-        echo ""
-        read -r -p "Select [1-2]: " upgrade_choice
-        case "$upgrade_choice" in
-            2)
-                "${INSTALL_DIR}/aegis" slm engine ollama 2>/dev/null || true
-                "${INSTALL_DIR}/aegis" slm use "$existing_model" 2>/dev/null || true
-                info "SLM configured: ${existing_model}"
-                return
-                ;;
-            *)
-                # Continue to download aegis-screen:4b
-                ;;
-        esac
+    echo -e "  ${CYAN}Detected engines:${NC}"
+    echo ""
+
+    if [ "$HAS_OLLAMA" -eq 1 ]; then
+        found_something=1
+        if [ "$HAS_OLLAMA_RUNNING" -eq 1 ]; then
+            echo -e "    ${GREEN}✓${NC} Ollama (running on localhost:11434)"
+            if [ -n "$OLLAMA_MODELS" ]; then
+                echo "      Models: ${OLLAMA_MODELS}"
+            fi
+        else
+            echo -e "    ${YELLOW}○${NC} Ollama (installed but not running)"
+        fi
     fi
 
-    # ── Step 4: Offer model selection (aegis-screen:4b is default) ──
-    echo ""
-    echo "  Which screening model?"
-    echo ""
-    echo "  1) aegis-screen:4b  (~3.9GB — RECOMMENDED: fine-tuned for injection detection)"
-    echo "  2) gemma3:4b        (~3.3GB — generic, good baseline)"
-    echo "  3) llama3.2:1b      (~1.3GB — fast, lower accuracy)"
-    echo "  4) Other model / other backend (LM Studio, API, etc.)"
+    if [ "$HAS_LMSTUDIO" -eq 1 ]; then
+        found_something=1
+        echo -e "    ${GREEN}✓${NC} LM Studio (running on localhost:1234)"
+    fi
+
+    if [ "$HAS_VLLM" -eq 1 ]; then
+        found_something=1
+        echo -e "    ${GREEN}✓${NC} vLLM (running on localhost:8000)"
+    fi
+
+    if [ "$HAS_LLAMACPP" -eq 1 ]; then
+        found_something=1
+        echo -e "    ${GREEN}✓${NC} llama.cpp (running on localhost:8080)"
+    fi
+
+    if [ "$HAS_ANTHROPIC_KEY" -eq 1 ]; then
+        found_something=1
+        echo -e "    ${GREEN}✓${NC} Anthropic API key (ANTHROPIC_API_KEY is set)"
+    fi
+
+    if [ "$found_something" -eq 0 ]; then
+        echo -e "    ${YELLOW}○${NC} No engines detected"
+    fi
+
     echo ""
 
-    read -r -p "Select [1-4, default=1]: " model_choice
-    local model
-    case "$model_choice" in
-        2) model="gemma3:4b" ;;
-        3) model="llama3.2:1b" ;;
-        4)
+    # ── Build menu based on what's available ──
+    echo "  How would you like to run injection screening?"
+    echo ""
+
+    # Option A: Ollama with aegis-screen:4b (always show — it's the recommended path)
+    option_num=$((option_num + 1))
+    options+=("ollama_aegis")
+    if [ "$HAS_OLLAMA" -eq 1 ]; then
+        echo "  ${option_num}) Install aegis-screen:4b via Ollama  (~3.9GB download)"
+        echo "     RECOMMENDED — fine-tuned for Aegis, 99%+ recall, runs locally"
+    else
+        echo "  ${option_num}) Install Ollama + aegis-screen:4b    (~3.9GB download)"
+        echo "     RECOMMENDED — installs Ollama first, then our fine-tuned model"
+    fi
+    echo ""
+
+    # Option B: LM Studio (if detected)
+    if [ "$HAS_LMSTUDIO" -eq 1 ]; then
+        option_num=$((option_num + 1))
+        options+=("lmstudio")
+        echo "  ${option_num}) Use LM Studio (localhost:1234)"
+        echo "     Load aegis-screen-4b-q8_0.gguf in LM Studio, Aegis connects automatically"
+        echo ""
+    fi
+
+    # Option C: vLLM (if detected)
+    if [ "$HAS_VLLM" -eq 1 ]; then
+        option_num=$((option_num + 1))
+        options+=("vllm")
+        echo "  ${option_num}) Use vLLM (localhost:8000)"
+        echo "     Point Aegis at your running vLLM server"
+        echo ""
+    fi
+
+    # Option D: llama.cpp (if detected)
+    if [ "$HAS_LLAMACPP" -eq 1 ]; then
+        option_num=$((option_num + 1))
+        options+=("llamacpp")
+        echo "  ${option_num}) Use llama.cpp (localhost:8080)"
+        echo "     Point Aegis at your running llama.cpp server"
+        echo ""
+    fi
+
+    # Option E: Anthropic API (if key set, or as cloud option)
+    option_num=$((option_num + 1))
+    options+=("anthropic")
+    if [ "$HAS_ANTHROPIC_KEY" -eq 1 ]; then
+        echo "  ${option_num}) Use Anthropic API (cloud, no GPU needed)"
+        echo "     ANTHROPIC_API_KEY detected — uses Claude Haiku for screening"
+    else
+        echo "  ${option_num}) Use Anthropic API (cloud, no GPU needed)"
+        echo "     Requires ANTHROPIC_API_KEY — uses Claude Haiku for screening"
+    fi
+    echo ""
+
+    # Option F: Use existing Ollama model (if other models found)
+    if [ "$HAS_OLLAMA_RUNNING" -eq 1 ] && [ -n "$OLLAMA_MODELS" ]; then
+        option_num=$((option_num + 1))
+        options+=("ollama_existing")
+        echo "  ${option_num}) Use an existing Ollama model (${OLLAMA_MODELS})"
+        echo "     Skip download — use a model you already have (lower accuracy)"
+        echo ""
+    fi
+
+    # Option G: Skip
+    option_num=$((option_num + 1))
+    options+=("skip")
+    echo "  ${option_num}) Skip for now"
+    echo "     Aegis still protects with heuristic + classifier screening (no SLM)"
+    echo ""
+
+    read -r -p "Select [1-${option_num}, default=1]: " engine_choice
+    engine_choice="${engine_choice:-1}"
+
+    # Validate input
+    if ! [[ "$engine_choice" =~ ^[0-9]+$ ]] || [ "$engine_choice" -lt 1 ] || [ "$engine_choice" -gt "$option_num" ]; then
+        engine_choice=1
+    fi
+
+    local selected="${options[$((engine_choice - 1))]}"
+
+    case "$selected" in
+        ollama_aegis)
+            setup_ollama_aegis_screen
+            ;;
+        lmstudio)
+            info "Configuring LM Studio as SLM engine..."
+            "${INSTALL_DIR}/aegis" slm engine openai 2>/dev/null || true
+            "${INSTALL_DIR}/aegis" slm server http://localhost:1234 2>/dev/null || true
+            "${INSTALL_DIR}/aegis" slm use aegis-screen:4b 2>/dev/null || true
             echo ""
-            echo "  Options:"
-            echo "    a) Ollama model:              enter model name (e.g., qwen2.5:1.5b)"
-            echo "    b) LM Studio / OpenAI-compat: aegis slm engine openai && aegis slm server <url>"
-            echo "    c) Anthropic API:             aegis slm engine anthropic"
+            info "To use the fine-tuned model in LM Studio:"
+            echo "  1. Download: https://huggingface.co/Loksh/aegis-screen-4b-gguf/resolve/main/aegis-screen-4b-q8_0.gguf"
+            echo "  2. Load it in LM Studio"
+            echo "  3. Aegis will connect to localhost:1234 automatically"
             echo ""
-            read -r -p "  Ollama model name (or press Enter to skip): " custom_model
-            if [ -z "$custom_model" ]; then
-                info "Skipped. Configure later with: aegis slm use <model>"
+            info "Or use any model already loaded in LM Studio — Aegis adapts."
+            ;;
+        vllm)
+            info "Configuring vLLM as SLM engine..."
+            "${INSTALL_DIR}/aegis" slm engine openai 2>/dev/null || true
+            "${INSTALL_DIR}/aegis" slm server http://localhost:8000 2>/dev/null || true
+            "${INSTALL_DIR}/aegis" slm use aegis-screen:4b 2>/dev/null || true
+            info "SLM configured: engine=openai server=http://localhost:8000"
+            echo ""
+            info "Load aegis-screen-4b or any model in vLLM."
+            ;;
+        llamacpp)
+            info "Configuring llama.cpp as SLM engine..."
+            "${INSTALL_DIR}/aegis" slm engine openai 2>/dev/null || true
+            "${INSTALL_DIR}/aegis" slm server http://localhost:8080 2>/dev/null || true
+            "${INSTALL_DIR}/aegis" slm use aegis-screen:4b 2>/dev/null || true
+            info "SLM configured: engine=openai server=http://localhost:8080"
+            echo ""
+            info "Load aegis-screen-4b-q8_0.gguf in llama.cpp for best results."
+            info "Download: https://huggingface.co/Loksh/aegis-screen-4b-gguf"
+            ;;
+        anthropic)
+            if [ "$HAS_ANTHROPIC_KEY" -eq 0 ]; then
+                warn "ANTHROPIC_API_KEY is not set."
+                echo "  Set it with: export ANTHROPIC_API_KEY=sk-ant-..."
+                echo "  Then restart Aegis."
+                echo ""
+            fi
+            "${INSTALL_DIR}/aegis" slm engine anthropic 2>/dev/null || true
+            "${INSTALL_DIR}/aegis" slm server https://api.anthropic.com 2>/dev/null || true
+            "${INSTALL_DIR}/aegis" slm use claude-haiku-4-5-20251001 2>/dev/null || true
+            info "SLM configured: engine=anthropic model=claude-haiku-4-5-20251001"
+            info "Cloud-based screening — no GPU needed, ~$0.001 per screening call."
+            ;;
+        ollama_existing)
+            echo ""
+            echo "  Available models: ${OLLAMA_MODELS}"
+            read -r -p "  Model name: " chosen_model
+            if [ -z "$chosen_model" ]; then
+                info "Skipped."
                 return
             fi
-            model="$custom_model"
+            "${INSTALL_DIR}/aegis" slm engine ollama 2>/dev/null || true
+            "${INSTALL_DIR}/aegis" slm use "$chosen_model" 2>/dev/null || true
+            info "SLM configured: engine=ollama model=${chosen_model}"
+            warn "Generic models have lower accuracy than aegis-screen:4b."
+            echo "  Upgrade later: aegis slm install"
             ;;
-        *) model="aegis-screen:4b" ;;
+        skip)
+            info "Skipped SLM setup. Aegis will use heuristic + classifier screening."
+            echo "  Configure later:"
+            echo "    aegis slm install              # install aegis-screen:4b"
+            echo "    aegis slm engine <engine>      # ollama / openai / anthropic"
+            echo "    aegis slm use <model>          # set model"
+            ;;
     esac
+}
 
-    # ── Step 5: Download/pull the selected model ──
-    if [ "$model" = "aegis-screen:4b" ]; then
-        download_aegis_screen_model
-    else
-        info "Pulling ${model}..."
-        ollama pull "$model" || {
-            warn "Model pull failed. Try later: ollama pull ${model}"
+# --- Install Ollama (if needed) + aegis-screen:4b ---
+
+setup_ollama_aegis_screen() {
+    # Install Ollama if not present
+    if [ "$HAS_OLLAMA" -eq 0 ]; then
+        info "Installing Ollama..."
+        if command -v curl >/dev/null 2>&1; then
+            curl -fsSL https://ollama.com/install.sh | sh || {
+                warn "Ollama installation failed."
+                echo "  Install manually: https://ollama.com/download"
+                echo "  Then run: aegis slm install"
+                return
+            }
+        else
+            warn "curl not available for Ollama install."
+            echo "  Install manually: https://ollama.com/download"
+            echo "  Then run: aegis slm install"
             return
-        }
+        fi
+        info "Ollama installed."
+
+        # Start Ollama if not running
+        if ! check_server "http://localhost:11434/api/tags"; then
+            info "Starting Ollama..."
+            if command -v systemctl >/dev/null 2>&1 && systemctl is-active --quiet ollama 2>/dev/null; then
+                : # Already running via systemd
+            else
+                ollama serve >/dev/null 2>&1 &
+                sleep 2
+            fi
+        fi
+    elif [ "$HAS_OLLAMA_RUNNING" -eq 0 ]; then
+        info "Starting Ollama..."
+        if command -v systemctl >/dev/null 2>&1; then
+            systemctl start ollama 2>/dev/null || ollama serve >/dev/null 2>&1 &
+        else
+            ollama serve >/dev/null 2>&1 &
+        fi
+        sleep 2
     fi
 
+    # Download and import aegis-screen:4b
+    download_aegis_screen_model
+
     "${INSTALL_DIR}/aegis" slm engine ollama 2>/dev/null || true
-    "${INSTALL_DIR}/aegis" slm use "$model" 2>/dev/null || true
-    info "SLM configured: engine=ollama model=${model}"
+    "${INSTALL_DIR}/aegis" slm use aegis-screen:4b 2>/dev/null || true
+    info "SLM configured: engine=ollama model=aegis-screen:4b (fine-tuned, 99%+ recall)"
 }
 
 # --- Download aegis-screen:4b from HuggingFace and import into Ollama ---
@@ -625,8 +836,11 @@ engine = "ollama"
 ollama_url = "http://localhost:11434"
 model = "aegis-screen:4b"
 fallback_to_heuristics = true
-# Switch engine: aegis slm engine openai
-# Switch model:  aegis slm use gemma3:4b  (generic alternative)
+# Engine options:
+#   aegis slm engine ollama      # Ollama (default, recommended)
+#   aegis slm engine openai      # LM Studio, vLLM, llama.cpp, any OpenAI-compatible
+#   aegis slm engine anthropic   # Anthropic API (cloud, no GPU needed)
+# Switch model:  aegis slm use aegis-screen:4b
 # Set server:    aegis slm server http://localhost:1234
 CONFIGEOF
         info "Default config: ${config_dir}/config.toml"
