@@ -21,7 +21,8 @@ struct OllamaGenerateRequest<'a> {
     model: &'a str,
     prompt: &'a str,
     stream: bool,
-    format: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    format: Option<&'a str>,
     options: OllamaOptions,
 }
 
@@ -132,13 +133,16 @@ impl SlmEngine for OllamaEngine {
 
         let generate_url = format!("{}/api/generate", self.url);
 
+        // aegis-screen models output plain SAFE/DANGEROUS — don't force JSON format.
+        // Generic models output schema_version JSON — force JSON format.
+        let is_aegis = crate::prompt::is_aegis_screen_model(&self.model);
         let request_body = OllamaGenerateRequest {
             model: &self.model,
             prompt,
             stream: false,
-            format: "json",
+            format: if is_aegis { None } else { Some("json") },
             options: OllamaOptions {
-                num_predict: 256,
+                num_predict: if is_aegis { 5 } else { 256 },
                 num_ctx: 32768,
             },
         };
