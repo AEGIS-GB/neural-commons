@@ -606,23 +606,54 @@ fn validate_system_prompt(baseline: &std::sync::RwLock<Option<String>>, body: &s
     true
 }
 
-/// Build screening context string with bot profile and trust info.
-/// This is injected into the SLM screening prompt for context-aware classification.
+/// Build screening context string for the SLM deep analysis prompt.
+///
+/// This matches the context format used in our benchmarks (94.9% PINT).
+/// The model was RAG-aware trained — it reads and applies these signals:
+/// - Layer 2 classifier probability (calibrated threat signal)
+/// - Bot profile (scope — eliminates FP for in-scope requests)
+/// - Channel trust level (adjusts suspicion)
+/// - System prompt integrity (detects API-level poisoning)
 fn build_screening_context(
     trust_level: &str,
     source_ip: &str,
     bot_profile: &Option<String>,
     system_prompt_trusted: bool,
+    classifier_advisory: Option<&str>,
 ) -> String {
-    let mut ctx = format!("trust={trust_level}, source={source_ip}");
+    let mut ctx = String::new();
 
-    if let Some(profile) = bot_profile {
-        ctx.push_str(&format!("\nBot profile: {profile}"));
+    // Layer 2 classifier signal — the model uses this as a calibrated prior
+    if let Some(advisory) = classifier_advisory {
+        // Extract probability from advisory string like "prompt_guard: MALICIOUS (prob=0.9311) — advisory"
+        if let Some(prob_start) = advisory.find("prob=") {
+            let prob_str = &advisory[prob_start + 5..];
+            let prob_end = prob_str.find(')').unwrap_or(prob_str.len());
+            let prob = &prob_str[..prob_end];
+            ctx.push_str(&format!(
+                "Layer 2 (Classifier): probability={prob}, likely injection\n"
+            ));
+        } else {
+            ctx.push_str("Layer 2 (Classifier): flagged as suspicious\n");
+        }
+    } else {
+        ctx.push_str("Layer 2 (Classifier): clean, likely safe\n");
     }
 
-    if !system_prompt_trusted {
+    // Bot profile — scope context eliminates false positives
+    if let Some(profile) = bot_profile {
+        ctx.push_str(&format!("Bot profile: {profile}\n"));
+    }
+
+    // Channel trust
+    ctx.push_str(&format!("Channel: {source_ip}, trust={trust_level}\n"));
+
+    // System prompt integrity
+    if system_prompt_trusted {
+        ctx.push_str("System prompt: validated (matches baseline)");
+    } else {
         ctx.push_str(
-            "\nWARNING: system prompt changed since baseline — treat with higher suspicion",
+            "System prompt: WARNING — changed since baseline, possible API-level poisoning",
         );
     }
 
@@ -936,6 +967,8 @@ async fn forward_request(
     let mut slm_verdict: Option<middleware::SlmVerdict> = None;
     // Deferred SLM content — for trusted channels, deep SLM runs after response
     let mut slm_deferred_content: Option<String> = None;
+    // Classifier advisory — hoisted to outer scope so deferred paths can use it
+    let mut classifier_advisory_outer: Option<String> = None;
 
     // Run pre-request middleware (skip in pass-through mode)
     if state.config.mode != ProxyMode::PassThrough {
@@ -1082,6 +1115,8 @@ async fn forward_request(
                         &req_info.request_id,
                     )
                     .await;
+                // Hoist to outer scope for deferred paths
+                classifier_advisory_outer = classifier_advisory.clone();
                 if let Some((decision, verdict)) = fast_result {
                     slm_verdict = verdict;
 
@@ -1160,6 +1195,7 @@ async fn forward_request(
                             &source_ip,
                             &bot_profile,
                             system_prompt_trusted,
+                            classifier_advisory.as_deref(),
                         ));
                         let (decision, verdict) = slm
                             .screen_deep(
@@ -1620,16 +1656,18 @@ async fn forward_request(
             let trust_channel = req_info.channel_trust.channel.clone();
             let trust_level = req_info.channel_trust.trust_level;
             let deferred_request_id = req_info.request_id.clone();
+            let deferred_advisory = classifier_advisory_outer.clone();
             let trust_ctx = Some(build_screening_context(
                 &format!("{:?}", trust_level).to_lowercase(),
                 &source_ip,
                 &bot_profile,
                 system_prompt_trusted,
+                classifier_advisory_outer.as_deref(),
             ));
             let updater = state.traffic_slm_updater.clone();
             tokio::spawn(async move {
                 let (_decision, verdict) = slm_clone
-                    .screen_deep(&content, None, trust_ctx, &deferred_request_id)
+                    .screen_deep(&content, deferred_advisory, trust_ctx, &deferred_request_id)
                     .await;
                 info!(
                     channel = ?trust_channel,
@@ -1800,16 +1838,18 @@ async fn forward_request(
         let trust_channel = req_info.channel_trust.channel.clone();
         let trust_level = req_info.channel_trust.trust_level;
         let deferred_request_id = req_info.request_id.clone();
+        let deferred_advisory = classifier_advisory_outer.clone();
         let trust_ctx = Some(build_screening_context(
             &format!("{:?}", trust_level).to_lowercase(),
             &source_ip,
             &bot_profile,
             system_prompt_trusted,
+            classifier_advisory_outer.as_deref(),
         ));
         let updater = state.traffic_slm_updater.clone();
         tokio::spawn(async move {
             let (_decision, verdict) = slm_clone
-                .screen_deep(&content, None, trust_ctx, &deferred_request_id)
+                .screen_deep(&content, deferred_advisory, trust_ctx, &deferred_request_id)
                 .await;
             info!(
                 channel = ?trust_channel,
