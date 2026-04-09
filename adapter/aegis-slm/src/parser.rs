@@ -91,7 +91,80 @@ pub fn parse_aegis_screen_output(raw: &str) -> Result<SlmOutput, ParseError> {
             explanation: "No threats detected.".to_string(),
         })
     } else {
-        // Model returned something unexpected — try JSON parse as fallback
+        // Model returned something unexpected — try parsing as JSON with "classification" field
+        // (aegis-screen sometimes returns {"text": "...", "classification": "SAFE/DANGEROUS"})
+        if let Ok(json) = serde_json::from_str::<serde_json::Value>(raw.trim()) {
+            if let Some(cls) = json.get("classification").and_then(|c| c.as_str()) {
+                let cls_upper = cls.to_uppercase();
+                if cls_upper.contains("DANGEROUS") {
+                    let explanation = json
+                        .get("reason")
+                        .or_else(|| json.get("explanation"))
+                        .and_then(|r| r.as_str())
+                        .unwrap_or("Threat detected by aegis-screen")
+                        .to_string();
+                    return Ok(SlmOutput {
+                        schema_version: 2,
+                        confidence: 9000,
+                        annotations: vec![SlmAnnotation {
+                            pattern: crate::types::Pattern::DirectInjection,
+                            excerpt: String::new(),
+                        }],
+                        explanation,
+                    });
+                } else if cls_upper.contains("SAFE") {
+                    return Ok(SlmOutput {
+                        schema_version: 2,
+                        confidence: 9500,
+                        annotations: vec![],
+                        explanation: "No threats detected.".to_string(),
+                    });
+                }
+            }
+            // Also check "action" field (another variant)
+            if let Some(action) = json.get("action").and_then(|a| a.as_str()) {
+                let action_upper = action.to_uppercase();
+                if action_upper.contains("DANGEROUS") {
+                    return Ok(SlmOutput {
+                        schema_version: 2,
+                        confidence: 9000,
+                        annotations: vec![SlmAnnotation {
+                            pattern: crate::types::Pattern::DirectInjection,
+                            excerpt: String::new(),
+                        }],
+                        explanation: json.get("reason").and_then(|r| r.as_str()).unwrap_or("Threat detected").to_string(),
+                    });
+                } else if action_upper.contains("SAFE") {
+                    return Ok(SlmOutput {
+                        schema_version: 2,
+                        confidence: 9500,
+                        annotations: vec![],
+                        explanation: "No threats detected.".to_string(),
+                    });
+                }
+            }
+        }
+        // Also check if SAFE/DANGEROUS appears anywhere in the text (model sometimes wraps it)
+        if text.contains("DANGEROUS") {
+            return Ok(SlmOutput {
+                schema_version: 2,
+                confidence: 9000,
+                annotations: vec![SlmAnnotation {
+                    pattern: crate::types::Pattern::DirectInjection,
+                    excerpt: String::new(),
+                }],
+                explanation: "Threat detected by aegis-screen".to_string(),
+            });
+        }
+        if text.contains("SAFE") {
+            return Ok(SlmOutput {
+                schema_version: 2,
+                confidence: 9500,
+                annotations: vec![],
+                explanation: "No threats detected.".to_string(),
+            });
+        }
+        // True fallback: try schema_version JSON parse
         parse_slm_output(raw, &EngineProfile::Loopback)
     }
 }
