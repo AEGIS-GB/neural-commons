@@ -343,7 +343,8 @@ fn check_tools_with_policy(
     None
 }
 
-/// Legacy: Check for dangerous tool calls (hardcoded list). Kept for tests.
+/// DEPRECATED: Replaced by `check_tools_with_policy` which uses configurable policy.
+/// Kept only for backward-compatible tests. Will be removed in next major version.
 #[allow(dead_code)]
 fn check_dangerous_tools(body: &str) -> Option<ResponseFinding> {
     // Parse as JSON to check for tool_calls / function_call

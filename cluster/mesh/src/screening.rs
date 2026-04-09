@@ -14,9 +14,9 @@ use aegis_slm::parser::parse_slm_output;
 use aegis_slm::prompt::screening_prompt_combined_with_trust;
 use aegis_slm::types::EngineProfile;
 
-/// Classifier confidence threshold for low-trust senders.
-/// Above this: quarantine. Below: pass to Layer 3.
-const RELAY_CLASSIFIER_THRESHOLD: f32 = 0.9;
+/// Classifier confidence threshold — same as loopback (0.5).
+/// Above this + low-trust sender: quarantine. Below: pass to Layer 3.
+const RELAY_CLASSIFIER_THRESHOLD: f32 = 0.5;
 
 /// TRUSTMARK basis points threshold for "high trust" (Tier 3).
 const HIGH_TRUST_BP: u32 = 4000;
@@ -124,35 +124,34 @@ impl ScreeningEngines {
 
     /// Screen a relay message body with the 3-layer cascade.
     ///
+    /// L1 and L2 always run together (same as loopback). L3 runs if they
+    /// don't both agree on quarantine. Decision uses worst result.
+    ///
     /// `sender_trustmark_bp`: sender's TRUSTMARK score in basis points.
-    /// Returns a `ScreeningVerdict`.
     pub fn screen(&self, body: &str, sender_trustmark_bp: u32) -> ScreeningVerdict {
         let is_high_trust = sender_trustmark_bp >= HIGH_TRUST_BP;
-        let _sender_tier = if sender_trustmark_bp >= HIGH_TRUST_BP {
-            "tier3"
-        } else if sender_trustmark_bp >= 2000 {
-            "tier2"
-        } else {
-            "tier1"
-        };
 
-        // Layer 1: Heuristic (<1ms) — always blocks on match
-        if let Some(verdict) = self.screen_heuristic(body) {
+        // Layer 1: Heuristic (<1ms) — store result, don't return early
+        let heuristic_verdict = self.screen_heuristic(body);
+
+        // Layer 2: Classifier (~15ms) — always runs alongside L1
+        let classifier_flag = self.screen_classifier(body, is_high_trust);
+        let classifier_quarantine = classifier_flag
+            .as_ref()
+            .filter(|f| f.starts_with("quarantine:"))
+            .map(|f| f.strip_prefix("quarantine:").unwrap().to_string());
+
+        // If L1 caught → return L1 verdict (L2 already ran for visibility)
+        if let Some(verdict) = heuristic_verdict {
             return verdict;
         }
 
-        // Layer 2: Classifier (if available, ~15ms)
-        let classifier_flag = self.screen_classifier(body, is_high_trust);
-        if let Some(ref flag) = classifier_flag
-            && flag.starts_with("quarantine:")
-        {
-            let reason = flag.strip_prefix("quarantine:").unwrap().to_string();
+        // If L2 quarantined → return L2 verdict
+        if let Some(reason) = classifier_quarantine {
             return ScreeningVerdict::quarantine(2, vec!["direct_injection".into()], reason);
-        } else if classifier_flag.is_some() {
-            // It's a context flag for Layer 3
         }
 
-        // Layer 3: Deep SLM (if available, 2-3s)
+        // Layer 3: Deep SLM (if available, 2-3s) — runs when L1+L2 don't block
         if let Some(verdict) =
             self.screen_slm(body, is_high_trust, sender_trustmark_bp, &classifier_flag)
         {
@@ -252,12 +251,25 @@ impl ScreeningEngines {
             None
         };
 
-        let screening_prompt = screening_prompt_combined_with_trust(body, trust_context.as_deref());
+        // Use aegis-screen prompt format if the model is our fine-tuned model,
+        // otherwise use the generic JSON schema format.
+        let slm_model = slm.model_name();
+        let is_aegis = aegis_slm::prompt::is_aegis_screen_model(&slm_model);
+        let screening_prompt = if is_aegis {
+            aegis_slm::prompt::screening_prompt_aegis_screen(body, trust_context.as_deref())
+        } else {
+            screening_prompt_combined_with_trust(body, trust_context.as_deref())
+        };
 
         let result = tokio::task::block_in_place(|| SlmEngine::generate(slm, &screening_prompt));
 
-        if let Ok(output) = result
-            && let Ok(parsed) = parse_slm_output(&output, &EngineProfile::Loopback)
+        let parsed = match &result {
+            Ok(output) if is_aegis => aegis_slm::parser::parse_aegis_screen_output(output).ok(),
+            Ok(output) => parse_slm_output(output, &EngineProfile::Loopback).ok(),
+            Err(_) => None,
+        };
+
+        if let Some(ref parsed) = parsed
             && !parsed.annotations.is_empty()
         {
             let patterns: Vec<String> = parsed

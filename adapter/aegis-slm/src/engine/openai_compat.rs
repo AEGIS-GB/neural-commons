@@ -62,6 +62,11 @@ impl OpenAiCompatEngine {
     ///
     /// `base_url` should be the server root (e.g., `http://localhost:1234`).
     /// The `/v1/chat/completions` path is appended automatically.
+    /// Return the configured model name.
+    pub fn model_name(&self) -> String {
+        self.model.clone()
+    }
+
     pub fn new(base_url: &str, model: &str) -> Self {
         let client = reqwest::blocking::Client::builder()
             .timeout(INFERENCE_TIMEOUT)

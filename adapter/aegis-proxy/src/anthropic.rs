@@ -321,7 +321,7 @@ mod tests {
     }
 
     #[test]
-    fn screen_payload_includes_user_and_system_only() {
+    fn screen_payload_includes_last_user_only() {
         let body = serde_json::json!({
             "model": "claude-sonnet-4-20250514",
             "max_tokens": 1024,
@@ -335,14 +335,22 @@ mod tests {
         let req = parse_request(body.to_string().as_bytes()).unwrap();
         let payload = extract_screen_payload(&req);
         let text = screen_payload_to_string(&payload);
-        // System and user messages included
-        assert!(text.contains("[system] Be helpful"));
-        assert!(text.contains("[user] Hello"));
+        // Only last user message (actual human input)
         assert!(text.contains("[user] What is 2+2?"));
-        // Assistant messages excluded (self-generated, not attack surface)
+        // Earlier user messages excluded (already screened in prior requests)
+        assert!(
+            !text.contains("[user] Hello"),
+            "earlier user messages should be excluded"
+        );
+        // System excluded (validated via baseline, not injection screening)
+        assert!(
+            !text.contains("[system]"),
+            "system prompt should be excluded from injection screening"
+        );
+        // Assistant excluded (self-generated)
         assert!(
             !text.contains("[assistant]"),
-            "assistant messages should be excluded from screening"
+            "assistant messages should be excluded"
         );
     }
 
