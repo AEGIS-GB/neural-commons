@@ -640,8 +640,13 @@ impl SlmHook for SlmHookImpl {
         request_id: &'a str,
     ) -> Pin<
         Box<
-            dyn Future<Output = (Option<(SlmDecision, Option<SlmVerdict>)>, Option<String>)>
-                + Send
+            dyn Future<
+                    Output = (
+                        Option<(SlmDecision, Option<SlmVerdict>)>,
+                        Option<String>,
+                        Option<u64>,
+                    ),
+                > + Send
                 + 'a,
         >,
     > {
@@ -659,19 +664,20 @@ impl SlmHook for SlmHookImpl {
             .await;
 
             match result {
-                Ok((Some(screening_result), _advisory)) => (
+                Ok((Some(screening_result), _advisory, cls_ms)) => (
                     Some(self.record_and_alert(&screening_result, content, request_id)),
                     None,
+                    cls_ms,
                 ),
-                Ok((None, advisory)) => {
+                Ok((None, advisory, cls_ms)) => {
                     if let Some(ref adv) = advisory {
                         tracing::info!(advisory = %adv, "classifier advisory → will pass to deep SLM");
                     }
-                    (None, advisory)
+                    (None, advisory, cls_ms)
                 }
                 Err(e) => {
                     tracing::warn!("fast screening task panicked: {e}");
-                    (None, None)
+                    (None, None, None)
                 }
             }
         })

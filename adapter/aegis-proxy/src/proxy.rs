@@ -1075,7 +1075,7 @@ async fn forward_request(
                         resp
                     };
 
-                let (fast_result, classifier_advisory) = slm
+                let (fast_result, classifier_advisory, fast_classifier_ms) = slm
                     .screen_fast(
                         &screen_content,
                         !trust_policy.classifier_advisory,
@@ -1141,6 +1141,16 @@ async fn forward_request(
                     if trust_policy.slm_deferred {
                         // Trusted: defer deep SLM to after response
                         slm_deferred_content = Some(screen_content.clone());
+                        // Record fast-layer timing (classifier_ms + advisory) so the
+                        // dashboard shows L2 status even before deferred SLM completes.
+                        if fast_classifier_ms.is_some() || classifier_advisory.is_some() {
+                            slm_verdict = Some(middleware::SlmVerdict {
+                                action: "admit".to_string(),
+                                classifier_ms: fast_classifier_ms,
+                                classifier_advisory: classifier_advisory.clone(),
+                                ..Default::default()
+                            });
+                        }
                         debug!(path = %path, "SLM deep analysis deferred (trusted channel — will run after response)");
                     } else {
                         // Untrusted: run deep SLM sequentially BEFORE forwarding

@@ -1293,40 +1293,54 @@ async function showTraceDetail(id){
     const classifierAdvisory=sd.classifier_advisory||null;
     const heuristicMs=sd.pass_a_ms;
     const engine=sd.engine||'';
+    const deferredAction=sd.deferred_action||null;
+    const deferredMs=sd.deferred_ms||null;
     let slmBody='<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:4px">';
     // Layer 1: Heuristic (regex, <1ms) — cheapest, runs first
     const heuristicCaught=engine==='heuristic'&&(slm==='reject'||slm==='quarantine');
     if(heuristicCaught){
-      slmBody+='<span class="slm-stage" style="min-width:100px"><b style="color:#8b949e;font-size:10px">1. HEURISTIC</b><br><span style="color:#f85149;font-weight:600">CAUGHT</span><br><span style="color:#484f58">'+(heuristicMs||0)+'ms</span></span>';
+      slmBody+='<span class="slm-stage" style="min-width:100px"><b style="color:#8b949e;font-size:10px">1. HEURISTIC</b><br><span style="color:#f85149;font-weight:600">DANGEROUS</span> · '+threat+'/10000<br><span style="color:#484f58">'+(heuristicMs||0)+'ms</span></span>';
     }else{
-      slmBody+='<span class="slm-stage" style="min-width:100px"><b style="color:#8b949e;font-size:10px">1. HEURISTIC</b><br><span style="color:#3fb950">pass</span><br><span style="color:#484f58">'+(heuristicMs!=null?heuristicMs+'ms':'')+'</span></span>';
+      slmBody+='<span class="slm-stage" style="min-width:100px"><b style="color:#8b949e;font-size:10px">1. HEURISTIC</b><br><span style="color:#3fb950">SAFE</span><br><span style="color:#484f58">'+(heuristicMs!=null?heuristicMs+'ms':'')+'</span></span>';
     }
-    // Layer 2: Classifier (ProtectAI DeBERTa, ~15ms)
+    // Layer 2: Classifier (ProtectAI DeBERTa, ~15ms) — always runs alongside L1
     const classifierCaught=engine==='prompt-guard'&&(slm==='reject'||slm==='quarantine');
-    if(heuristicCaught){
-      slmBody+='<span class="slm-stage" style="min-width:110px"><b style="color:#8b949e;font-size:10px">2. CLASSIFIER</b><br><span style="color:#484f58">skipped</span></span>';
-    }else if(classifierCaught){
-      slmBody+='<span class="slm-stage" style="min-width:110px"><b style="color:#8b949e;font-size:10px">2. CLASSIFIER</b><br><span style="color:#f85149;font-weight:600">CAUGHT</span><br><span style="color:#484f58">'+classifierMs+'ms</span></span>';
+    if(classifierCaught){
+      slmBody+='<span class="slm-stage" style="min-width:110px"><b style="color:#8b949e;font-size:10px">2. CLASSIFIER</b><br><span style="color:#f85149;font-weight:600">DANGEROUS</span><br><span style="color:#484f58">'+classifierMs+'ms</span></span>';
+    }else if(classifierAdvisory){
+      const probMatch=classifierAdvisory.match(/prob=([0-9.]+)/);
+      const probStr=probMatch?'prob='+parseFloat(probMatch[1]).toFixed(2):'detected';
+      slmBody+='<span class="slm-stage" style="min-width:110px"><b style="color:#8b949e;font-size:10px">2. CLASSIFIER</b><br><span style="color:#f85149;font-weight:600">DANGEROUS</span> · '+probStr+'<br><span style="color:#484f58">'+(classifierMs||'~5')+'ms</span></span>';
     }else if(classifierRan){
-      const clsLabel=classifierAdvisory?'<span style="color:#d29922">advisory</span>':'<span style="color:#3fb950">pass</span>';
-      slmBody+='<span class="slm-stage" style="min-width:110px"><b style="color:#8b949e;font-size:10px">2. CLASSIFIER</b><br>'+clsLabel+'<br><span style="color:#484f58">'+classifierMs+'ms</span></span>';
+      slmBody+='<span class="slm-stage" style="min-width:110px"><b style="color:#8b949e;font-size:10px">2. CLASSIFIER</b><br><span style="color:#3fb950">SAFE</span><br><span style="color:#484f58">'+classifierMs+'ms</span></span>';
     }else{
-      slmBody+='<span class="slm-stage" style="min-width:110px"><b style="color:#8b949e;font-size:10px">2. CLASSIFIER</b><br><span style="color:#484f58">disabled</span></span>';
+      slmBody+='<span class="slm-stage" style="min-width:110px"><b style="color:#8b949e;font-size:10px">2. CLASSIFIER</b><br><span style="color:#484f58">n/a</span></span>';
     }
-    // Layer 3: Deep SLM
+    // Layer 3: Deep SLM — show verdict (SAFE/DANGEROUS), not policy action
     const deepCaught=(engine==='openai'||engine==='ollama')&&(slm==='reject'||slm==='quarantine');
+    const deepDangerous=deferredAction==='reject'||deferredAction==='quarantine';
+    const deepSafe=deferredAction==='admit';
     if(classifierCaught||heuristicCaught){
-      slmBody+='<span class="slm-stage" style="min-width:90px"><b style="color:#8b949e;font-size:10px">DEEP SLM</b><br><span style="color:#484f58">skipped</span></span>';
+      slmBody+='<span class="slm-stage" style="min-width:90px"><b style="color:#8b949e;font-size:10px">3. DEEP SLM</b><br><span style="color:#484f58">skipped</span></span>';
     }else if(deepCaught){
-      const dv=slm==='reject'?'REJECT':'QUARANTINE';
-      slmBody+='<span class="slm-stage" style="min-width:130px"><b style="color:#8b949e;font-size:10px">DEEP SLM (aegis-screen)</b><br><span style="color:'+(slm==='reject'?'#f85149':'#d29922')+';font-weight:600">'+dv+'</span> · '+threat+'/10000<br><span style="color:#484f58">'+slmMs+'ms</span></span>';
+      slmBody+='<span class="slm-stage" style="min-width:130px"><b style="color:#8b949e;font-size:10px">3. DEEP SLM</b><br><span style="color:#f85149;font-weight:600">DANGEROUS</span> · '+threat+'/10000<br><span style="color:#484f58">'+slmMs+'ms</span></span>';
+    }else if(deepDangerous){
+      slmBody+='<span class="slm-stage" style="min-width:130px"><b style="color:#8b949e;font-size:10px">3. DEEP SLM</b><br><span style="color:#f85149;font-weight:600">DANGEROUS</span> · '+threat+'/10000<br><span style="color:#484f58">'+(deferredMs||slmMs)+'ms</span></span>';
+    }else if(deepSafe){
+      slmBody+='<span class="slm-stage" style="min-width:130px"><b style="color:#8b949e;font-size:10px">3. DEEP SLM</b><br><span style="color:#3fb950">SAFE</span> · '+threat+'/10000<br><span style="color:#484f58">'+(deferredMs||slmMs)+'ms</span></span>';
     }else if(slmMs>0){
-      slmBody+='<span class="slm-stage" style="min-width:130px"><b style="color:#8b949e;font-size:10px">DEEP SLM (aegis-screen)</b><br><span style="color:#3fb950">pass</span> · '+threat+'/10000<br><span style="color:#484f58">'+slmMs+'ms</span></span>';
-    }else if(slm==='admit'||slm==='—'){
-      slmBody+='<span class="slm-stage" style="min-width:90px"><b style="color:#8b949e;font-size:10px">DEEP SLM</b><br><span style="color:#484f58">deferred</span></span>';
+      // Has timing but no deferred result yet — show what we know
+      const slmVerdict=threat>0?'<span style="color:#f85149;font-weight:600">DANGEROUS</span>':'<span style="color:#3fb950">SAFE</span>';
+      slmBody+='<span class="slm-stage" style="min-width:130px"><b style="color:#8b949e;font-size:10px">3. DEEP SLM</b><br>'+slmVerdict+' · '+threat+'/10000<br><span style="color:#484f58">'+slmMs+'ms</span></span>';
+    }else{
+      slmBody+='<span class="slm-stage" style="min-width:90px"><b style="color:#8b949e;font-size:10px">3. DEEP SLM</b><br><span style="color:#484f58">pending</span></span>';
     }
     slmBody+='</div>';
-    const slmTitle=blocked?'SLM Screening — BLOCKED ('+slm+')':'SLM Screening — '+slm;
+    // Title: show enforcement action (blocked/admitted) separately
+    let slmTitle;
+    if(blocked){slmTitle='Screening — BLOCKED';}
+    else if(heuristicCaught||classifierCaught||deepCaught||deepDangerous){slmTitle='Screening — DETECTED (admitted, trust='+e.channel_trust_level+')';}
+    else{slmTitle='Screening — SAFE';}
     h+=flowStepRich(slmCol,'3',slmTitle,slmBody,'+'+slmMs+'ms');
     if(blocked){
       h+=flowStep('fd-err','✕','Request Blocked','Returned HTTP 403 to client — never forwarded to upstream','+'+dur+'ms');

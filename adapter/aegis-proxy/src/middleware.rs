@@ -242,6 +242,7 @@ pub trait SlmHook: Send + Sync {
     /// The String in the tuple is the classifier advisory (if any) to pass to screen_deep.
     /// `classifier_blocking`: if false, classifier is advisory only (trusted sources).
     /// `request_id`: pipeline request ID for receipt correlation.
+    /// Returns: (fast_result, classifier_advisory, classifier_ms)
     #[allow(clippy::type_complexity)]
     fn screen_fast<'a>(
         &'a self,
@@ -250,8 +251,13 @@ pub trait SlmHook: Send + Sync {
         request_id: &'a str,
     ) -> Pin<
         Box<
-            dyn Future<Output = (Option<(SlmDecision, Option<SlmVerdict>)>, Option<String>)>
-                + Send
+            dyn Future<
+                    Output = (
+                        Option<(SlmDecision, Option<SlmVerdict>)>,
+                        Option<String>,
+                        Option<u64>,
+                    ),
+                > + Send
                 + 'a,
         >,
     >;
@@ -393,12 +399,17 @@ impl SlmHook for NoopSlmHook {
         _request_id: &'a str,
     ) -> Pin<
         Box<
-            dyn Future<Output = (Option<(SlmDecision, Option<SlmVerdict>)>, Option<String>)>
-                + Send
+            dyn Future<
+                    Output = (
+                        Option<(SlmDecision, Option<SlmVerdict>)>,
+                        Option<String>,
+                        Option<u64>,
+                    ),
+                > + Send
                 + 'a,
         >,
     > {
-        Box::pin(async { (None, None) })
+        Box::pin(async { (None, None, None) })
     }
     fn screen_deep<'a>(
         &'a self,
