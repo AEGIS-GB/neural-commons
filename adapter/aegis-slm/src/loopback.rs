@@ -153,8 +153,10 @@ pub fn screen_fast_layers(
         content.to_string()
     };
 
-    // Step 1: Heuristic pre-filter (<1ms) — regex patterns, cheapest layer first.
+    // ── Layer 1: Heuristic (<1ms) ──────────────────────────────────────
     let mut heuristic_ms: Option<u64> = None;
+    let mut heuristic_result: Option<(EnrichedAnalysis, HolsterDecision)> = None;
+
     if config.fallback_to_heuristics {
         let heuristic = HeuristicEngine::new();
         let heuristic_start = Instant::now();
@@ -176,38 +178,13 @@ pub fn screen_fast_layers(
                     &EngineProfile::Loopback,
                     false,
                 );
-                let decision = match holster_result.action {
-                    HolsterAction::Admit => ScreeningDecision::Admit,
-                    HolsterAction::Quarantine => ScreeningDecision::Quarantine(format!(
-                        "threat_score={} intent={:?}",
-                        enriched.threat_score, enriched.intent
-                    )),
-                    HolsterAction::Reject => ScreeningDecision::Reject(format!(
-                        "threat_score={} intent={:?}",
-                        enriched.threat_score, enriched.intent
-                    )),
-                };
-                return (
-                    Some(ScreeningResult {
-                        decision,
-                        enriched: Some(enriched),
-                        holster: Some(holster_result),
-                        timing: ScreeningTiming {
-                            total_ms: pipeline_start.elapsed().as_millis() as u64,
-                            pass_a_ms: heuristic_ms,
-                            classifier_ms: None,
-                            engine: "heuristic".to_string(),
-                            ..Default::default()
-                        },
-                    }),
-                    None,
-                    None,
-                );
+                heuristic_result = Some((enriched, holster_result));
+                // Don't return early — always run L2 for complete visibility.
             }
         }
     }
 
-    // Step 2: Classifier (~15ms) — ProtectAI DeBERTa ML model.
+    // ── Layer 2: Classifier (~5-15ms) — ALWAYS runs alongside L1 ─────
     let classifier_start = Instant::now();
     let classifier_signal = run_prompt_guard(config, &scan_content);
     let classifier_ms = if classifier_signal.is_some() {
@@ -217,6 +194,7 @@ pub fn screen_fast_layers(
     };
 
     let mut classifier_advisory: Option<String> = None;
+    let mut classifier_caught = false;
 
     if let Some((true, prob)) = classifier_signal
         && prob > CLASSIFIER_QUARANTINE_THRESHOLD
@@ -227,24 +205,7 @@ pub fn screen_fast_layers(
                 ms = classifier_ms,
                 "Layer 2 CLASSIFIER: MALICIOUS, quarantine"
             );
-            return (
-                Some(ScreeningResult {
-                    decision: ScreeningDecision::Quarantine(format!(
-                        "prompt_guard: MALICIOUS (prob={prob:.4})"
-                    )),
-                    enriched: None,
-                    holster: None,
-                    timing: ScreeningTiming {
-                        total_ms: pipeline_start.elapsed().as_millis() as u64,
-                        pass_a_ms: heuristic_ms,
-                        classifier_ms,
-                        engine: "prompt-guard".to_string(),
-                        ..Default::default()
-                    },
-                }),
-                None,
-                classifier_ms,
-            );
+            classifier_caught = true;
         } else {
             info!(
                 prob,
@@ -256,7 +217,60 @@ pub fn screen_fast_layers(
         }
     }
 
-    // Fast layers clean (or advisory only) — needs deep SLM analysis (Layer 3)
+    // ── Decision: return the worst result from L1 + L2 ───────────────
+    // Priority: L1 heuristic catch > L2 classifier catch > both clean.
+    if let Some((enriched, holster_result)) = heuristic_result {
+        let decision = match holster_result.action {
+            HolsterAction::Admit => ScreeningDecision::Admit,
+            HolsterAction::Quarantine => ScreeningDecision::Quarantine(format!(
+                "threat_score={} intent={:?}",
+                enriched.threat_score, enriched.intent
+            )),
+            HolsterAction::Reject => ScreeningDecision::Reject(format!(
+                "threat_score={} intent={:?}",
+                enriched.threat_score, enriched.intent
+            )),
+        };
+        return (
+            Some(ScreeningResult {
+                decision,
+                enriched: Some(enriched),
+                holster: Some(holster_result),
+                timing: ScreeningTiming {
+                    total_ms: pipeline_start.elapsed().as_millis() as u64,
+                    pass_a_ms: heuristic_ms,
+                    classifier_ms, // L2 ran too — include its timing
+                    engine: "heuristic".to_string(),
+                    ..Default::default()
+                },
+            }),
+            classifier_advisory,
+            classifier_ms,
+        );
+    }
+
+    if classifier_caught {
+        return (
+            Some(ScreeningResult {
+                decision: ScreeningDecision::Quarantine(format!(
+                    "prompt_guard: MALICIOUS"
+                )),
+                enriched: None,
+                holster: None,
+                timing: ScreeningTiming {
+                    total_ms: pipeline_start.elapsed().as_millis() as u64,
+                    pass_a_ms: heuristic_ms,
+                    classifier_ms,
+                    engine: "prompt-guard".to_string(),
+                    ..Default::default()
+                },
+            }),
+            None,
+            classifier_ms,
+        );
+    }
+
+    // Both layers clean (or advisory only) — needs deep SLM analysis (Layer 3)
     (None, classifier_advisory, classifier_ms)
 }
 
