@@ -111,15 +111,22 @@ aegis
 If you already run a local model server, point Aegis at it:
 
 ```bash
+# Import the model
+lms import ~/.aegis/data/models/aegis-screen-4b-q8_0.gguf --copy --yes
+lms load aegis-screen-4b --gpu max
+
+# Configure Aegis
 aegis slm engine openai
 aegis slm server http://localhost:1234    # LM Studio default
 # aegis slm server http://localhost:8000  # vLLM default
 # aegis slm server http://localhost:8080  # llama.cpp default
-aegis slm use aegis-screen:4b
+aegis slm use aegis-screen-4b
 aegis
 ```
 
-For best results, load `aegis-screen-4b-q8_0.gguf` in your server. Download from [HuggingFace](https://huggingface.co/Loksh/aegis-screen-4b-gguf). Any GGUF-compatible model works, but aegis-screen:4b is fine-tuned for injection detection.
+Download `aegis-screen-4b-q8_0.gguf` from [HuggingFace](https://huggingface.co/Loksh/aegis-screen-4b-gguf) and load it in your server. Any GGUF-compatible model works, but aegis-screen:4b is fine-tuned for injection detection.
+
+**Tested with LM Studio:** 92% agreement with Ollama on the same model (same GGUF, same prompts). One borderline social engineering case differs due to chat template handling. Latency is comparable (~850ms both engines). Ollama is recommended for production since it's the primary tested engine.
 
 ### Option 3: Anthropic API (cloud, no GPU needed)
 
@@ -148,6 +155,17 @@ You still get heuristic regex patterns + ProtectAI DeBERTa classifier for inject
 | gemma3:4b | 3.3GB | 93% | 94.9 | ~800ms | Generic. Good with KB context. |
 | claude-haiku-4-5 | cloud | ~95% | — | 0.5-2s | Cloud API. Requires API key. |
 | heuristic only | 0 | ~65% | — | <10ms | No model needed. `aegis --no-slm` |
+
+### Engine Compatibility
+
+aegis-screen:4b is a standard Q8_0 GGUF and runs on any engine that supports GGUF models:
+
+| Engine | Tested | Agreement | Latency | Notes |
+|--------|--------|-----------|---------|-------|
+| **Ollama** | **Yes** | baseline | ~870ms | Primary engine. Recommended for production. |
+| **LM Studio** | **Yes** | 92% with Ollama | ~850ms | Works. One borderline case differs (chat template). |
+| vLLM | Not yet | — | — | Should work via OpenAI-compatible API. |
+| llama.cpp | Not yet | — | — | Should work (same backend as LM Studio). |
 
 ## Common Commands
 
