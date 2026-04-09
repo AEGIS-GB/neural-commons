@@ -1319,9 +1319,9 @@ async function showTraceDetail(id){
       slmBody+='<span class="slm-stage" style="min-width:90px"><b style="color:#8b949e;font-size:10px">DEEP SLM</b><br><span style="color:#484f58">skipped</span></span>';
     }else if(deepCaught){
       const dv=slm==='reject'?'REJECT':'QUARANTINE';
-      slmBody+='<span class="slm-stage" style="min-width:130px"><b style="color:#8b949e;font-size:10px">DEEP SLM (Qwen3)</b><br><span style="color:'+(slm==='reject'?'#f85149':'#d29922')+';font-weight:600">'+dv+'</span> · '+threat+'/10000<br><span style="color:#484f58">'+slmMs+'ms</span></span>';
+      slmBody+='<span class="slm-stage" style="min-width:130px"><b style="color:#8b949e;font-size:10px">DEEP SLM (aegis-screen)</b><br><span style="color:'+(slm==='reject'?'#f85149':'#d29922')+';font-weight:600">'+dv+'</span> · '+threat+'/10000<br><span style="color:#484f58">'+slmMs+'ms</span></span>';
     }else if(slmMs>0){
-      slmBody+='<span class="slm-stage" style="min-width:130px"><b style="color:#8b949e;font-size:10px">DEEP SLM (Qwen3)</b><br><span style="color:#3fb950">pass</span> · '+threat+'/10000<br><span style="color:#484f58">'+slmMs+'ms</span></span>';
+      slmBody+='<span class="slm-stage" style="min-width:130px"><b style="color:#8b949e;font-size:10px">DEEP SLM (aegis-screen)</b><br><span style="color:#3fb950">pass</span> · '+threat+'/10000<br><span style="color:#484f58">'+slmMs+'ms</span></span>';
     }else if(slm==='admit'||slm==='—'){
       slmBody+='<span class="slm-stage" style="min-width:90px"><b style="color:#8b949e;font-size:10px">DEEP SLM</b><br><span style="color:#484f58">deferred</span></span>';
     }
