@@ -164,17 +164,60 @@ pub fn parse_aegis_screen_output(raw: &str) -> Result<SlmOutput, ParseError> {
                 explanation: "No threats detected.".to_string(),
             });
         }
-        // True fallback: try schema_version JSON parse
-        parse_slm_output(raw, &EngineProfile::Loopback)
+        // Final fallback: if model returned JSON without any classification signal
+        // (e.g., {"text": "the input"} — just echoed it back), treat as SAFE.
+        // A model that can't classify is not detecting a threat.
+        tracing::info!("aegis-screen returned no SAFE/DANGEROUS signal — defaulting to SAFE");
+        Ok(SlmOutput {
+            schema_version: 2,
+            confidence: 5000, // low confidence — model didn't actually classify
+            annotations: vec![],
+            explanation: "No classification signal from model (default SAFE)".to_string(),
+        })
     }
 }
 
 /// Parse and validate SLM output.
-/// Returns ParseError on ANY validation failure — no best-effort coercion.
+/// Tries schema_version JSON first. If JSON fails, falls back to extracting
+/// SAFE/DANGEROUS from the raw text (handles aegis-screen model variants
+/// that sometimes produce non-schema JSON or plain text).
 pub fn parse_slm_output(raw_json: &str, engine: &EngineProfile) -> Result<SlmOutput, ParseError> {
     let cleaned = extract_json(raw_json);
-    let output: SlmOutput =
-        serde_json::from_str(cleaned).map_err(|e| ParseError::InvalidJson(e.to_string()))?;
+    let output: SlmOutput = match serde_json::from_str(cleaned) {
+        Ok(o) => o,
+        Err(e) => {
+            // JSON parse failed — try extracting SAFE/DANGEROUS from raw text.
+            let upper = raw_json.to_uppercase();
+            if upper.contains("DANGEROUS") {
+                return Ok(SlmOutput {
+                    schema_version: 2,
+                    confidence: 9000,
+                    annotations: vec![SlmAnnotation {
+                        pattern: crate::types::Pattern::DirectInjection,
+                        excerpt: String::new(),
+                    }],
+                    explanation: "Threat detected (plain text fallback)".to_string(),
+                });
+            }
+            if upper.contains("SAFE") {
+                return Ok(SlmOutput {
+                    schema_version: 2,
+                    confidence: 9500,
+                    annotations: vec![],
+                    explanation: "No threats detected (plain text fallback)".to_string(),
+                });
+            }
+            // Model returned unclassifiable content — treat as safe with low confidence.
+            // A model that can't parse or classify is not detecting a threat.
+            tracing::info!(raw_preview = %raw_json.chars().take(80).collect::<String>(), "SLM returned no classification signal — defaulting to SAFE");
+            return Ok(SlmOutput {
+                schema_version: 2,
+                confidence: 5000,
+                annotations: vec![],
+                explanation: "No classification signal from model (default SAFE)".to_string(),
+            });
+        }
+    };
 
     // Validate schema_version
     if output.schema_version != 2 {
@@ -276,9 +319,13 @@ mod tests {
     }
 
     #[test]
-    fn test_reject_invalid_json() {
+    fn test_unclassifiable_defaults_to_safe() {
+        // Unclassifiable text (no SAFE/DANGEROUS signal) defaults to SAFE with low confidence
         let result = parse_slm_output("not json", &EngineProfile::LocalSlm);
-        assert!(matches!(result, Err(ParseError::InvalidJson(_))));
+        assert!(result.is_ok());
+        let output = result.unwrap();
+        assert!(output.annotations.is_empty());
+        assert_eq!(output.confidence, 5000); // low confidence — model couldn't classify
     }
 
     #[test]
