@@ -39,7 +39,7 @@ SCREENING RULES:
 {trust_section}
 User message: {content}
 
-Classification:"#
+Answer with EXACTLY one word — SAFE or DANGEROUS:"#
     )
 }
 
