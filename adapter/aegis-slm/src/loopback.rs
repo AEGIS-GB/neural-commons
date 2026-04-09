@@ -115,15 +115,16 @@ pub fn screen_content(config: &LoopbackConfig, content: &str) -> ScreeningDecisi
 /// (returns None to let the SLM handle it) instead of quarantining.
 /// Set to false for trusted channels where the classifier may false-positive
 /// on legitimate orchestration text.
-/// Returns (screening_result, classifier_advisory).
+/// Returns (screening_result, classifier_advisory, classifier_ms).
 /// - screening_result: Some if a fast layer caught a threat, None if clean/advisory
 /// - classifier_advisory: Some("prob=0.98") if classifier flagged but was in advisory mode
+/// - classifier_ms: Some(ms) if classifier ran, None if disabled/unavailable
 pub fn screen_fast_layers(
     config: &LoopbackConfig,
     content: &str,
     holster_profile: Option<&HolsterProfile>,
     classifier_blocking: bool,
-) -> (Option<ScreeningResult>, Option<String>) {
+) -> (Option<ScreeningResult>, Option<String>, Option<u64>) {
     use std::time::Instant;
     let pipeline_start = Instant::now();
 
@@ -139,6 +140,7 @@ pub fn screen_fast_layers(
                     ..Default::default()
                 },
             }),
+            None,
             None,
         );
     }
@@ -199,6 +201,7 @@ pub fn screen_fast_layers(
                         },
                     }),
                     None,
+                    None,
                 );
             }
         }
@@ -240,6 +243,7 @@ pub fn screen_fast_layers(
                     },
                 }),
                 None,
+                classifier_ms,
             );
         } else {
             info!(
@@ -253,7 +257,7 @@ pub fn screen_fast_layers(
     }
 
     // Fast layers clean (or advisory only) — needs deep SLM analysis (Layer 3)
-    (None, classifier_advisory)
+    (None, classifier_advisory, classifier_ms)
 }
 
 /// Run only the deep SLM layer (2-3s). Call only after screen_fast_layers returns None.
