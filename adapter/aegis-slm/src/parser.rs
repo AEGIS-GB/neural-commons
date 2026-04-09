@@ -57,6 +57,45 @@ fn extract_json(raw: &str) -> &str {
     trimmed
 }
 
+/// Parse aegis-screen simple output (SAFE or DANGEROUS plain text).
+/// Converts to SlmOutput for compatibility with the rest of the pipeline.
+pub fn parse_aegis_screen_output(raw: &str) -> Result<SlmOutput, ParseError> {
+    let text = raw.trim().to_uppercase();
+
+    // The model outputs just "SAFE" or "DANGEROUS" (possibly with trailing explanation)
+    if text.starts_with("DANGEROUS") {
+        // Try to extract a reason after "DANGEROUS" if present
+        let explanation = raw
+            .trim()
+            .strip_prefix("DANGEROUS")
+            .or_else(|| raw.trim().strip_prefix("dangerous"))
+            .map(|s| s.trim().trim_start_matches(['-', ':', '.']).trim())
+            .filter(|s| !s.is_empty())
+            .unwrap_or("Threat detected by aegis-screen")
+            .to_string();
+
+        Ok(SlmOutput {
+            schema_version: 2,
+            confidence: 9000,
+            annotations: vec![SlmAnnotation {
+                pattern: crate::types::Pattern::DirectInjection,
+                excerpt: String::new(), // not available in simple format
+            }],
+            explanation,
+        })
+    } else if text.starts_with("SAFE") {
+        Ok(SlmOutput {
+            schema_version: 2,
+            confidence: 9500,
+            annotations: vec![],
+            explanation: "No threats detected.".to_string(),
+        })
+    } else {
+        // Model returned something unexpected — try JSON parse as fallback
+        parse_slm_output(raw, &EngineProfile::Loopback)
+    }
+}
+
 /// Parse and validate SLM output.
 /// Returns ParseError on ANY validation failure — no best-effort coercion.
 pub fn parse_slm_output(raw_json: &str, engine: &EngineProfile) -> Result<SlmOutput, ParseError> {

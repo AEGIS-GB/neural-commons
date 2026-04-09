@@ -269,7 +269,12 @@ pub fn screen_deep_slm(
     use std::time::Instant;
     let pipeline_start = Instant::now();
 
-    let prompt = crate::prompt::screening_prompt_combined_with_trust(content, trust_context);
+    let is_aegis = crate::prompt::is_aegis_screen_model(&config.model);
+    let prompt = if is_aegis {
+        crate::prompt::screening_prompt_aegis_screen(content, trust_context)
+    } else {
+        crate::prompt::screening_prompt_combined_with_trust(content, trust_context)
+    };
 
     let engine = build_engine(config);
 
@@ -300,7 +305,12 @@ pub fn screen_deep_slm(
         }
     };
 
-    let slm_output = match parse_slm_output(&raw_output, &EngineProfile::Loopback) {
+    let parse_result = if is_aegis {
+        crate::parser::parse_aegis_screen_output(&raw_output)
+    } else {
+        parse_slm_output(&raw_output, &EngineProfile::Loopback)
+    };
+    let slm_output = match parse_result {
         Ok(output) => output,
         Err(e) => {
             warn!("SLM parse failed: {e} — quarantining (unscreened)");
@@ -466,7 +476,12 @@ pub fn screen_content_rich(config: &LoopbackConfig, content: &str) -> ScreeningR
 
     // 2. SLM DEEP ANALYSIS — single combined pass covering injection + recon.
     //    Only reached if heuristic + classifier found nothing.
-    let prompt = screening_prompt_combined(content);
+    let is_aegis = crate::prompt::is_aegis_screen_model(&config.model);
+    let prompt = if is_aegis {
+        crate::prompt::screening_prompt_aegis_screen(content, None)
+    } else {
+        screening_prompt_combined(content)
+    };
 
     let engine = build_engine(config);
 
@@ -502,7 +517,12 @@ pub fn screen_content_rich(config: &LoopbackConfig, content: &str) -> ScreeningR
     };
 
     // 3. Parse the combined output
-    let slm_output = match parse_slm_output(&raw_output, &EngineProfile::Loopback) {
+    let parse_result = if is_aegis {
+        crate::parser::parse_aegis_screen_output(&raw_output)
+    } else {
+        parse_slm_output(&raw_output, &EngineProfile::Loopback)
+    };
+    let slm_output = match parse_result {
         Ok(output) => output,
         Err(e) => {
             warn!("SLM parse failed: {e} — quarantining (unscreened)");
