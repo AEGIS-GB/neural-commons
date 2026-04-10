@@ -132,7 +132,11 @@ pub fn parse_aegis_screen_output(raw: &str) -> Result<SlmOutput, ParseError> {
                             pattern: crate::types::Pattern::DirectInjection,
                             excerpt: String::new(),
                         }],
-                        explanation: json.get("reason").and_then(|r| r.as_str()).unwrap_or("Threat detected").to_string(),
+                        explanation: json
+                            .get("reason")
+                            .and_then(|r| r.as_str())
+                            .unwrap_or("Threat detected")
+                            .to_string(),
                     });
                 } else if action_upper.contains("SAFE") {
                     return Ok(SlmOutput {
