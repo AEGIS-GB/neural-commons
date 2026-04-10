@@ -598,7 +598,7 @@ impl SlmHookImpl {
         let decision = match screening_result.decision {
             aegis_slm::loopback::ScreeningDecision::Admit => SlmDecision::Admit,
             aegis_slm::loopback::ScreeningDecision::Quarantine(ref reason) => {
-                info!(reason = %reason, "SLM screening: quarantine");
+                info!(reason = %reason, engine = %verdict.engine, "screening: quarantine");
                 let alert = aegis_dashboard::DashboardAlert {
                     ts_ms: std::time::SystemTime::now()
                         .duration_since(std::time::UNIX_EPOCH)
@@ -615,7 +615,7 @@ impl SlmHookImpl {
                 SlmDecision::Quarantine(reason.clone())
             }
             aegis_slm::loopback::ScreeningDecision::Reject(ref reason) => {
-                info!(reason = %reason, "SLM screening: reject");
+                info!(reason = %reason, engine = %verdict.engine, "screening: reject");
                 let alert = aegis_dashboard::DashboardAlert {
                     ts_ms: std::time::SystemTime::now()
                         .duration_since(std::time::UNIX_EPOCH)
