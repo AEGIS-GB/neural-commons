@@ -474,7 +474,7 @@ fn extract_user_content_from_json(body: &str, max_chars: usize) -> String {
         if let Some(input) = json.get("input") {
             if let Some(s) = input.as_str() {
                 let capped: String = s.chars().take(max_chars).collect();
-                return format!("[user] {capped}");
+                return capped;
             } else if let Some(arr) = input.as_array() {
                 let last_user_idx = arr.iter().rposition(|item| {
                     item.get("role").and_then(|r| r.as_str()).unwrap_or("user") == "user"
@@ -504,13 +504,16 @@ fn extract_user_content_from_json(body: &str, max_chars: usize) -> String {
 }
 
 /// Extract text content from a message (handles both string and content block arrays).
-fn extract_message_content(msg: &serde_json::Value, role: &str, parts: &mut Vec<String>) {
+/// No role prefixes — the screening prompt already provides context.
+/// Role prefixes like "[user]" were causing false positives by making benign
+/// text look like system-directed instructions to the SLM.
+fn extract_message_content(msg: &serde_json::Value, _role: &str, parts: &mut Vec<String>) {
     if let Some(content) = msg.get("content").and_then(|c| c.as_str()) {
-        parts.push(format!("[{role}] {content}"));
+        parts.push(content.to_string());
     } else if let Some(blocks) = msg.get("content").and_then(|c| c.as_array()) {
         for block in blocks {
             if let Some(text) = block.get("text").and_then(|t| t.as_str()) {
-                parts.push(format!("[{role}] {text}"));
+                parts.push(text.to_string());
             }
         }
     }
@@ -623,22 +626,11 @@ fn build_screening_context(
 ) -> String {
     let mut ctx = String::new();
 
-    // Layer 2 classifier signal — the model uses this as a calibrated prior
-    if let Some(advisory) = classifier_advisory {
-        // Extract probability from advisory string like "prompt_guard: MALICIOUS (prob=0.9311) — advisory"
-        if let Some(prob_start) = advisory.find("prob=") {
-            let prob_str = &advisory[prob_start + 5..];
-            let prob_end = prob_str.find(')').unwrap_or(prob_str.len());
-            let prob = &prob_str[..prob_end];
-            ctx.push_str(&format!(
-                "Layer 2 (Classifier): probability={prob}, likely injection\n"
-            ));
-        } else {
-            ctx.push_str("Layer 2 (Classifier): flagged as suspicious\n");
-        }
-    } else {
-        ctx.push_str("Layer 2 (Classifier): clean, likely safe\n");
-    }
+    // Layer 2 classifier signal — intentionally NOT injected into L3's prompt.
+    // L3 must judge independently. When L2 says "100% injection" for benign
+    // trigger words like "forget" or "ignore", L3 defers to L2 instead of
+    // applying its own training. Strategy B: L3 decides on its own.
+    let _ = classifier_advisory; // consumed but not used in prompt
 
     // Bot profile — scope context eliminates false positives
     if let Some(profile) = bot_profile {
@@ -1118,51 +1110,93 @@ async fn forward_request(
                 // Hoist to outer scope for deferred paths
                 classifier_advisory_outer = classifier_advisory.clone();
                 if let Some((decision, verdict)) = fast_result {
-                    slm_verdict = verdict;
+                    // Strategy B: L1 (heuristic) is authoritative, L2 (classifier) is advisory.
+                    // L3 (deep SLM) makes the final decision when L2 flags.
+                    // This prevents L2 over-defense from causing false positives on
+                    // benign trigger words ("forget", "ignore", "override").
+                    let engine = verdict
+                        .as_ref()
+                        .map(|v| v.engine.as_str())
+                        .unwrap_or("");
+                    let is_heuristic_catch = engine == "heuristic";
 
-                    if let Some(ref v) = slm_verdict {
-                        pipeline.slm_fast = Some(crate::pipeline::SlmStepResult {
-                            layer: "fast".to_string(),
-                            decision: v.action.clone(),
-                            verdict: slm_verdict.clone(),
-                        });
-                    }
+                    if is_heuristic_catch {
+                        // L1 heuristic caught it — authoritative, use this verdict
+                        slm_verdict = verdict;
 
-                    // Trust policy: deferred tiers (full/trusted) never block on fast layers.
-                    // The fast-layer result is logged but the request proceeds.
-                    if trust_policy.slm_deferred {
-                        match &decision {
-                            middleware::SlmDecision::Reject(reason)
-                            | middleware::SlmDecision::Quarantine(reason) => {
-                                info!(path = %path, reason = %reason, "SLM fast-layer flagged (advisory — trusted, not blocking)");
+                        if let Some(ref v) = slm_verdict {
+                            pipeline.slm_fast = Some(crate::pipeline::SlmStepResult {
+                                layer: "fast".to_string(),
+                                decision: v.action.clone(),
+                                verdict: slm_verdict.clone(),
+                            });
+                        }
+
+                        if trust_policy.slm_deferred {
+                            match &decision {
+                                middleware::SlmDecision::Reject(reason)
+                                | middleware::SlmDecision::Quarantine(reason) => {
+                                    info!(path = %path, reason = %reason, "L1 heuristic caught (advisory — trusted, not blocking)");
+                                }
+                                _ => {}
                             }
-                            _ => {}
+                        } else {
+                            match decision {
+                                middleware::SlmDecision::Reject(reason)
+                                    if state.config.mode == ProxyMode::Enforce =>
+                                {
+                                    warn!(path = %path, reason = %reason, "L1 heuristic rejected request");
+                                    pipeline.outcome = crate::pipeline::PipelineOutcome::Blocked(403);
+                                    return Ok(make_blocked_response(&reason, &slm_verdict));
+                                }
+                                middleware::SlmDecision::Quarantine(reason)
+                                    if state.config.mode == ProxyMode::Enforce =>
+                                {
+                                    warn!(path = %path, reason = %reason, "L1 heuristic quarantined — blocking");
+                                    pipeline.outcome = crate::pipeline::PipelineOutcome::Blocked(403);
+                                    return Ok(make_blocked_response(&reason, &slm_verdict));
+                                }
+                                middleware::SlmDecision::Quarantine(reason) => {
+                                    info!(path = %path, reason = %reason, "L1 heuristic quarantine (observe-only)");
+                                }
+                                middleware::SlmDecision::Reject(reason) => {
+                                    info!(path = %path, reason = %reason, "L1 heuristic would reject (observe-only)");
+                                }
+                                middleware::SlmDecision::Admit => {}
+                            }
                         }
                     } else {
-                        match decision {
-                            middleware::SlmDecision::Reject(reason)
-                                if state.config.mode == ProxyMode::Enforce =>
-                            {
-                                warn!(path = %path, reason = %reason, "SLM fast-layer rejected request");
-                                pipeline.outcome = crate::pipeline::PipelineOutcome::Blocked(403);
-                                return Ok(make_blocked_response(&reason, &slm_verdict));
-                            }
-                            middleware::SlmDecision::Quarantine(reason)
-                                if state.config.mode == ProxyMode::Enforce =>
-                            {
-                                warn!(path = %path, reason = %reason, "SLM fast-layer quarantined — blocking in enforce mode");
-                                pipeline.outcome = crate::pipeline::PipelineOutcome::Blocked(403);
-                                return Ok(make_blocked_response(&reason, &slm_verdict));
-                            }
-                            middleware::SlmDecision::Quarantine(reason) => {
-                                info!(path = %path, reason = %reason, "SLM fast-layer quarantine");
-                            }
-                            middleware::SlmDecision::Reject(reason) => {
-                                info!(path = %path, reason = %reason, "SLM fast-layer would reject (observe-only)");
-                            }
-                            middleware::SlmDecision::Admit => {}
+                        // L2 classifier caught it — advisory only, pass to L3 for final decision.
+                        // L2's verdict is recorded but does NOT block. L3 decides.
+                        info!(path = %path, engine = %engine, "L2 classifier flagged — passing to L3 for final decision");
+
+                        // Store classifier result for the dashboard
+                        if let Some(ref v) = verdict {
+                            pipeline.slm_fast = Some(crate::pipeline::SlmStepResult {
+                                layer: "fast".to_string(),
+                                decision: v.action.clone(),
+                                verdict: verdict.clone(),
+                            });
                         }
-                    } // end non-deferred block
+
+                        // L2 caught but L3 decides — clear the advisory so L3
+                        // judges independently without L2's bias. L3 sees
+                        // "Layer 2: clean, likely safe" and makes its own call.
+                        classifier_advisory_outer = None;
+
+                        // Record classifier timing in verdict for dashboard
+                        slm_verdict = Some(middleware::SlmVerdict {
+                            action: "admit".to_string(),
+                            classifier_ms: fast_classifier_ms,
+                            classifier_advisory: Some(format!(
+                                "L2 flagged (prob={}) — overridden by L3",
+                                verdict.as_ref().map(|v| v.confidence.to_string()).unwrap_or_default()
+                            )),
+                            ..Default::default()
+                        });
+                        // Fall through to L3 deep analysis (same as clean fast-layer path)
+                        slm_deferred_content = Some(screen_content.clone());
+                    }
                 } else {
                     // Phase 2: Fast layers clean — deep SLM timing depends on trust level.
                     //
