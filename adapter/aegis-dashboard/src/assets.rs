@@ -1320,6 +1320,8 @@ async function showTraceDetail(id){
       const label=l3.verdict==='dangerous'?'DANGEROUS':'SAFE';
       const scoreStr=' · '+Math.round(l3.score)+'/10000';
       slmBody+='<span class="slm-stage" style="min-width:130px"><b style="color:#8b949e;font-size:10px">3. DEEP SLM</b><br><span style="color:'+col+';font-weight:600">'+label+'</span>'+scoreStr+'<br><span style="color:#484f58">'+l3.ms+'ms</span></span>';
+    }else if(l1&&l1.verdict==='dangerous'){
+      slmBody+='<span class="slm-stage" style="min-width:90px"><b style="color:#8b949e;font-size:10px">3. DEEP SLM</b><br><span style="color:#484f58">skipped (L1 caught)</span></span>';
     }else{
       slmBody+='<span class="slm-stage" style="min-width:90px"><b style="color:#8b949e;font-size:10px">3. DEEP SLM</b><br><span style="color:#484f58">pending</span></span>';
     }

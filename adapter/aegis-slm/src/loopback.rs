@@ -199,6 +199,9 @@ pub fn screen_fast_layers(
     if let Some((true, prob)) = classifier_signal
         && prob > CLASSIFIER_QUARANTINE_THRESHOLD
     {
+        // Always record the classifier result for per-layer visibility
+        classifier_advisory = Some(format!("prompt_guard: MALICIOUS (prob={prob:.4})"));
+
         if classifier_blocking {
             info!(
                 prob,
@@ -211,9 +214,6 @@ pub fn screen_fast_layers(
                 prob,
                 "Layer 2 CLASSIFIER: suspicious (advisory, trusted channel)"
             );
-            classifier_advisory = Some(format!(
-                "prompt_guard: MALICIOUS (prob={prob:.4}) — advisory, trusted channel"
-            ));
         }
     }
 
