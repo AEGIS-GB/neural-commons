@@ -955,15 +955,14 @@ async fn forward_request(
         None
     };
 
-    // SLM verdict — populated by the SLM hook below, used by traffic recorder
+    // Screening state — accumulates all layer results. ONE source of truth.
+    let mut screening = middleware::ScreeningState::default();
+    // SLM verdict — built from screening state at the convergence point
     let mut slm_verdict: Option<middleware::SlmVerdict> = None;
     // Deferred SLM content — for trusted channels, deep SLM runs after response
     let mut slm_deferred_content: Option<String> = None;
     // Classifier advisory — hoisted to outer scope so deferred paths can use it
     let mut classifier_advisory_outer: Option<String> = None;
-    // Per-layer results — single source of truth for dashboard/CLI/evidence
-    let mut layer_l1: Option<middleware::LayerResult> = None;
-    let mut layer_l2: Option<middleware::LayerResult> = None;
 
     // Run pre-request middleware (skip in pass-through mode)
     if state.config.mode != ProxyMode::PassThrough {
@@ -1113,91 +1112,47 @@ async fn forward_request(
                 // Hoist to outer scope for deferred paths
                 classifier_advisory_outer = classifier_advisory.clone();
 
-                // ── Populate per-layer results (single source of truth) ──
-                // L1 + L2 always run together. Extract their results regardless
-                // of which layer "won" the fast-layer decision.
+                // ── Record per-layer results into ScreeningState ──
+                // Parse L2 probability from advisory string (used by both catch/clean paths)
+                let l2_prob = classifier_advisory
+                    .as_ref()
+                    .and_then(|a| {
+                        a.find("prob=").map(|i| {
+                            let s = &a[i + 5..];
+                            let end = s.find(')').unwrap_or(s.len());
+                            s[..end].parse::<f64>().unwrap_or(0.0)
+                        })
+                    })
+                    .unwrap_or(0.0);
+
                 if let Some((_, ref verdict)) = fast_result {
                     if let Some(v) = verdict.as_ref() {
-                        // L1 heuristic result
                         let l1_dangerous = v.engine == "heuristic"
                             && (v.action == "reject" || v.action == "quarantine");
-                        layer_l1 = Some(middleware::LayerResult {
-                            verdict: if l1_dangerous {
-                                "dangerous".into()
-                            } else {
-                                "safe".into()
-                            },
-                            score: if l1_dangerous {
+                        screening.record_l1(
+                            l1_dangerous,
+                            if l1_dangerous {
                                 v.threat_score as f64
                             } else {
                                 0.0
                             },
-                            ms: v.pass_a_ms.unwrap_or(0),
-                            detail: if l1_dangerous { v.reason.clone() } else { None },
-                        });
-                        // L2 classifier result
-                        if let Some(cms) = v.classifier_ms {
-                            let l2_prob = classifier_advisory
-                                .as_ref()
-                                .and_then(|a| {
-                                    a.find("prob=").map(|i| {
-                                        let s = &a[i + 5..];
-                                        let end = s.find(')').unwrap_or(s.len());
-                                        s[..end].parse::<f64>().unwrap_or(0.0)
-                                    })
-                                })
-                                .unwrap_or(0.0);
-                            let l2_dangerous = l2_prob > 0.5;
-                            layer_l2 = Some(middleware::LayerResult {
-                                verdict: if l2_dangerous {
-                                    "dangerous".into()
-                                } else {
-                                    "safe".into()
-                                },
-                                score: l2_prob,
-                                ms: cms,
-                                detail: classifier_advisory.clone(),
-                            });
-                        }
+                            v.pass_a_ms.unwrap_or(0),
+                            if l1_dangerous { v.reason.clone() } else { None },
+                        );
+                        screening.record_l2(
+                            l2_prob,
+                            v.classifier_ms.unwrap_or(0),
+                            classifier_advisory.clone(),
+                        );
                     }
                 } else {
-                    // Fast layers returned None (both clean)
-                    layer_l1 = Some(middleware::LayerResult {
-                        verdict: "safe".into(),
-                        score: 0.0,
-                        ms: 0, // timing not available when clean
-                        detail: None,
-                    });
-                    if let Some(cms) = fast_classifier_ms {
-                        let l2_prob = classifier_advisory
-                            .as_ref()
-                            .and_then(|a| {
-                                a.find("prob=").map(|i| {
-                                    let s = &a[i + 5..];
-                                    let end = s.find(')').unwrap_or(s.len());
-                                    s[..end].parse::<f64>().unwrap_or(0.0)
-                                })
-                            })
-                            .unwrap_or(0.0);
-                        let l2_dangerous = l2_prob > 0.5;
-                        layer_l2 = Some(middleware::LayerResult {
-                            verdict: if l2_dangerous {
-                                "dangerous".into()
-                            } else {
-                                "safe".into()
-                            },
-                            score: l2_prob,
-                            ms: cms,
-                            detail: classifier_advisory.clone(),
-                        });
-                    } else {
-                        layer_l2 = Some(middleware::LayerResult {
-                            verdict: "safe".into(),
-                            score: 0.0,
-                            ms: 0,
-                            detail: None,
-                        });
-                    }
+                    // Fast layers clean
+                    screening.record_l1(false, 0.0, 0, None);
+                    screening.record_l2(
+                        l2_prob,
+                        fast_classifier_ms.unwrap_or(0),
+                        classifier_advisory.clone(),
+                    );
                 }
 
                 if let Some((decision, verdict)) = fast_result {
@@ -1370,27 +1325,31 @@ async fn forward_request(
                     }
                 }
 
-                // Stamp channel trust + per-layer results onto the verdict.
-                // This is the single convergence point — all paths lead here.
-                // ALWAYS create a verdict if screening ran, even if all layers pass.
-                if slm_verdict.is_none() {
-                    slm_verdict = Some(middleware::SlmVerdict {
-                        action: "admit".to_string(),
-                        ..Default::default()
-                    });
+                // ── Single convergence point: build verdict from ScreeningState ──
+                screening.channel = req_info.channel_trust.channel.clone();
+                screening.channel_user = req_info.channel_trust.user.clone();
+                screening.channel_trust_level =
+                    Some(format!("{:?}", req_info.channel_trust.trust_level).to_lowercase());
+                let mut final_verdict = screening.to_verdict();
+                // Merge enrichment data from hook-built verdict (annotations, intent, etc.)
+                if let Some(ref existing) = slm_verdict {
+                    if final_verdict.intent.is_empty() {
+                        final_verdict.intent = existing.intent.clone();
+                    }
+                    if final_verdict.confidence == 0 {
+                        final_verdict.confidence = existing.confidence;
+                    }
+                    final_verdict.annotation_count = existing.annotation_count;
+                    final_verdict.annotations = existing.annotations.clone();
+                    final_verdict.explanation = existing.explanation.clone();
+                    final_verdict.holster_profile = existing.holster_profile.clone();
+                    final_verdict.holster_action = existing.holster_action.clone();
+                    final_verdict.threshold_exceeded = existing.threshold_exceeded;
+                    final_verdict.screened_text = existing.screened_text.clone();
+                    final_verdict.dimensions = existing.dimensions.clone();
+                    final_verdict.reason = existing.reason.clone();
                 }
-                stamp_trust(&mut slm_verdict);
-                debug!(
-                    has_l1 = layer_l1.is_some(),
-                    has_l2 = layer_l2.is_some(),
-                    has_verdict = slm_verdict.is_some(),
-                    "stamping per-layer results"
-                );
-                if let Some(ref mut v) = slm_verdict {
-                    v.l1 = layer_l1.clone();
-                    v.l2 = layer_l2.clone();
-                    // L3 is populated by deferred path (updated via traffic_slm_updater)
-                }
+                slm_verdict = Some(final_verdict);
             }
         }
     }

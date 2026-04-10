@@ -222,6 +222,109 @@ pub struct SlmVerdict {
     pub l3: Option<LayerResult>,
 }
 
+/// Accumulates layer results during the screening pipeline.
+/// Each layer writes to this struct as it runs. At the end,
+/// `to_verdict()` produces the final SlmVerdict — ONE conversion point.
+#[derive(Debug, Clone, Default)]
+pub struct ScreeningState {
+    pub l1: Option<LayerResult>,
+    pub l2: Option<LayerResult>,
+    pub l3: Option<LayerResult>,
+    pub channel: Option<String>,
+    pub channel_user: Option<String>,
+    pub channel_trust_level: Option<String>,
+}
+
+impl ScreeningState {
+    pub fn record_l1(&mut self, dangerous: bool, score: f64, ms: u64, detail: Option<String>) {
+        self.l1 = Some(LayerResult {
+            verdict: if dangerous {
+                "dangerous".into()
+            } else {
+                "safe".into()
+            },
+            score,
+            ms,
+            detail,
+        });
+    }
+
+    pub fn record_l2(&mut self, prob: f64, ms: u64, detail: Option<String>) {
+        self.l2 = Some(LayerResult {
+            verdict: if prob > 0.5 {
+                "dangerous".into()
+            } else {
+                "safe".into()
+            },
+            score: prob,
+            ms,
+            detail,
+        });
+    }
+
+    pub fn record_l3(&mut self, dangerous: bool, score: f64, ms: u64, detail: Option<String>) {
+        self.l3 = Some(LayerResult {
+            verdict: if dangerous {
+                "dangerous".into()
+            } else {
+                "safe".into()
+            },
+            score,
+            ms,
+            detail,
+        });
+    }
+
+    /// Produce the final verdict from accumulated layer results.
+    /// Strategy B: L1 authoritative, L2 advisory, L3 final.
+    pub fn to_verdict(&self) -> SlmVerdict {
+        // Determine final action from cascade logic
+        let l1_dangerous = self
+            .l1
+            .as_ref()
+            .map(|l| l.verdict == "dangerous")
+            .unwrap_or(false);
+        let l3_dangerous = self
+            .l3
+            .as_ref()
+            .map(|l| l.verdict == "dangerous")
+            .unwrap_or(false);
+
+        let (action, threat_score, engine) = if l1_dangerous {
+            // L1 authoritative
+            let score = self.l1.as_ref().map(|l| l.score as u32).unwrap_or(0);
+            ("reject".to_string(), score, "heuristic".to_string())
+        } else if l3_dangerous {
+            // L3 final decision
+            let score = self.l3.as_ref().map(|l| l.score as u32).unwrap_or(0);
+            ("reject".to_string(), score, "ollama".to_string())
+        } else {
+            ("admit".to_string(), 0, String::new())
+        };
+
+        let total_ms = self.l1.as_ref().map(|l| l.ms).unwrap_or(0)
+            + self.l2.as_ref().map(|l| l.ms).unwrap_or(0)
+            + self.l3.as_ref().map(|l| l.ms).unwrap_or(0);
+
+        SlmVerdict {
+            action,
+            threat_score,
+            engine,
+            screening_ms: total_ms,
+            pass_a_ms: self.l1.as_ref().map(|l| l.ms),
+            classifier_ms: self.l2.as_ref().map(|l| l.ms),
+            classifier_advisory: self.l2.as_ref().and_then(|l| l.detail.clone()),
+            l1: self.l1.clone(),
+            l2: self.l2.clone(),
+            l3: self.l3.clone(),
+            channel: self.channel.clone(),
+            channel_user: self.channel_user.clone(),
+            channel_trust_level: self.channel_trust_level.clone(),
+            ..Default::default()
+        }
+    }
+}
+
 /// Result from a single screening layer.
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct LayerResult {
