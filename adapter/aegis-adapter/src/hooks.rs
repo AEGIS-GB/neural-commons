@@ -669,9 +669,9 @@ impl SlmHook for SlmHookImpl {
             .await;
 
             match result {
-                Ok((Some(screening_result), _advisory, cls_ms)) => (
+                Ok((Some(screening_result), advisory, cls_ms)) => (
                     Some(self.record_and_alert(&screening_result, content, request_id)),
-                    None,
+                    advisory, // preserve classifier advisory for per-layer visibility
                     cls_ms,
                 ),
                 Ok((None, advisory, cls_ms)) => {
