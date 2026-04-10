@@ -446,9 +446,9 @@ fn extract_user_content_from_json(body: &str, max_chars: usize) -> String {
     if let Ok(json) = serde_json::from_str::<serde_json::Value>(body) {
         // --- "messages" array (OpenAI/Anthropic chat format) ---
         if let Some(messages) = json.get("messages").and_then(|m| m.as_array()) {
-            let last_user_idx = messages.iter().rposition(|msg| {
-                msg.get("role").and_then(|r| r.as_str()) == Some("user")
-            });
+            let last_user_idx = messages
+                .iter()
+                .rposition(|msg| msg.get("role").and_then(|r| r.as_str()) == Some("user"));
 
             if let Some(idx) = last_user_idx {
                 let mut parts = Vec::new();
@@ -1114,10 +1114,7 @@ async fn forward_request(
                     // L3 (deep SLM) makes the final decision when L2 flags.
                     // This prevents L2 over-defense from causing false positives on
                     // benign trigger words ("forget", "ignore", "override").
-                    let engine = verdict
-                        .as_ref()
-                        .map(|v| v.engine.as_str())
-                        .unwrap_or("");
+                    let engine = verdict.as_ref().map(|v| v.engine.as_str()).unwrap_or("");
                     let is_heuristic_catch = engine == "heuristic";
 
                     if is_heuristic_catch {
@@ -1146,14 +1143,16 @@ async fn forward_request(
                                     if state.config.mode == ProxyMode::Enforce =>
                                 {
                                     warn!(path = %path, reason = %reason, "L1 heuristic rejected request");
-                                    pipeline.outcome = crate::pipeline::PipelineOutcome::Blocked(403);
+                                    pipeline.outcome =
+                                        crate::pipeline::PipelineOutcome::Blocked(403);
                                     return Ok(make_blocked_response(&reason, &slm_verdict));
                                 }
                                 middleware::SlmDecision::Quarantine(reason)
                                     if state.config.mode == ProxyMode::Enforce =>
                                 {
                                     warn!(path = %path, reason = %reason, "L1 heuristic quarantined — blocking");
-                                    pipeline.outcome = crate::pipeline::PipelineOutcome::Blocked(403);
+                                    pipeline.outcome =
+                                        crate::pipeline::PipelineOutcome::Blocked(403);
                                     return Ok(make_blocked_response(&reason, &slm_verdict));
                                 }
                                 middleware::SlmDecision::Quarantine(reason) => {
@@ -1190,7 +1189,10 @@ async fn forward_request(
                             classifier_ms: fast_classifier_ms,
                             classifier_advisory: Some(format!(
                                 "L2 flagged (prob={}) — overridden by L3",
-                                verdict.as_ref().map(|v| v.confidence.to_string()).unwrap_or_default()
+                                verdict
+                                    .as_ref()
+                                    .map(|v| v.confidence.to_string())
+                                    .unwrap_or_default()
                             )),
                             ..Default::default()
                         });

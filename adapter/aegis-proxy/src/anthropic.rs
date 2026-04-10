@@ -140,10 +140,7 @@ pub fn extract_screen_payload(req: &AnthropicRequest) -> AnthropicScreenPayload 
 /// System prompt, assistant, and earlier user messages are skipped.
 pub fn screen_payload_to_string(payload: &AnthropicScreenPayload) -> String {
     // Find the last user message
-    let last_user_idx = payload
-        .messages
-        .iter()
-        .rposition(|msg| msg.role == "user");
+    let last_user_idx = payload.messages.iter().rposition(|msg| msg.role == "user");
 
     let Some(idx) = last_user_idx else {
         return String::new();

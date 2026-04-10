@@ -252,9 +252,7 @@ pub fn screen_fast_layers(
     if classifier_caught {
         return (
             Some(ScreeningResult {
-                decision: ScreeningDecision::Quarantine(format!(
-                    "prompt_guard: MALICIOUS"
-                )),
+                decision: ScreeningDecision::Quarantine(format!("prompt_guard: MALICIOUS")),
                 enriched: None,
                 holster: None,
                 timing: ScreeningTiming {
