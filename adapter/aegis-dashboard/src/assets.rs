@@ -1287,61 +1287,51 @@ async function showTraceDetail(id){
     // Step 3: SLM Screening Pipeline
     // Pipeline: heuristic (1) → classifier (2) → deep SLM (3). Short-circuits on catch.
     const slmCol=slm==='admit'?'fd-ok':slm==='reject'||slm==='quarantine'?'fd-err':'fd-warn';
+    // ── Per-layer results from single source of truth ──
     const sd=e.slm_detail||{};
-    const classifierMs=sd.classifier_ms;
-    const classifierRan=classifierMs!=null;
-    const classifierAdvisory=sd.classifier_advisory||null;
-    const heuristicMs=sd.pass_a_ms;
-    const engine=sd.engine||'';
-    const deferredAction=sd.deferred_action||null;
-    const deferredMs=sd.deferred_ms||null;
+    const l1=sd.l1||null;
+    const l2=sd.l2||null;
+    const l3=sd.l3||null;
     let slmBody='<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:4px">';
-    // Layer 1: Heuristic (regex, <1ms) — cheapest, runs first
-    const heuristicCaught=engine==='heuristic'&&(slm==='reject'||slm==='quarantine');
-    if(heuristicCaught){
-      slmBody+='<span class="slm-stage" style="min-width:100px"><b style="color:#8b949e;font-size:10px">1. HEURISTIC</b><br><span style="color:#f85149;font-weight:600">DANGEROUS</span> · '+threat+'/10000<br><span style="color:#484f58">'+(heuristicMs||0)+'ms</span></span>';
+
+    // Layer 1: Heuristic
+    if(l1){
+      const col=l1.verdict==='dangerous'?'#f85149':'#3fb950';
+      const label=l1.verdict==='dangerous'?'DANGEROUS':'SAFE';
+      const scoreStr=l1.verdict==='dangerous'?' · '+Math.round(l1.score)+'/10000':'';
+      slmBody+='<span class="slm-stage" style="min-width:100px"><b style="color:#8b949e;font-size:10px">1. HEURISTIC</b><br><span style="color:'+col+';font-weight:600">'+label+'</span>'+scoreStr+'<br><span style="color:#484f58">'+l1.ms+'ms</span></span>';
     }else{
-      slmBody+='<span class="slm-stage" style="min-width:100px"><b style="color:#8b949e;font-size:10px">1. HEURISTIC</b><br><span style="color:#3fb950">SAFE</span><br><span style="color:#484f58">'+(heuristicMs!=null?heuristicMs+'ms':'')+'</span></span>';
+      slmBody+='<span class="slm-stage" style="min-width:100px"><b style="color:#8b949e;font-size:10px">1. HEURISTIC</b><br><span style="color:#484f58">n/a</span></span>';
     }
-    // Layer 2: Classifier (ProtectAI DeBERTa, ~15ms) — always runs alongside L1
-    const classifierCaught=engine==='prompt-guard'&&(slm==='reject'||slm==='quarantine');
-    if(classifierCaught){
-      slmBody+='<span class="slm-stage" style="min-width:110px"><b style="color:#8b949e;font-size:10px">2. CLASSIFIER</b><br><span style="color:#f85149;font-weight:600">DANGEROUS</span><br><span style="color:#484f58">'+classifierMs+'ms</span></span>';
-    }else if(classifierAdvisory){
-      const probMatch=classifierAdvisory.match(/prob=([0-9.]+)/);
-      const probStr=probMatch?'prob='+parseFloat(probMatch[1]).toFixed(2):'detected';
-      slmBody+='<span class="slm-stage" style="min-width:110px"><b style="color:#8b949e;font-size:10px">2. CLASSIFIER</b><br><span style="color:#f85149;font-weight:600">DANGEROUS</span> · '+probStr+'<br><span style="color:#484f58">'+(classifierMs||'~5')+'ms</span></span>';
-    }else if(classifierRan){
-      slmBody+='<span class="slm-stage" style="min-width:110px"><b style="color:#8b949e;font-size:10px">2. CLASSIFIER</b><br><span style="color:#3fb950">SAFE</span><br><span style="color:#484f58">'+classifierMs+'ms</span></span>';
+
+    // Layer 2: Classifier
+    if(l2){
+      const col=l2.verdict==='dangerous'?'#f85149':'#3fb950';
+      const label=l2.verdict==='dangerous'?'DANGEROUS':'SAFE';
+      const scoreStr=l2.verdict==='dangerous'?' · prob='+l2.score.toFixed(2):'';
+      slmBody+='<span class="slm-stage" style="min-width:110px"><b style="color:#8b949e;font-size:10px">2. CLASSIFIER</b><br><span style="color:'+col+';font-weight:600">'+label+'</span>'+scoreStr+'<br><span style="color:#484f58">'+l2.ms+'ms</span></span>';
     }else{
       slmBody+='<span class="slm-stage" style="min-width:110px"><b style="color:#8b949e;font-size:10px">2. CLASSIFIER</b><br><span style="color:#484f58">n/a</span></span>';
     }
-    // Layer 3: Deep SLM — show verdict (SAFE/DANGEROUS), not policy action
-    const deepCaught=(engine==='openai'||engine==='ollama')&&(slm==='reject'||slm==='quarantine');
-    const deepDangerous=deferredAction==='reject'||deferredAction==='quarantine';
-    const deepSafe=deferredAction==='admit';
-    if(classifierCaught||heuristicCaught){
-      slmBody+='<span class="slm-stage" style="min-width:90px"><b style="color:#8b949e;font-size:10px">3. DEEP SLM</b><br><span style="color:#484f58">skipped</span></span>';
-    }else if(deepCaught){
-      slmBody+='<span class="slm-stage" style="min-width:130px"><b style="color:#8b949e;font-size:10px">3. DEEP SLM</b><br><span style="color:#f85149;font-weight:600">DANGEROUS</span> · '+threat+'/10000<br><span style="color:#484f58">'+slmMs+'ms</span></span>';
-    }else if(deepDangerous){
-      slmBody+='<span class="slm-stage" style="min-width:130px"><b style="color:#8b949e;font-size:10px">3. DEEP SLM</b><br><span style="color:#f85149;font-weight:600">DANGEROUS</span> · '+threat+'/10000<br><span style="color:#484f58">'+(deferredMs||slmMs)+'ms</span></span>';
-    }else if(deepSafe){
-      slmBody+='<span class="slm-stage" style="min-width:130px"><b style="color:#8b949e;font-size:10px">3. DEEP SLM</b><br><span style="color:#3fb950">SAFE</span> · '+threat+'/10000<br><span style="color:#484f58">'+(deferredMs||slmMs)+'ms</span></span>';
-    }else if(slmMs>0){
-      // Has timing but no deferred result yet — show what we know
-      const slmVerdict=threat>0?'<span style="color:#f85149;font-weight:600">DANGEROUS</span>':'<span style="color:#3fb950">SAFE</span>';
-      slmBody+='<span class="slm-stage" style="min-width:130px"><b style="color:#8b949e;font-size:10px">3. DEEP SLM</b><br>'+slmVerdict+' · '+threat+'/10000<br><span style="color:#484f58">'+slmMs+'ms</span></span>';
+
+    // Layer 3: Deep SLM
+    if(l3){
+      const col=l3.verdict==='dangerous'?'#f85149':'#3fb950';
+      const label=l3.verdict==='dangerous'?'DANGEROUS':'SAFE';
+      const scoreStr=' · '+Math.round(l3.score)+'/10000';
+      slmBody+='<span class="slm-stage" style="min-width:130px"><b style="color:#8b949e;font-size:10px">3. DEEP SLM</b><br><span style="color:'+col+';font-weight:600">'+label+'</span>'+scoreStr+'<br><span style="color:#484f58">'+l3.ms+'ms</span></span>';
     }else{
       slmBody+='<span class="slm-stage" style="min-width:90px"><b style="color:#8b949e;font-size:10px">3. DEEP SLM</b><br><span style="color:#484f58">pending</span></span>';
     }
+
     slmBody+='</div>';
-    // Title: show enforcement action (blocked/admitted) separately
+    // Title: show enforcement action
+    const anyDangerous=(l1&&l1.verdict==='dangerous')||(l2&&l2.verdict==='dangerous')||(l3&&l3.verdict==='dangerous');
     let slmTitle;
     if(blocked){slmTitle='Screening — BLOCKED';}
-    else if(heuristicCaught||classifierCaught||deepCaught||deepDangerous){slmTitle='Screening — DETECTED (admitted, trust='+e.channel_trust_level+')';}
+    else if(anyDangerous){slmTitle='Screening — DETECTED (trust='+e.channel_trust_level+')';}
     else{slmTitle='Screening — SAFE';}
-    h+=flowStepRich(slmCol,'3',slmTitle,slmBody,'+'+slmMs+'ms');
+    h+=flowStepRich(slmCol,'3',slmTitle,slmBody,'+'+(l3?l3.ms:(l1?l1.ms:0))+'ms');
     if(blocked){
       h+=flowStep('fd-err','✕','Request Blocked','Returned HTTP 403 to client — never forwarded to upstream','+'+dur+'ms');
     }else{

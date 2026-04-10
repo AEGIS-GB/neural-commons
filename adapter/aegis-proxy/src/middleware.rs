@@ -207,6 +207,33 @@ pub struct SlmVerdict {
     /// Shows what the classifier detected even though the final decision was admit.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub classifier_advisory: Option<String>,
+
+    // ── Per-layer results (single source of truth) ──────────────────
+    // Every layer's result is stored here regardless of which layer "won."
+    // The dashboard, CLI, and evidence all read from these fields.
+    /// Layer 1 (Heuristic) result.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub l1: Option<LayerResult>,
+    /// Layer 2 (Classifier) result.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub l2: Option<LayerResult>,
+    /// Layer 3 (Deep SLM) result.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub l3: Option<LayerResult>,
+}
+
+/// Result from a single screening layer.
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+pub struct LayerResult {
+    /// "safe" or "dangerous"
+    pub verdict: String,
+    /// Confidence: probability (0.0-1.0) for classifier, threat_score (0-10000) for others.
+    pub score: f64,
+    /// Inference time in milliseconds.
+    pub ms: u64,
+    /// Human-readable detail (patterns matched, reason, etc.)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
 }
 
 /// A detected pattern annotation with excerpt.
