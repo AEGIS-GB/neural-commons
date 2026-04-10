@@ -1961,6 +1961,9 @@ async fn forward_request(
 
     // Record traffic IMMEDIATELY — recording is a first citizen.
     // If SLM is deferred (trusted), record now with slm=None, update when SLM finishes.
+    let slm_detail_json = slm_verdict
+        .as_ref()
+        .and_then(|v| serde_json::to_value(v).ok());
     let traffic_entry_id = if let Some(ref recorder) = state.traffic_recorder {
         recorder(
             method.as_ref(),
@@ -1975,9 +1978,7 @@ async fn forward_request(
             Some(&format!("{:?}", req_info.channel_trust.trust_level).to_lowercase()),
             extract_model_from_body(&body_bytes).as_deref(),
             req_info.channel_trust.channel.as_deref(),
-            slm_verdict
-                .as_ref()
-                .and_then(|v| serde_json::to_value(v).ok()),
+            slm_detail_json,
             response_screen_result
                 .as_ref()
                 .and_then(|r| serde_json::to_value(r).ok()),
