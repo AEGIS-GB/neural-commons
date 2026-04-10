@@ -961,6 +961,9 @@ async fn forward_request(
     let mut slm_deferred_content: Option<String> = None;
     // Classifier advisory — hoisted to outer scope so deferred paths can use it
     let mut classifier_advisory_outer: Option<String> = None;
+    // Per-layer results — single source of truth for dashboard/CLI/evidence
+    let mut layer_l1: Option<middleware::LayerResult> = None;
+    let mut layer_l2: Option<middleware::LayerResult> = None;
 
     // Run pre-request middleware (skip in pass-through mode)
     if state.config.mode != ProxyMode::PassThrough {
@@ -1109,6 +1112,94 @@ async fn forward_request(
                     .await;
                 // Hoist to outer scope for deferred paths
                 classifier_advisory_outer = classifier_advisory.clone();
+
+                // ── Populate per-layer results (single source of truth) ──
+                // L1 + L2 always run together. Extract their results regardless
+                // of which layer "won" the fast-layer decision.
+                if let Some((_, ref verdict)) = fast_result {
+                    if let Some(v) = verdict.as_ref() {
+                        // L1 heuristic result
+                        let l1_dangerous = v.engine == "heuristic"
+                            && (v.action == "reject" || v.action == "quarantine");
+                        layer_l1 = Some(middleware::LayerResult {
+                            verdict: if l1_dangerous {
+                                "dangerous".into()
+                            } else {
+                                "safe".into()
+                            },
+                            score: if l1_dangerous {
+                                v.threat_score as f64
+                            } else {
+                                0.0
+                            },
+                            ms: v.pass_a_ms.unwrap_or(0),
+                            detail: if l1_dangerous { v.reason.clone() } else { None },
+                        });
+                        // L2 classifier result
+                        if let Some(cms) = v.classifier_ms {
+                            let l2_prob = classifier_advisory
+                                .as_ref()
+                                .and_then(|a| {
+                                    a.find("prob=").map(|i| {
+                                        let s = &a[i + 5..];
+                                        let end = s.find(')').unwrap_or(s.len());
+                                        s[..end].parse::<f64>().unwrap_or(0.0)
+                                    })
+                                })
+                                .unwrap_or(0.0);
+                            let l2_dangerous = l2_prob > 0.5;
+                            layer_l2 = Some(middleware::LayerResult {
+                                verdict: if l2_dangerous {
+                                    "dangerous".into()
+                                } else {
+                                    "safe".into()
+                                },
+                                score: l2_prob,
+                                ms: cms,
+                                detail: classifier_advisory.clone(),
+                            });
+                        }
+                    }
+                } else {
+                    // Fast layers returned None (both clean)
+                    layer_l1 = Some(middleware::LayerResult {
+                        verdict: "safe".into(),
+                        score: 0.0,
+                        ms: 0, // timing not available when clean
+                        detail: None,
+                    });
+                    if let Some(cms) = fast_classifier_ms {
+                        let l2_prob = classifier_advisory
+                            .as_ref()
+                            .and_then(|a| {
+                                a.find("prob=").map(|i| {
+                                    let s = &a[i + 5..];
+                                    let end = s.find(')').unwrap_or(s.len());
+                                    s[..end].parse::<f64>().unwrap_or(0.0)
+                                })
+                            })
+                            .unwrap_or(0.0);
+                        let l2_dangerous = l2_prob > 0.5;
+                        layer_l2 = Some(middleware::LayerResult {
+                            verdict: if l2_dangerous {
+                                "dangerous".into()
+                            } else {
+                                "safe".into()
+                            },
+                            score: l2_prob,
+                            ms: cms,
+                            detail: classifier_advisory.clone(),
+                        });
+                    } else {
+                        layer_l2 = Some(middleware::LayerResult {
+                            verdict: "safe".into(),
+                            score: 0.0,
+                            ms: 0,
+                            detail: None,
+                        });
+                    }
+                }
+
                 if let Some((decision, verdict)) = fast_result {
                     // Strategy B: L1 (heuristic) is authoritative, L2 (classifier) is advisory.
                     // L3 (deep SLM) makes the final decision when L2 flags.
@@ -1279,11 +1370,27 @@ async fn forward_request(
                     }
                 }
 
-                // Stamp channel trust once, after all SLM paths converge.
-                // Previously called twice (after fast and after deep), which
-                // was redundant and confusing. Early-return (blocked) paths
-                // carry trust via RecordingContext from req_info.channel_trust.
+                // Stamp channel trust + per-layer results onto the verdict.
+                // This is the single convergence point — all paths lead here.
+                // ALWAYS create a verdict if screening ran, even if all layers pass.
+                if slm_verdict.is_none() {
+                    slm_verdict = Some(middleware::SlmVerdict {
+                        action: "admit".to_string(),
+                        ..Default::default()
+                    });
+                }
                 stamp_trust(&mut slm_verdict);
+                debug!(
+                    has_l1 = layer_l1.is_some(),
+                    has_l2 = layer_l2.is_some(),
+                    has_verdict = slm_verdict.is_some(),
+                    "stamping per-layer results"
+                );
+                if let Some(ref mut v) = slm_verdict {
+                    v.l1 = layer_l1.clone();
+                    v.l2 = layer_l2.clone();
+                    // L3 is populated by deferred path (updated via traffic_slm_updater)
+                }
             }
         }
     }
@@ -1702,9 +1809,23 @@ async fn forward_request(
             ));
             let updater = state.traffic_slm_updater.clone();
             tokio::spawn(async move {
-                let (_decision, verdict) = slm_clone
+                let (_decision, mut verdict) = slm_clone
                     .screen_deep(&content, deferred_advisory, trust_ctx, &deferred_request_id)
                     .await;
+                // Stamp L3 result onto verdict
+                if let Some(ref mut v) = verdict {
+                    let l3_dangerous = v.action == "reject" || v.action == "quarantine";
+                    v.l3 = Some(middleware::LayerResult {
+                        verdict: if l3_dangerous {
+                            "dangerous".into()
+                        } else {
+                            "safe".into()
+                        },
+                        score: v.threat_score as f64,
+                        ms: v.screening_ms,
+                        detail: v.reason.clone(),
+                    });
+                }
                 info!(
                     channel = ?trust_channel,
                     trust = ?trust_level,
@@ -1884,9 +2005,23 @@ async fn forward_request(
         ));
         let updater = state.traffic_slm_updater.clone();
         tokio::spawn(async move {
-            let (_decision, verdict) = slm_clone
+            let (_decision, mut verdict) = slm_clone
                 .screen_deep(&content, deferred_advisory, trust_ctx, &deferred_request_id)
                 .await;
+            // Stamp L3 result onto verdict
+            if let Some(ref mut v) = verdict {
+                let l3_dangerous = v.action == "reject" || v.action == "quarantine";
+                v.l3 = Some(middleware::LayerResult {
+                    verdict: if l3_dangerous {
+                        "dangerous".into()
+                    } else {
+                        "safe".into()
+                    },
+                    score: v.threat_score as f64,
+                    ms: v.screening_ms,
+                    detail: v.reason.clone(),
+                });
+            }
             info!(
                 channel = ?trust_channel,
                 trust = ?trust_level,

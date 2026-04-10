@@ -539,6 +539,11 @@ impl SlmHookImpl {
             channel_user: None,
             channel_trust_level: None,
             classifier_advisory: None,
+            // Per-layer results populated by proxy.rs (not here — hook doesn't
+            // know which layer produced this result in the cascade context)
+            l1: None,
+            l2: None,
+            l3: None,
         };
 
         // Channel trust is stamped by the `stamp_trust` closure in proxy.rs

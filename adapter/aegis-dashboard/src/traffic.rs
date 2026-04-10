@@ -182,11 +182,11 @@ impl TrafficStore {
                 .get("threat_score")
                 .and_then(|v| v.as_u64())
                 .map(|v| v as u32);
-            // Merge slm_detail: keep fast-layer data, add deferred fields
+            // Merge slm_detail: keep fast-layer data (l1, l2), add deferred L3 result
             if let Some(existing) = &entry.slm_detail {
                 let mut merged = existing.clone();
                 if let Some(obj) = merged.as_object_mut() {
-                    // Add deferred screening time
+                    // Add deferred L3 result
                     obj.insert(
                         "deferred_ms".to_string(),
                         verdict
@@ -208,6 +208,11 @@ impl TrafficStore {
                             .cloned()
                             .unwrap_or(serde_json::Value::Null),
                     );
+                    // Merge per-layer L3 result from deferred verdict
+                    if let Some(l3) = verdict.get("l3") {
+                        obj.insert("l3".to_string(), l3.clone());
+                    }
+                    // Keep existing l1/l2 from fast-layer recording
                 }
                 entry.slm_detail = Some(merged);
             } else {
