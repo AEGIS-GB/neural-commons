@@ -496,7 +496,7 @@ impl TrustmarkCache {
             .filter(|(id, _)| id.as_str() != exclude)
             .map(|(id, s)| (id.clone(), s.score_bp))
             .collect();
-        entries.sort_by(|a, b| b.1.cmp(&a.1));
+        entries.sort_by_key(|e| std::cmp::Reverse(e.1));
         entries.truncate(n);
         entries
     }
