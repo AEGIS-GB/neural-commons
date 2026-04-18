@@ -144,6 +144,7 @@ fn app_with_all(
 }
 
 fn sample_receipt_json() -> serde_json::Value {
+    // Structural-only — for tests that assert on 400/401 BEFORE verify runs.
     serde_json::json!({
         "id": uuid::Uuid::now_v7().to_string(),
         "type": "api_call",
@@ -153,6 +154,68 @@ fn sample_receipt_json() -> serde_json::Value {
         "payload_hash": "aabbccdd00112233445566778899aabbccddeeff00112233445566778899aabb",
         "sig": "a".repeat(128),
         "receipt_hash": "deadbeef00112233445566778899aabbccddeeff00112233445566778899aabb",
+    })
+}
+
+/// Cryptographically valid genesis receipt signed by `sk`.
+fn signed_receipt_json(sk: &aegis_crypto::ed25519::SigningKey) -> serde_json::Value {
+    use aegis_crypto::ed25519::Signer as _;
+    use sha2::{Digest, Sha256};
+    let pubkey = hex::encode(sk.verifying_key().as_bytes());
+    let id = uuid::Uuid::now_v7();
+    let ts_ms = 1_700_000_000_000i64;
+    let payload_hash = "a".repeat(64);
+    let prev_hash = aegis_schemas::GENESIS_PREV_HASH.to_string();
+    let seq = 1u64;
+    let receipt_type_str = "api_call";
+
+    #[derive(serde::Serialize)]
+    struct Sig<'a> {
+        bot_id: &'a str,
+        id: uuid::Uuid,
+        payload_hash: &'a str,
+        prev_hash: &'a str,
+        seq: u64,
+        ts_ms: i64,
+        #[serde(rename = "type")]
+        receipt_type: &'a str,
+    }
+    let canonical = aegis_crypto::canonicalize(&Sig {
+        bot_id: &pubkey,
+        id,
+        payload_hash: &payload_hash,
+        prev_hash: &prev_hash,
+        seq,
+        ts_ms,
+        receipt_type: receipt_type_str,
+    })
+    .unwrap();
+    let sig = hex::encode(sk.sign(&canonical).to_bytes());
+
+    let core = aegis_schemas::ReceiptCore {
+        id,
+        bot_id: pubkey.clone(),
+        receipt_type: aegis_schemas::ReceiptType::ApiCall,
+        ts_ms,
+        prev_hash: prev_hash.clone(),
+        payload_hash: payload_hash.clone(),
+        seq,
+        sig: sig.clone(),
+    };
+    let canonical_core = aegis_crypto::canonicalize(&core).unwrap();
+    let mut h = Sha256::new();
+    h.update(&canonical_core);
+    let receipt_hash = hex::encode(h.finalize());
+
+    serde_json::json!({
+        "id": id.to_string(),
+        "type": receipt_type_str,
+        "ts_ms": ts_ms,
+        "seq": seq,
+        "prev_hash": prev_hash,
+        "payload_hash": payload_hash,
+        "sig": sig,
+        "receipt_hash": receipt_hash,
     })
 }
 
@@ -281,7 +344,7 @@ async fn tampered_body_rejected() {
 async fn replay_attack_blocked() {
     let replay = Arc::new(ReplayProtection::new());
     let sk = aegis_crypto::ed25519::generate_keypair();
-    let body = serde_json::to_vec(&sample_receipt_json()).unwrap();
+    let body = serde_json::to_vec(&signed_receipt_json(&sk)).unwrap();
     let ts_ms = current_ts_ms();
     let (pubkey, sig, _) = sign_request_with_ts(&sk, "POST", "/evidence", &body, ts_ms);
 
@@ -649,11 +712,15 @@ async fn dead_drop_quota_enforced() {
 
     // Build app with the full dead-drop store
     let nats_bridge: Option<Arc<NatsBridge>> = None;
+    // Sender must be WSS-online to pass the mesh session gate.
+    let wss_registry = Arc::new(WssConnectionRegistry::new());
+    let (tx, _rx) = tokio::sync::mpsc::channel::<String>(8);
+    wss_registry.register(&sender_pub, tx).await;
     let authed = Router::new()
         .route("/mesh/send", post(routes::mesh_send::<MemoryStore>))
         .layer(Extension(store))
         .layer(Extension(nats_bridge))
-        .layer(Extension(Arc::new(WssConnectionRegistry::new())))
+        .layer(Extension(wss_registry))
         .layer(Extension(dead_drop_store))
         .layer(Extension(Arc::new(BotawikiStore::new())))
         .layer(Extension(Arc::new(routes::BotawikiRateLimiter::new())))

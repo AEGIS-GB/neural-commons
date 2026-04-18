@@ -26,8 +26,10 @@ use tokio::sync::RwLock;
 use crate::auth::VerifiedIdentity;
 use crate::botawiki::BotawikiStore;
 use crate::evaluator::EvaluatorService;
+use crate::evidence_verify::verify_submitted_receipt;
 use crate::mesh_routes::{RelayEvent, RelayLog, RelayStats};
 use crate::nats_bridge::{NatsBridge, TrustmarkCache};
+use crate::session_gate::require_mesh_session;
 use crate::store::{EvidenceRecord, EvidenceStore};
 use crate::ws::{DeadDropStore, WssConnectionRegistry};
 
@@ -102,6 +104,23 @@ fn receipt_to_record(
     })
 }
 
+/// Fetch the previous receipt's `receipt_hash` for chain-link verification.
+/// Returns `None` when `seq <= 1` (genesis).
+async fn prev_receipt_hash_for_bot<S: EvidenceStore>(
+    store: &S,
+    bot_pubkey: &str,
+    seq: i64,
+) -> Option<String> {
+    if seq <= 1 {
+        return None;
+    }
+    let records = store.get_for_bot(bot_pubkey).await.ok()?;
+    records
+        .into_iter()
+        .find(|r| r.seq == seq - 1)
+        .map(|r| r.receipt_hash)
+}
+
 /// POST /evidence -- accept a single receipt core from an authenticated adapter.
 pub async fn post_evidence<S: EvidenceStore>(
     Extension(identity): Extension<VerifiedIdentity>,
@@ -113,6 +132,16 @@ pub async fn post_evidence<S: EvidenceStore>(
         return (
             StatusCode::BAD_REQUEST,
             Json(serde_json::json!({ "error": e })),
+        );
+    }
+
+    // Cryptographic verification: sig + receipt_hash + prev_hash chain link.
+    // Blocks forged chains that would otherwise bootstrap TRUSTMARK from nothing.
+    let prev = prev_receipt_hash_for_bot(&store, &identity.pubkey, receipt.seq).await;
+    if let Err(e) = verify_submitted_receipt(&receipt, &identity.pubkey, prev.as_deref()) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": format!("receipt verification failed: {e}") })),
         );
     }
 
@@ -201,6 +230,32 @@ pub async fn post_evidence_batch<S: EvidenceStore>(
                 Json(serde_json::json!({ "error": format!("receipt[{i}]: {e}") })),
             );
         }
+    }
+
+    // Cryptographically verify each receipt (sig + receipt_hash + chain).
+    // Build an in-batch chain: seq N chains from either the previous
+    // in-batch receipt or the last stored receipt for this bot.
+    let stored_records = store
+        .get_for_bot(&identity.pubkey)
+        .await
+        .unwrap_or_default();
+    let mut last_hash_by_seq: HashMap<i64, String> = stored_records
+        .iter()
+        .map(|r| (r.seq, r.receipt_hash.clone()))
+        .collect();
+    let mut sorted: Vec<(usize, &SubmittedReceipt)> = receipts.iter().enumerate().collect();
+    sorted.sort_by_key(|(_, r)| r.seq);
+    for (i, receipt) in &sorted {
+        let prev = last_hash_by_seq.get(&(receipt.seq - 1)).cloned();
+        if let Err(e) = verify_submitted_receipt(receipt, &identity.pubkey, prev.as_deref()) {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({
+                    "error": format!("receipt[{i}] seq={} verification failed: {e}", receipt.seq)
+                })),
+            );
+        }
+        last_hash_by_seq.insert(receipt.seq, receipt.receipt_hash.clone());
     }
 
     // Convert to records
@@ -352,6 +407,18 @@ pub async fn mesh_send<S: EvidenceStore>(
     Extension(botawiki_store): Extension<Arc<aegis_botawiki::BotawikiStore>>,
     Json(payload): Json<MeshSendRequest>,
 ) -> impl IntoResponse {
+    // Mesh writes require a live WSS session — blocks HTTP-only clients
+    // that skipped the challenge-response handshake.
+    if !wss_registry.is_online(&identity.pubkey).await {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({
+                "error": "no mesh session — complete the WSS handshake (see aegis adapter)",
+                "hint": "one identity, two connection modes: signed HTTP writes + WSS session concurrently"
+            })),
+        );
+    }
+
     // Validate request
     if payload.to.is_empty() {
         return (
@@ -684,9 +751,15 @@ pub async fn botawiki_submit_claim(
     Extension(identity): Extension<VerifiedIdentity>,
     Extension(trustmark_cache): Extension<Arc<TrustmarkCache>>,
     Extension(botawiki_store): Extension<Arc<BotawikiStore>>,
+    Extension(wss_registry): Extension<Arc<WssConnectionRegistry>>,
     Extension(nats_bridge): Extension<Option<Arc<NatsBridge>>>,
     Json(req): Json<SubmitClaimRequest>,
 ) -> impl IntoResponse {
+    // 0. Mesh writes require a live WSS session.
+    if let Err(resp) = require_mesh_session(&identity.pubkey, &wss_registry).await {
+        return resp;
+    }
+
     // 1. Verify sender has TRUSTMARK >= 0.3
     let sender_score = trustmark_cache.get(&identity.pubkey).await;
     let score_bp = sender_score.map(|s| s.score_bp).unwrap_or(0);
@@ -791,9 +864,15 @@ pub struct VoteRequest {
 pub async fn botawiki_vote(
     Extension(identity): Extension<VerifiedIdentity>,
     Extension(botawiki_store): Extension<Arc<BotawikiStore>>,
+    Extension(wss_registry): Extension<Arc<WssConnectionRegistry>>,
     Extension(nats_bridge): Extension<Option<Arc<NatsBridge>>>,
     Json(req): Json<VoteRequest>,
 ) -> impl IntoResponse {
+    // Mesh writes require a live WSS session.
+    if let Err(resp) = require_mesh_session(&identity.pubkey, &wss_registry).await {
+        return resp;
+    }
+
     // Publish vote to NATS for the Botawiki service
     if let Some(bridge) = nats_bridge.as_ref() {
         let vote_msg = serde_json::json!({
@@ -963,8 +1042,14 @@ pub async fn request_tier3_admission<S: EvidenceStore>(
     Extension(identity): Extension<VerifiedIdentity>,
     Extension(store): Extension<S>,
     Extension(trustmark_cache): Extension<Arc<TrustmarkCache>>,
+    Extension(wss_registry): Extension<Arc<WssConnectionRegistry>>,
     Extension(evaluator_svc): Extension<Arc<EvaluatorService>>,
 ) -> impl IntoResponse {
+    // 0. Mesh writes require a live WSS session.
+    if let Err(resp) = require_mesh_session(&identity.pubkey, &wss_registry).await {
+        return resp;
+    }
+
     // 1. Verify TRUSTMARK >= 0.4
     let score_bp = trustmark_cache
         .get(&identity.pubkey)
@@ -1066,9 +1151,15 @@ pub struct EvaluatorVoteRequest {
 pub async fn evaluator_vote(
     Extension(identity): Extension<VerifiedIdentity>,
     Extension(trustmark_cache): Extension<Arc<TrustmarkCache>>,
+    Extension(wss_registry): Extension<Arc<WssConnectionRegistry>>,
     Extension(evaluator_svc): Extension<Arc<EvaluatorService>>,
     Json(req): Json<EvaluatorVoteRequest>,
 ) -> impl IntoResponse {
+    // Mesh writes require a live WSS session.
+    if let Err(resp) = require_mesh_session(&identity.pubkey, &wss_registry).await {
+        return resp;
+    }
+
     // Verify voter has TRUSTMARK >= 0.5
     let score_bp = trustmark_cache
         .get(&identity.pubkey)
@@ -1249,6 +1340,8 @@ mod tests {
     }
 
     fn sample_receipt_json() -> serde_json::Value {
+        // Structural-only — fails crypto verification. For tests that
+        // assert on 400/401/413 BEFORE receipt verification runs.
         serde_json::json!({
             "id": "01234567-89ab-cdef-0123-456789abcdef",
             "type": "api_call",
@@ -1261,12 +1354,168 @@ mod tests {
         })
     }
 
+    /// Build a cryptographically valid genesis receipt signed by `sk`.
+    fn signed_sample_receipt(sk: &aegis_crypto::ed25519::SigningKey) -> serde_json::Value {
+        use aegis_crypto::ed25519::Signer as _;
+        use sha2::{Digest, Sha256};
+        let pubkey = hex::encode(sk.verifying_key().as_bytes());
+        let id = uuid::Uuid::now_v7();
+        let ts_ms = 1_700_000_000_000i64;
+        let payload_hash = "a".repeat(64);
+        let prev_hash = aegis_schemas::GENESIS_PREV_HASH.to_string();
+        let seq = 1u64;
+        let receipt_type_str = "api_call";
+
+        #[derive(serde::Serialize)]
+        struct Sig<'a> {
+            bot_id: &'a str,
+            id: uuid::Uuid,
+            payload_hash: &'a str,
+            prev_hash: &'a str,
+            seq: u64,
+            ts_ms: i64,
+            #[serde(rename = "type")]
+            receipt_type: &'a str,
+        }
+        let canonical = aegis_crypto::canonicalize(&Sig {
+            bot_id: &pubkey,
+            id,
+            payload_hash: &payload_hash,
+            prev_hash: &prev_hash,
+            seq,
+            ts_ms,
+            receipt_type: receipt_type_str,
+        })
+        .unwrap();
+        let sig = hex::encode(sk.sign(&canonical).to_bytes());
+
+        let core = aegis_schemas::ReceiptCore {
+            id,
+            bot_id: pubkey.clone(),
+            receipt_type: aegis_schemas::ReceiptType::ApiCall,
+            ts_ms,
+            prev_hash: prev_hash.clone(),
+            payload_hash: payload_hash.clone(),
+            seq,
+            sig: sig.clone(),
+        };
+        let canonical_core = aegis_crypto::canonicalize(&core).unwrap();
+        let mut h = Sha256::new();
+        h.update(&canonical_core);
+        let receipt_hash = hex::encode(h.finalize());
+
+        serde_json::json!({
+            "id": id.to_string(),
+            "type": receipt_type_str,
+            "ts_ms": ts_ms,
+            "seq": seq,
+            "prev_hash": prev_hash,
+            "payload_hash": payload_hash,
+            "sig": sig,
+            "receipt_hash": receipt_hash,
+        })
+    }
+
+    /// Build a cryptographically valid chain of length `count` signed by `sk`.
+    fn make_signed_batch(
+        sk: &aegis_crypto::ed25519::SigningKey,
+        count: usize,
+    ) -> Vec<serde_json::Value> {
+        use aegis_crypto::ed25519::Signer as _;
+        use sha2::{Digest, Sha256};
+        let pubkey = hex::encode(sk.verifying_key().as_bytes());
+        let mut prev_hash = aegis_schemas::GENESIS_PREV_HASH.to_string();
+        let mut out = Vec::with_capacity(count);
+        for i in 0..count {
+            let seq = (i as u64) + 1;
+            let id = uuid::Uuid::now_v7();
+            let ts_ms = 1_700_000_000_000i64 + seq as i64;
+            let payload_hash = format!("{:064x}", (i as u128).wrapping_mul(0xa5a5));
+            let receipt_type_str = "api_call";
+
+            #[derive(serde::Serialize)]
+            struct Sig<'a> {
+                bot_id: &'a str,
+                id: uuid::Uuid,
+                payload_hash: &'a str,
+                prev_hash: &'a str,
+                seq: u64,
+                ts_ms: i64,
+                #[serde(rename = "type")]
+                receipt_type: &'a str,
+            }
+            let canonical = aegis_crypto::canonicalize(&Sig {
+                bot_id: &pubkey,
+                id,
+                payload_hash: &payload_hash,
+                prev_hash: &prev_hash,
+                seq,
+                ts_ms,
+                receipt_type: receipt_type_str,
+            })
+            .unwrap();
+            let sig = hex::encode(sk.sign(&canonical).to_bytes());
+
+            let core = aegis_schemas::ReceiptCore {
+                id,
+                bot_id: pubkey.clone(),
+                receipt_type: aegis_schemas::ReceiptType::ApiCall,
+                ts_ms,
+                prev_hash: prev_hash.clone(),
+                payload_hash: payload_hash.clone(),
+                seq,
+                sig: sig.clone(),
+            };
+            let canonical_core = aegis_crypto::canonicalize(&core).unwrap();
+            let mut h = Sha256::new();
+            h.update(&canonical_core);
+            let receipt_hash = hex::encode(h.finalize());
+
+            out.push(serde_json::json!({
+                "id": id.to_string(),
+                "type": receipt_type_str,
+                "ts_ms": ts_ms,
+                "seq": seq,
+                "prev_hash": prev_hash,
+                "payload_hash": payload_hash,
+                "sig": sig,
+                "receipt_hash": receipt_hash,
+            }));
+            prev_hash = receipt_hash;
+        }
+        out
+    }
+
+    /// Test helper: register `bot_id` as a WSS-online peer in the registry.
+    /// Uses a throwaway mpsc channel — sufficient for `is_online()` checks.
+    async fn register_wss(registry: &WssConnectionRegistry, bot_id: &str) {
+        let (tx, _rx) = tokio::sync::mpsc::channel::<String>(8);
+        registry.register(bot_id, tx).await;
+    }
+
+    /// Test app with a cache and the sender pre-registered as WSS-online.
+    /// Use for mesh-write tests that need to pass the session gate.
+    async fn test_app_with_sender_online(
+        store: MemoryStore,
+        cache: TrustmarkCache,
+        sender_pubkey: &str,
+    ) -> Router {
+        let wss = Arc::new(WssConnectionRegistry::new());
+        register_wss(&wss, sender_pubkey).await;
+        test_app_with_cache_and_registry(store, cache, wss)
+    }
+
+    /// Test app with empty cache and sender pre-registered as WSS-online.
+    async fn test_app_sender_online(store: MemoryStore, sender_pubkey: &str) -> Router {
+        test_app_with_sender_online(store, TrustmarkCache::new(), sender_pubkey).await
+    }
+
     #[tokio::test]
     async fn post_evidence_returns_201() {
         let store = MemoryStore::new();
         let app = test_app(store.clone());
         let sk = aegis_crypto::ed25519::generate_keypair();
-        let body = serde_json::to_vec(&sample_receipt_json()).unwrap();
+        let body = serde_json::to_vec(&signed_sample_receipt(&sk)).unwrap();
         let (pubkey, sig, ts_ms) = sign_request(&sk, "POST", "/evidence", &body);
 
         let req = Request::builder()
@@ -1283,7 +1532,7 @@ mod tests {
 
         let body = axum::body::to_bytes(resp.into_body(), 4096).await.unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(json["id"], "01234567-89ab-cdef-0123-456789abcdef");
+        assert!(json["id"].as_str().is_some_and(|s| !s.is_empty()));
 
         // Verify stored
         let count = store.count_for_bot(&pubkey).await.unwrap();
@@ -1344,8 +1593,9 @@ mod tests {
         let app = test_app(store.clone());
         let sk = aegis_crypto::ed25519::generate_keypair();
 
-        // Insert first
-        let body = serde_json::to_vec(&sample_receipt_json()).unwrap();
+        // Insert first — signed so it passes verification.
+        let receipt = signed_sample_receipt(&sk);
+        let body = serde_json::to_vec(&receipt).unwrap();
         let (pubkey, sig, ts_ms) = sign_request(&sk, "POST", "/evidence", &body);
         let req = Request::builder()
             .method("POST")
@@ -1358,9 +1608,9 @@ mod tests {
         let resp = app.oneshot(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::CREATED);
 
-        // Try duplicate
+        // Try duplicate (same signed receipt, same sk) — insert fails as duplicate
         let app2 = test_app(store);
-        let body2 = serde_json::to_vec(&sample_receipt_json()).unwrap();
+        let body2 = serde_json::to_vec(&receipt).unwrap();
         let (pubkey2, sig2, ts_ms2) = sign_request(&sk, "POST", "/evidence", &body2);
         let req2 = Request::builder()
             .method("POST")
@@ -1398,7 +1648,7 @@ mod tests {
         let store = MemoryStore::new();
         let app = test_app(store.clone());
         let sk = aegis_crypto::ed25519::generate_keypair();
-        let batch = make_batch(50);
+        let batch = make_signed_batch(&sk, 50);
         let body = serde_json::to_vec(&batch).unwrap();
         let (pubkey, sig, ts_ms) = sign_request(&sk, "POST", "/evidence/batch", &body);
 
@@ -1576,7 +1826,7 @@ mod tests {
         let store = MemoryStore::new();
         let app = test_app(store.clone());
         let sk = aegis_crypto::ed25519::generate_keypair();
-        let body = serde_json::to_vec(&sample_receipt_json()).unwrap();
+        let body = serde_json::to_vec(&signed_sample_receipt(&sk)).unwrap();
         let (pubkey, sig, ts_ms) = sign_request(&sk, "POST", "/evidence", &body);
 
         let req = Request::builder()
@@ -1819,6 +2069,8 @@ mod tests {
     }
 
     /// Helper: build a test app with trust scores for both sender and recipient.
+    /// Auto-registers the sender as WSS-online so mesh-write endpoints pass
+    /// the session gate.
     async fn mesh_test_app(
         store: MemoryStore,
         sender_pubkey: &str,
@@ -1849,7 +2101,9 @@ mod tests {
                 },
             )
             .await;
-        test_app_with_cache(store, cache)
+        let wss = Arc::new(WssConnectionRegistry::new());
+        register_wss(&wss, sender_pubkey).await;
+        test_app_with_cache_and_registry(store, cache, wss)
     }
 
     #[tokio::test]
@@ -1890,7 +2144,7 @@ mod tests {
         let sender_pubkey = hex::encode(sk.verifying_key().as_bytes());
         // Sender has good score, but recipient doesn't exist
         let cache = cache_with_score(&sender_pubkey, 5000).await;
-        let app = test_app_with_cache(store, cache);
+        let app = test_app_with_sender_online(store, cache, &sender_pubkey).await;
 
         let payload = serde_json::json!({
             "to": "nonexistent_bot",
@@ -1939,8 +2193,9 @@ mod tests {
     #[tokio::test]
     async fn mesh_send_empty_body_returns_400() {
         let store = MemoryStore::new();
-        let app = test_app(store);
         let sk = aegis_crypto::ed25519::generate_keypair();
+        let sender_pubkey = hex::encode(sk.verifying_key().as_bytes());
+        let app = test_app_sender_online(store, &sender_pubkey).await;
         let payload = serde_json::json!({
             "to": "some_bot",
             "body": "",
@@ -1998,6 +2253,7 @@ mod tests {
         let wss_registry = Arc::new(WssConnectionRegistry::new());
         let (tx, mut rx) = tokio::sync::mpsc::channel(16);
         wss_registry.register(recipient_id, tx).await;
+        register_wss(&wss_registry, &sender_pubkey).await;
 
         let app = test_app_with_cache_and_registry(store, cache, wss_registry);
 
@@ -2291,12 +2547,9 @@ mod tests {
             )
             .await;
 
-        let app = test_app_full(
-            store,
-            cache,
-            Arc::new(WssConnectionRegistry::new()),
-            dead_drop.clone(),
-        );
+        let wss_registry = Arc::new(WssConnectionRegistry::new());
+        register_wss(&wss_registry, &sender_pubkey).await;
+        let app = test_app_full(store, cache, wss_registry, dead_drop.clone());
 
         let payload = serde_json::json!({
             "to": recipient_id,
@@ -2341,6 +2594,7 @@ mod tests {
 
         let sk = aegis_crypto::ed25519::generate_keypair();
         let sender_pubkey = hex::encode(sk.verifying_key().as_bytes());
+        register_wss(&wss_registry, &sender_pubkey).await;
 
         let cache = TrustmarkCache::new();
         cache
@@ -2427,10 +2681,16 @@ mod tests {
                 .await;
         }
         let botawiki = Arc::new(BotawikiStore::new());
+        let wss = Arc::new(WssConnectionRegistry::new());
+        // Sender + all validators register as WSS-online so session gate passes.
+        register_wss(&wss, sender_pubkey).await;
+        for &(vid, _) in validator_ids {
+            register_wss(&wss, vid).await;
+        }
         let app = test_app_full_with_botawiki(
             store,
             cache,
-            Arc::new(WssConnectionRegistry::new()),
+            wss,
             Arc::new(DeadDropStore::new()),
             botawiki.clone(),
         );
@@ -2835,10 +3095,15 @@ mod tests {
         }
 
         let evaluator_svc = Arc::new(EvaluatorService::new());
+        let wss = Arc::new(WssConnectionRegistry::new());
+        register_wss(&wss, requester_pubkey).await;
+        for &(eid, _) in evaluators {
+            register_wss(&wss, eid).await;
+        }
         let app = test_app_full_with_all(
             store,
             cache,
-            Arc::new(WssConnectionRegistry::new()),
+            wss,
             Arc::new(DeadDropStore::new()),
             Arc::new(BotawikiStore::new()),
             evaluator_svc.clone(),
