@@ -196,7 +196,7 @@ pub fn redact_text(content: &str) -> (String, ScanResult) {
     }
 
     // Sort by offset descending so replacements don't shift earlier offsets
-    replacements.sort_by(|a, b| b.0.cmp(&a.0));
+    replacements.sort_by_key(|r| std::cmp::Reverse(r.0));
 
     // Deduplicate overlapping ranges (keep the first/largest)
     let mut redacted = content.to_string();
