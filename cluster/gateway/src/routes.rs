@@ -182,6 +182,7 @@ pub async fn post_evidence<S: EvidenceStore>(
 pub async fn post_evidence_batch<S: EvidenceStore>(
     Extension(identity): Extension<VerifiedIdentity>,
     Extension(store): Extension<S>,
+    Extension(nats_bridge): Extension<Option<Arc<NatsBridge>>>,
     body: axum::body::Bytes,
 ) -> impl IntoResponse {
     // Check body size
@@ -272,17 +273,46 @@ pub async fn post_evidence_batch<S: EvidenceStore>(
         }
     }
 
+    // Serialize records for NATS publish BEFORE insert consumes them.
+    // Publishing is essential: `run_trustmark_engine` subscribes to
+    // `evidence.new` and is the only path by which the gateway's TRUSTMARK
+    // cache gets recomputed from actual evidence. Without this publish the
+    // cache stays on the provisional 3500bp WSS-auth placeholder forever.
+    let record_jsons: Vec<Vec<u8>> = records
+        .iter()
+        .map(|r| serde_json::to_vec(r).unwrap_or_default())
+        .collect();
+
     // Batch insert
-    match store.insert_batch(records).await {
-        Ok(count) => (
-            StatusCode::CREATED,
-            Json(serde_json::json!({ "count": count })),
-        ),
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": e })),
-        ),
+    let count = match store.insert_batch(records).await {
+        Ok(c) => c,
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": e })),
+            );
+        }
+    };
+
+    // Fan out each record to NATS `evidence.new` so the TRUSTMARK Engine,
+    // JetStream EVIDENCE stream, and any other downstream consumers see
+    // the same stream of updates whether the adapter used /evidence or
+    // /evidence/batch.
+    if let Some(bridge) = nats_bridge.as_ref() {
+        for record_json in &record_jsons {
+            if record_json.is_empty() {
+                continue;
+            }
+            if let Err(e) = bridge.publish_evidence(record_json).await {
+                tracing::warn!(error = %e, "failed to publish batched evidence to NATS");
+            }
+        }
     }
+
+    (
+        StatusCode::CREATED,
+        Json(serde_json::json!({ "count": count })),
+    )
 }
 
 /// Compute a basic TRUSTMARK score from cluster-stored evidence.
