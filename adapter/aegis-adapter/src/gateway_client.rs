@@ -221,6 +221,18 @@ const BATCH_SIZE: usize = 100;
 /// Evidence push interval in seconds.
 const PUSH_INTERVAL_SECS: u64 = 30;
 
+/// Detect the gateway's "I have no predecessor for your chain" error.
+///
+/// The gateway's crypto verification returns `prev_hash mismatch (expected
+/// 0000...0000, got <real hash>)` when the stored evidence at `seq-1`
+/// isn't present — meaning the gateway lost state (restart with ephemeral
+/// JetStream, cache wipe, etc.) while the adapter kept its chain. The
+/// expected-genesis prefix is the unambiguous signature: a real forgery
+/// would produce a different expected hash, not all zeros.
+fn is_gateway_amnesia_error(msg: &str) -> bool {
+    msg.contains("prev_hash mismatch (expected 0000000000000000")
+}
+
 /// Spawn a background task that periodically pushes new evidence to the Gateway.
 ///
 /// Runs every 30 seconds. Exports receipts since `last_pushed_seq` from the
@@ -260,15 +272,42 @@ pub fn spawn_evidence_push_task(
 
             // Push in batches of BATCH_SIZE
             let mut all_ok = true;
+            let mut reset_and_retry = false;
             for chunk in receipts.chunks(BATCH_SIZE) {
                 match client.push_evidence_batch(chunk).await {
                     Ok(()) => {}
                     Err(e) => {
-                        tracing::warn!("gateway push failed: {e}");
+                        // Gateway state-loss self-heal: when the gateway has
+                        // no stored predecessor for our chain, the crypto
+                        // verification reports "prev_hash mismatch (expected
+                        // 000…)". This means the gateway expects genesis
+                        // (seq == 1 with GENESIS_PREV_HASH) but we sent
+                        // seq > 1 with a real prev_hash. The gateway forgot
+                        // our chain (restart with ephemeral JetStream,
+                        // Postgres reset, etc.). Reset our cursor to 0 so
+                        // the next tick re-pushes from seq 1; the gateway's
+                        // crypto verify will accept the whole chain on replay,
+                        // and idempotent insert (#278) makes duplicates no-ops.
+                        if is_gateway_amnesia_error(&e) && last_seq > 0 {
+                            tracing::warn!(
+                                last_seq,
+                                "gateway reports missing predecessor \
+                                 (state loss) — resetting push cursor \
+                                 to 0 and re-pushing chain from seq 1"
+                            );
+                            reset_and_retry = true;
+                        } else {
+                            tracing::warn!("gateway push failed: {e}");
+                        }
                         all_ok = false;
                         break;
                     }
                 }
+            }
+
+            if reset_and_retry {
+                client.set_last_pushed_seq(0);
+                continue;
             }
 
             if all_ok {
@@ -366,5 +405,34 @@ mod tests {
             auth1, auth2,
             "different bodies should produce different signatures"
         );
+    }
+
+    #[test]
+    fn amnesia_detector_matches_real_gateway_error() {
+        // The exact wire format seen live during gateway state-loss:
+        let msg = "gateway returned 400 Bad Request: \
+                   {\"error\":\"receipt[0] seq=7 verification failed: \
+                   prev_hash mismatch (expected 0000000000000000, \
+                   got 72fe4b2f00f73b55)\"}";
+        assert!(is_gateway_amnesia_error(msg));
+    }
+
+    #[test]
+    fn amnesia_detector_ignores_normal_chain_corruption() {
+        // A real chain mismatch (non-zero expected) is NOT amnesia — don't
+        // self-heal. The adapter's chain is genuinely inconsistent with the
+        // gateway's stored chain; reset would silently paper over it.
+        let msg = "gateway returned 400: \
+                   prev_hash mismatch (expected a7f3b2c1d9e4f5a2, got 12345678)";
+        assert!(!is_gateway_amnesia_error(msg));
+    }
+
+    #[test]
+    fn amnesia_detector_ignores_unrelated_errors() {
+        assert!(!is_gateway_amnesia_error(
+            "gateway request failed: connection refused"
+        ));
+        assert!(!is_gateway_amnesia_error("signature verification failed"));
+        assert!(!is_gateway_amnesia_error("rate limit exceeded"));
     }
 }
