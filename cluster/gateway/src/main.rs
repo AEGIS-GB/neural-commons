@@ -354,6 +354,7 @@ async fn main() {
         .layer(Extension(wss_registry.clone()))
         .layer(Extension(dead_drop_store.clone()))
         .layer(Extension(botawiki_store.clone()))
+        .layer(Extension(Arc::new(routes::BotawikiRateLimiter::new())))
         .layer(Extension(relay_stats.clone()))
         .layer(Extension(relay_log.clone()));
 
