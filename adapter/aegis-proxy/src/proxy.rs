@@ -1549,7 +1549,7 @@ async fn forward_request(
             let mut total: usize = 0;
             let mut stream = std::pin::pin!(byte_stream);
             let mut accumulated = Vec::new();
-            let capture_limit = 256 * 1024usize; // 256KB capture limit for traffic
+            let capture_limit = 512 * 1024usize; // 512KB: fits OpenClaw system prompts without truncating JSON
             // Accumulate streamed text for vault scanning.
             // We collect text_delta content across chunks and scan periodically.
             let mut text_buffer = String::new();
